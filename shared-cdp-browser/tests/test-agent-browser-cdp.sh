@@ -441,6 +441,26 @@ test_cleanup_preserves_lease_when_close_fails() {
   grep -q '^target-0[[:space:]]' "${fixture_dir}/state/tabs" || fail "cleanup should not remove the tab when close fails"
 }
 
+test_cleanup_ignores_partial_lease_file() {
+  local fixture_dir="${tmp_root}/cleanup-ignores-partial-lease"
+  local lease_file
+  make_fixture "${fixture_dir}"
+
+  printf 'target-0\tabout:blank\t\n' >"${fixture_dir}/state/tabs"
+  lease_file="$(lease_file_path "${fixture_dir}")"
+  mkdir -p "$(dirname "${lease_file}")"
+  cat >"${lease_file}" <<'EOF'
+session_name_b64=dGVzdC1zZXNzaW9u
+target_id=target-0
+EOF
+
+  output="$(run_wrapper "${fixture_dir}" session cleanup)"
+
+  printf '%s' "${output}" | grep -q '^removed=0$' || fail "cleanup should not remove partial lease files"
+  assert_exists "${lease_file}"
+  grep -q '^target-0[[:space:]]' "${fixture_dir}/state/tabs" || fail "cleanup should not close tabs for partial lease files"
+}
+
 test_session_open_failure_cleans_temp_files() {
   local fixture_dir="${tmp_root}/session-open-temp-cleanup"
   make_fixture "${fixture_dir}"
@@ -462,6 +482,7 @@ test_tab_switch_preserves_leased_target
 test_stale_lock_with_reused_pid_is_recovered
 test_stale_lock_without_pid_is_recovered
 test_cleanup_preserves_lease_when_close_fails
+test_cleanup_ignores_partial_lease_file
 test_session_open_failure_cleans_temp_files
 
 printf 'PASS: %s\n' "$(basename "$0")"

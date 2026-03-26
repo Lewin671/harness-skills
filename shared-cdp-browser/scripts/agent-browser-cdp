@@ -203,16 +203,18 @@ lease_write() {
   local target_id="${1}"
   local expires_at="${2}"
   local ttl="${3}"
-  local lease_file
+  local lease_file tmp_file
 
   ensure_state_dirs
   lease_file="$(lease_file_path)"
-  cat >"${lease_file}" <<EOF
+  tmp_file="$(mktemp "${lease_file}.tmp.XXXXXX")"
+  cat >"${tmp_file}" <<EOF
 session_name_b64=${session_name_b64}
 target_id=${target_id}
 expires_at=${expires_at}
 ttl=${ttl}
 EOF
+  mv -f "${tmp_file}" "${lease_file}"
 }
 
 mark_target() {
@@ -251,7 +253,6 @@ cleanup_stale_session_tabs() {
     [ -n "${lease_file}" ] || continue
 
     if ! read_lease_file "${lease_file}"; then
-      rm -f "${lease_file}"
       continue
     fi
 
