@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cdp_url="$("${script_dir}/ensure-cdp-browser")"
+session_name="${SHARED_CDP_BROWSER_SESSION:-}"
+session_marker="shared-cdp:${session_name}"
+command_lock="${SHARED_CDP_BROWSER_COMMAND_LOCK:-/tmp/shared-cdp-browser-command.lock}"
+
+run_agent_browser() {
+  local cmd=()
+  if command -v agent-browser >/dev/null 2>&1; then
+    cmd=(agent-browser)
+  else
+    cmd=(npx -y agent-browser)
+  fi
+
+  cmd+=(--cdp "${cdp_url}")
+  if [ -n "${session_name}" ]; then
+    cmd+=(--session "${session_name}")
+  fi
+
+  "${cmd[@]}" "$@"
+}
+
+escape_js_single_quoted() {
+  local value="${1//\\/\\\\}"
+  value="${value//\'/\\\'}"
+  printf "%s" "${value}"
+}
+
+list_tab_indexes() {
+  run_agent_browser tab list 2>/dev/null | sed -n 's/.*\[\([0-9][0-9]*\)\].*/\1/p'
+}
+
+find_session_tab() {
+  local idx name
+  while IFS= read -r idx; do
+    [ -n "${idx}" ] || continue
+    run_agent_browser tab "${idx}" >/dev/null 2>&1 || continue
+    name="$(run_agent_browser eval 'window.name' 2>/dev/null | tr -d '"' || true)"
+    if [ "${name}" = "${session_marker}" ]; then
+      printf '%s\n' "${idx}"
+      return 0
+    fi
+  done < <(list_tab_indexes)
+
+  return 1
+}
+
+ensure_session_tab() {
+  [ -n "${session_name}" ] || return 0
+
+  local idx marker_js
+  if idx="$(find_session_tab)"; then
+    run_agent_browser tab "${idx}" >/dev/null
+    return 0
+  fi
+
+  run_agent_browser tab new >/dev/null
+  marker_js="$(escape_js_single_quoted "${session_marker}")"
+  run_agent_browser eval "window.name = '${marker_js}'; window.name" >/dev/null
+}
+
+with_command_lock() {
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"${command_lock}"
+    flock 9
+    "$@"
+    return
+  fi
+
+  local lock_dir="${command_lock}.d"
+  until mkdir "${lock_dir}" 2>/dev/null; do
+    sleep 0.1
+  done
+  trap 'rmdir "${lock_dir}" 2>/dev/null || true' RETURN
+  "$@"
+}
+
+main() {
+  if [ -n "${session_name}" ]; then
+    case "${exec_cmd[0]}" in
+      session|connect)
+        ;;
+      tab)
+        if [ "${exec_cmd[1]:-}" = "new" ]; then
+          run_agent_browser "${exec_cmd[@]}" >/dev/null
+          marker_js="$(escape_js_single_quoted "${session_marker}")"
+          run_agent_browser eval "window.name = '${marker_js}'; window.name" >/dev/null
+          exit 0
+        fi
+        ensure_session_tab
+        ;;
+      *)
+        ensure_session_tab
+        ;;
+    esac
+  fi
+
+  run_agent_browser "${exec_cmd[@]}"
+}
+
+exec_cmd=("$@")
+if [ "${#exec_cmd[@]}" -eq 0 ]; then
+  echo "Usage: agent-browser-cdp <agent-browser args...>" >&2
+  exit 1
+fi
+
+with_command_lock main

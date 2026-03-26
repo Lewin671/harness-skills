@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+host="${SHARED_CDP_BROWSER_HOST:-127.0.0.1}"
+port="${SHARED_CDP_BROWSER_PORT:-9222}"
+cdp_url="http://${host}:${port}"
+user_data_dir="${SHARED_CDP_BROWSER_USER_DATA_DIR:-$HOME/agent-browser-data}"
+lock_dir="${SHARED_CDP_BROWSER_LOCK_DIR:-/tmp/shared-cdp-browser-${port}.lock}"
+log_file="${SHARED_CDP_BROWSER_LOG_FILE:-/tmp/shared-cdp-browser-${port}.log}"
+
+is_cdp_ready() {
+  curl --silent --show-error --fail --max-time 1 "${cdp_url}/json/version" >/dev/null 2>&1
+}
+
+find_browser() {
+  if [ -n "${SHARED_CDP_BROWSER_BIN:-}" ]; then
+    printf '%s\n' "${SHARED_CDP_BROWSER_BIN}"
+    return 0
+  fi
+
+  local candidates=(
+    "/Applications/Google Chrome.app"
+    "/Applications/Google Chrome Canary.app"
+    "/Applications/Chromium.app"
+    "/Applications/Microsoft Edge.app"
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
+    "/Applications/Chromium.app/Contents/MacOS/Chromium"
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+    "google-chrome"
+    "chromium"
+    "chromium-browser"
+    "microsoft-edge"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [ -x "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      command -v "${candidate}"
+      return 0
+    fi
+  done
+
+  echo "No Chrome-compatible browser found. Set SHARED_CDP_BROWSER_BIN." >&2
+  return 1
+}
+
+wait_for_cdp() {
+  local attempts="${1:-50}"
+  local i
+  for ((i = 0; i < attempts; i += 1)); do
+    if is_cdp_ready; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+launch_browser() {
+  local browser
+  browser="$(find_browser)"
+  mkdir -p "${user_data_dir}"
+
+  local browser_args=(
+    --remote-debugging-address="${host}"
+    --remote-debugging-port="${port}"
+    --user-data-dir="${user_data_dir}"
+    --no-first-run
+    --no-default-browser-check
+    --disable-default-apps
+    --new-window
+    about:blank
+  )
+
+  if [[ "${browser}" == *.app ]]; then
+    nohup open -na "${browser}" --args "${browser_args[@]}" >"${log_file}" 2>&1 &
+  else
+    nohup "${browser}" "${browser_args[@]}" >"${log_file}" 2>&1 &
+  fi
+}
+
+if is_cdp_ready; then
+  printf '%s\n' "${cdp_url}"
+  exit 0
+fi
+
+mkdir_lock() {
+  mkdir "${lock_dir}" 2>/dev/null
+}
+
+if mkdir_lock; then
+  trap 'rmdir "${lock_dir}" 2>/dev/null || true' EXIT
+  if ! is_cdp_ready; then
+    launch_browser
+    if ! wait_for_cdp 150; then
+      echo "Timed out waiting for Chrome CDP at ${cdp_url}. Check ${log_file}." >&2
+      exit 1
+    fi
+  fi
+else
+  if ! wait_for_cdp 100; then
+    echo "Another process is starting Chrome, but CDP never became ready at ${cdp_url}." >&2
+    exit 1
+  fi
+fi
+
+printf '%s\n' "${cdp_url}"
