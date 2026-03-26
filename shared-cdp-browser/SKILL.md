@@ -1,6 +1,6 @@
 ---
 name: shared-cdp-browser
-description: Shared Chrome CDP bootstrapper for browser agents. Use when the agent needs a browser with Chrome DevTools Protocol enabled, should auto-connect to an existing CDP endpoint, should launch Chrome if the CDP port is not available, or should let multiple agents share one persistent browser profile at ~/agent-browser-data.
+description: Shared Chrome CDP bootstrapper for browser agents. Use when the agent needs a browser with Chrome DevTools Protocol enabled, should auto-connect to an existing CDP endpoint, should launch Chrome if the CDP port is not available, or should let multiple agents share one persistent browser profile.
 ---
 
 # Shared CDP Browser
@@ -12,7 +12,7 @@ Use this skill when browser work should attach to a shared Chrome CDP endpoint i
 Its responsibilities are:
 
 1. Ensure a Chrome-compatible browser is available at `http://127.0.0.1:9222`.
-2. Reuse a persistent shared profile at `~/agent-browser-data`.
+2. Reuse a persistent shared profile.
 3. Provide a single wrapper for `agent-browser --cdp ...`.
 4. Offer lightweight session helpers for cleanup and visibility when `SHARED_CDP_BROWSER_SESSION` is set.
 
@@ -23,15 +23,16 @@ This skill is intentionally narrow. It does not add a second control plane on to
 Run browser commands through the wrapper instead of calling `agent-browser` directly.
 
 ```bash
-SESSION=$(/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/new-session-name)
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SESSION=$("$SKILL_DIR"/scripts/new-session-name)
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session open
+  "$SKILL_DIR"/scripts/agent-browser-cdp session open
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp open https://example.com
+  "$SKILL_DIR"/scripts/agent-browser-cdp open https://example.com
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp snapshot -i
+  "$SKILL_DIR"/scripts/agent-browser-cdp snapshot -i
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session close
+  "$SKILL_DIR"/scripts/agent-browser-cdp session close
 ```
 
 Treat one `SHARED_CDP_BROWSER_SESSION` value as one workspace for one agent or one coherent task. A workspace may contain multiple tabs. Create a new session only when you need isolation from other work.
@@ -68,7 +69,6 @@ Ensures the shared CDP endpoint exists. Override defaults only when necessary:
 ```bash
 SHARED_CDP_BROWSER_HOST=127.0.0.1
 SHARED_CDP_BROWSER_PORT=9222
-SHARED_CDP_BROWSER_USER_DATA_DIR=~/agent-browser-data
 SHARED_CDP_BROWSER_BIN=/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome
 ```
 
