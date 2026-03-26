@@ -8,6 +8,7 @@ user_data_dir="${SHARED_CDP_BROWSER_USER_DATA_DIR:-$HOME/agent-browser-data}"
 lock_dir="${SHARED_CDP_BROWSER_LOCK_DIR:-/tmp/shared-cdp-browser-${port}.lock}"
 log_file="${SHARED_CDP_BROWSER_LOG_FILE:-/tmp/shared-cdp-browser-${port}.log}"
 lock_pid_file="${lock_dir}/pid"
+lock_stale_after="${SHARED_CDP_BROWSER_LOCK_STALE_AFTER:-5}"
 
 is_cdp_ready() {
   local version_json
@@ -63,6 +64,18 @@ wait_for_cdp() {
   return 1
 }
 
+now_epoch() {
+  date +%s
+}
+
+lock_age_seconds() {
+  local path="${1}"
+  local modified_at
+
+  modified_at="$(date -r "${path}" +%s 2>/dev/null)" || return 1
+  echo "$(( $(now_epoch) - modified_at ))"
+}
+
 launch_browser() {
   local browser
   browser="$(find_browser)"
@@ -105,8 +118,12 @@ clear_lock() {
 }
 
 lock_is_stale() {
-  local lock_pid
-  [ -f "${lock_pid_file}" ] || return 1
+  local lock_pid lock_age
+  if [ ! -f "${lock_pid_file}" ]; then
+    lock_age="$(lock_age_seconds "${lock_dir}" 2>/dev/null || true)"
+    [ -n "${lock_age}" ] && [ "${lock_age}" -ge "${lock_stale_after}" ]
+    return
+  fi
   lock_pid="$(cat "${lock_pid_file}" 2>/dev/null || true)"
   [ -n "${lock_pid}" ] || return 1
   ! kill -0 "${lock_pid}" 2>/dev/null

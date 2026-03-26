@@ -12,6 +12,7 @@ session_marker_prefix="shared-cdp"
 command_lock="${SHARED_CDP_BROWSER_COMMAND_LOCK:-/tmp/shared-cdp-browser-command-${lock_key}.lock}"
 session_ttl_default="${SHARED_CDP_BROWSER_SESSION_TTL:-1800}"
 session_auto_renew="${SHARED_CDP_BROWSER_AUTO_RENEW:-1}"
+lock_stale_after="${SHARED_CDP_BROWSER_LOCK_STALE_AFTER:-5}"
 
 base64_decode() {
   if printf '%s' "${1}" | base64 --decode >/dev/null 2>&1; then
@@ -34,6 +35,14 @@ require_positive_integer() {
     echo "${label} must be a positive integer." >&2
     exit 1
   fi
+}
+
+lock_age_seconds() {
+  local path="${1}"
+  local modified_at
+
+  modified_at="$(date -r "${path}" +%s 2>/dev/null)" || return 1
+  echo "$(( $(now_epoch) - modified_at ))"
 }
 
 require_session_name() {
@@ -388,7 +397,7 @@ handle_session_command() {
 }
 
 with_command_lock() {
-  if command -v flock >/dev/null 2>&1; then
+  if [ "${SHARED_CDP_BROWSER_DISABLE_FLOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
     exec 9>"${command_lock}"
     flock 9
     "$@"
@@ -397,7 +406,7 @@ with_command_lock() {
 
   local lock_dir="${command_lock}.d"
   local lock_pid_file="${lock_dir}/pid"
-  local lock_pid
+  local lock_pid lock_age status
 
   while ! mkdir "${lock_dir}" 2>/dev/null; do
     if [ -f "${lock_pid_file}" ]; then
@@ -407,12 +416,24 @@ with_command_lock() {
         rmdir "${lock_dir}" 2>/dev/null || true
         continue
       fi
+    else
+      lock_age="$(lock_age_seconds "${lock_dir}" 2>/dev/null || true)"
+      if [ -n "${lock_age}" ] && [ "${lock_age}" -ge "${lock_stale_after}" ]; then
+        rmdir "${lock_dir}" 2>/dev/null || true
+        continue
+      fi
     fi
     sleep 0.1
   done
   printf '%s\n' "$$" >"${lock_pid_file}"
-  trap 'rm -f "${lock_pid_file}"; rmdir "${lock_dir}" 2>/dev/null || true' RETURN
-  "$@"
+  if "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -f "${lock_pid_file}"
+  rmdir "${lock_dir}" 2>/dev/null || true
+  return "${status}"
 }
 
 main() {
@@ -429,16 +450,21 @@ main() {
         ;;
       tab)
         if [ "${exec_cmd[1]:-}" = "new" ]; then
-          local tmp_output
+          local tmp_output status
           tmp_output="$(mktemp)"
-          trap 'rm -f "${tmp_output}"' RETURN
           clear_session_tabs
-          run_agent_browser "${exec_cmd[@]}" >"${tmp_output}"
-          if [ "${session_auto_renew}" != "0" ]; then
-            mark_current_tab "${session_ttl_default}"
+          if run_agent_browser "${exec_cmd[@]}" >"${tmp_output}"; then
+            if [ "${session_auto_renew}" != "0" ]; then
+              mark_current_tab "${session_ttl_default}"
+            fi
+            cat "${tmp_output}"
+            rm -f "${tmp_output}"
+            return 0
+          else
+            status=$?
+            rm -f "${tmp_output}"
+            return "${status}"
           fi
-          cat "${tmp_output}"
-          return 0
         fi
         if [[ "${exec_cmd[1]:-}" =~ ^[0-9]+$ ]]; then
           clear_session_tabs

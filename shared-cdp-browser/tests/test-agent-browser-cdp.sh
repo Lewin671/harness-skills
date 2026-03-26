@@ -17,6 +17,11 @@ assert_not_exists() {
   [ ! -e "${path}" ] || fail "expected path to be absent: ${path}"
 }
 
+assert_exists() {
+  local path="$1"
+  [ -e "${path}" ] || fail "expected path to exist: ${path}"
+}
+
 make_fixture() {
   local fixture_dir="$1"
   mkdir -p "${fixture_dir}/scripts" "${fixture_dir}/bin" "${fixture_dir}/state"
@@ -178,7 +183,18 @@ test_tab_new_failure_cleans_fallback_lock() {
   assert_not_exists "${fixture_dir}/command.lock.d"
 }
 
+test_stale_lock_without_pid_is_recovered() {
+  local fixture_dir="${tmp_root}/stale-lock"
+  make_fixture "${fixture_dir}"
+  mkdir -p "${fixture_dir}/command.lock.d"
+  touch -t 200001010000 "${fixture_dir}/command.lock.d"
+  run_wrapper "${fixture_dir}" tab list >/dev/null
+  assert_not_exists "${fixture_dir}/command.lock.d"
+  assert_exists "${fixture_dir}/state/tabs"
+}
+
 test_tab_new_cleans_fallback_lock
 test_tab_new_failure_cleans_fallback_lock
+test_stale_lock_without_pid_is_recovered
 
 printf 'PASS: %s\n' "$(basename "$0")"
