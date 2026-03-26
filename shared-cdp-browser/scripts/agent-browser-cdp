@@ -264,9 +264,10 @@ cleanup_stale_session_tabs() {
       continue
     fi
 
-    close_target "${lease_target_id}" >/dev/null 2>&1 || true
-    rm -f "${lease_file}"
-    cleanup_removed_count=$((cleanup_removed_count + 1))
+    if close_target "${lease_target_id}" >/dev/null 2>&1 || ! target_exists "${lease_target_id}"; then
+      rm -f "${lease_file}"
+      cleanup_removed_count=$((cleanup_removed_count + 1))
+    fi
   done < <(find "${lease_dir}" -type f -name '*.lease' -print 2>/dev/null | sort)
 }
 
@@ -304,7 +305,7 @@ session_status() {
 }
 
 session_open() {
-  local before_ids after_ids target_id
+  local target_id
 
   require_session_name
   parse_ttl_flag
@@ -322,18 +323,24 @@ session_open() {
   fi
 
   lease_remove
-  before_ids="$(mktemp)"
-  after_ids="$(mktemp)"
-  capture_target_ids >"${before_ids}"
-  run_agent_browser tab new >/dev/null
-  capture_target_ids >"${after_ids}"
-  target_id="$(find_new_target_id "${before_ids}" "${after_ids}" || true)"
+  target_id="$(
+    local before_ids after_ids identified_target
 
-  if [ -z "${target_id}" ]; then
-    target_id="$(tail -n 1 "${after_ids}" | tr -d '\r\n' || true)"
-  fi
+    before_ids="$(mktemp)"
+    after_ids="$(mktemp)"
+    trap 'rm -f "${before_ids}" "${after_ids}"' EXIT
 
-  rm -f "${before_ids}" "${after_ids}"
+    capture_target_ids >"${before_ids}"
+    run_agent_browser tab new >/dev/null
+    capture_target_ids >"${after_ids}"
+    identified_target="$(find_new_target_id "${before_ids}" "${after_ids}" || true)"
+
+    if [ -z "${identified_target}" ]; then
+      identified_target="$(tail -n 1 "${after_ids}" | tr -d '\r\n' || true)"
+    fi
+
+    printf '%s\n' "${identified_target}"
+  )"
 
   if [ -z "${target_id}" ]; then
     echo "Unable to identify the tab created for session ${session_name}." >&2

@@ -29,7 +29,7 @@ lease_file_path() {
 
 make_fixture() {
   local fixture_dir="$1"
-  mkdir -p "${fixture_dir}/scripts" "${fixture_dir}/bin" "${fixture_dir}/state" "${fixture_dir}/state-dir" "${fixture_dir}/socket-dir"
+  mkdir -p "${fixture_dir}/scripts" "${fixture_dir}/bin" "${fixture_dir}/state" "${fixture_dir}/state-dir" "${fixture_dir}/socket-dir" "${fixture_dir}/tmp"
   cp "${script_under_test}" "${fixture_dir}/scripts/agent-browser-cdp"
   chmod +x "${fixture_dir}/scripts/agent-browser-cdp"
 
@@ -177,6 +177,9 @@ case "${argv[0]}" in
         else
           close_index="$(current_tab)"
         fi
+        if [ -f "${state_dir}/fail-tab-close" ]; then
+          exit 24
+        fi
         remove_tab_by_index "${close_index}"
         remaining="$(tab_count)"
         if [ "${remaining}" -le 0 ]; then
@@ -266,6 +269,9 @@ case "${url}" in
     ;;
   http://127.0.0.1:9222/json/close/*)
     target_id="${url##*/}"
+    if [ -f "${state_dir}/fail-curl-close" ]; then
+      exit 22
+    fi
     remove_target "${target_id}"
     ;;
   *)
@@ -280,6 +286,7 @@ run_wrapper() {
   local fixture_dir="$1"
   shift
   PATH="${fixture_dir}/bin:${PATH}" \
+  TMPDIR="${fixture_dir}/tmp" \
   TEST_STATE_DIR="${fixture_dir}/state" \
   AGENT_BROWSER_SOCKET_DIR="${fixture_dir}/socket-dir" \
   SHARED_CDP_BROWSER_SESSION="test-session" \
@@ -292,6 +299,7 @@ run_wrapper_locked() {
   local fixture_dir="$1"
   shift
   PATH="${fixture_dir}/bin:${PATH}" \
+  TMPDIR="${fixture_dir}/tmp" \
   TEST_STATE_DIR="${fixture_dir}/state" \
   AGENT_BROWSER_SOCKET_DIR="${fixture_dir}/socket-dir" \
   SHARED_CDP_BROWSER_DISABLE_FLOCK=1 \
@@ -307,6 +315,22 @@ lease_target_id() {
   local lease_file
   lease_file="$(lease_file_path "${fixture_dir}")"
   awk -F '=' '$1 == "target_id" { print $2; exit }' "${lease_file}"
+}
+
+write_lease_file() {
+  local fixture_dir="$1"
+  local target_id="$2"
+  local expires_at="$3"
+  local ttl="${4:-1800}"
+  local lease_file
+  lease_file="$(lease_file_path "${fixture_dir}")"
+  mkdir -p "$(dirname "${lease_file}")"
+  cat >"${lease_file}" <<EOF
+session_name_b64=$(printf 'test-session' | base64 | tr -d '\r\n')
+target_id=${target_id}
+expires_at=${expires_at}
+ttl=${ttl}
+EOF
 }
 
 test_session_ttl_does_not_switch_active_tab() {
@@ -400,11 +424,44 @@ test_stale_lock_without_pid_is_recovered() {
   assert_not_exists "${fixture_dir}/command.lock.d"
 }
 
+test_cleanup_preserves_lease_when_close_fails() {
+  local fixture_dir="${tmp_root}/cleanup-preserves-lease"
+  local lease_file
+  make_fixture "${fixture_dir}"
+
+  printf 'target-0\tabout:blank\t\n' >"${fixture_dir}/state/tabs"
+  write_lease_file "${fixture_dir}" "target-0" "1"
+  lease_file="$(lease_file_path "${fixture_dir}")"
+  touch "${fixture_dir}/state/fail-curl-close" "${fixture_dir}/state/fail-tab-close"
+
+  output="$(run_wrapper "${fixture_dir}" session cleanup)"
+
+  printf '%s' "${output}" | grep -q '^removed=0$' || fail "cleanup should report zero removals when close fails"
+  assert_exists "${lease_file}"
+  grep -q '^target-0[[:space:]]' "${fixture_dir}/state/tabs" || fail "cleanup should not remove the tab when close fails"
+}
+
+test_session_open_failure_cleans_temp_files() {
+  local fixture_dir="${tmp_root}/session-open-temp-cleanup"
+  make_fixture "${fixture_dir}"
+  touch "${fixture_dir}/state/fail-tab-new"
+
+  if run_wrapper "${fixture_dir}" session open >/dev/null 2>&1; then
+    fail "expected session open to fail"
+  fi
+
+  if find "${fixture_dir}/tmp" -mindepth 1 -print -quit | grep -q .; then
+    fail "session open failure should clean up temporary files"
+  fi
+}
+
 test_session_ttl_does_not_switch_active_tab
 test_tab_new_failure_preserves_existing_lease
 test_normal_command_preserves_leased_target_without_reactivation
 test_tab_switch_preserves_leased_target
 test_stale_lock_with_reused_pid_is_recovered
 test_stale_lock_without_pid_is_recovered
+test_cleanup_preserves_lease_when_close_fails
+test_session_open_failure_cleans_temp_files
 
 printf 'PASS: %s\n' "$(basename "$0")"
