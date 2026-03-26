@@ -46,6 +46,25 @@ find_session_tab() {
   return 1
 }
 
+clear_session_tabs() {
+  [ -n "${session_name}" ] || return 0
+
+  local idx name
+  while IFS= read -r idx; do
+    [ -n "${idx}" ] || continue
+    run_agent_browser tab "${idx}" >/dev/null 2>&1 || continue
+    name="$(run_agent_browser eval 'window.name' 2>/dev/null | tr -d '"' || true)"
+    if [ "${name}" = "${session_marker_b64}" ]; then
+      run_agent_browser eval "if (window.name === '${session_marker_b64}') window.name = '';" >/dev/null
+    fi
+  done < <(list_tab_indexes)
+}
+
+mark_current_tab() {
+  [ -n "${session_name}" ] || return 0
+  run_agent_browser eval "window.name = '${session_marker_b64}'; window.name" >/dev/null
+}
+
 ensure_session_tab() {
   [ -n "${session_name}" ] || return 0
 
@@ -56,7 +75,7 @@ ensure_session_tab() {
   fi
 
   run_agent_browser tab new >/dev/null
-  run_agent_browser eval "window.name = '${session_marker_b64}'; window.name" >/dev/null
+  mark_current_tab
 }
 
 with_command_lock() {
@@ -97,9 +116,16 @@ main() {
           local tmp_output
           tmp_output="$(mktemp)"
           trap 'rm -f "${tmp_output}"' RETURN
+          clear_session_tabs
           run_agent_browser "${exec_cmd[@]}" >"${tmp_output}"
-          run_agent_browser eval "window.name = '${session_marker_b64}'; window.name" >/dev/null
+          mark_current_tab
           cat "${tmp_output}"
+          return 0
+        fi
+        if [[ "${exec_cmd[1]:-}" =~ ^[0-9]+$ ]]; then
+          clear_session_tabs
+          run_agent_browser "${exec_cmd[@]}"
+          mark_current_tab
           return 0
         fi
         ensure_session_tab
