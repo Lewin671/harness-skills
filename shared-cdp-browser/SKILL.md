@@ -13,11 +13,20 @@ Use this skill when browser work should reuse a persistent profile, when agents 
 
 ## Quick Start
 
-Run browser commands through the wrapper instead of calling `agent-browser` directly:
+Run browser commands through the wrapper instead of calling `agent-browser` directly. Recommended workflow:
 
 ```bash
-/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp open https://example.com
-/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp snapshot -i
+SESSION=$(/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/new-session-name)
+SHARED_CDP_BROWSER_SESSION="$SESSION" \
+  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session open
+SHARED_CDP_BROWSER_SESSION="$SESSION" \
+SHARED_CDP_BROWSER_QUIET=1 \
+  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp open https://example.com
+SHARED_CDP_BROWSER_SESSION="$SESSION" \
+SHARED_CDP_BROWSER_QUIET=1 \
+  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp snapshot -i
+SHARED_CDP_BROWSER_SESSION="$SESSION" \
+  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session close
 ```
 
 The wrapper performs this sequence on every call:
@@ -32,25 +41,34 @@ On macOS, app-bundle launches use `open -g` by default so a fresh shared browser
 
 ## Multiple Agents
 
-Multiple agents can attach to the same browser process. To avoid stepping on each other's `agent-browser` session state, give each agent its own session name:
+Multiple agents can attach to the same browser process. To avoid stepping on each other's `agent-browser` session state, give each agent its own session name and keep normal commands in quiet mode:
 
 ```bash
 SESSION=$(/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/new-session-name)
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
+  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session open
+SHARED_CDP_BROWSER_SESSION="$SESSION" \
+SHARED_CDP_BROWSER_QUIET=1 \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp open https://example.com
 ```
 
-When the same agent needs several commands in sequence, reuse the same `SHARED_CDP_BROWSER_SESSION` value for that whole workflow:
+When the same agent needs several commands in sequence, reuse the same `SHARED_CDP_BROWSER_SESSION` value for that whole workflow and keep `SHARED_CDP_BROWSER_QUIET=1` on the normal commands:
 
 ```bash
 SESSION=$(/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/new-session-name) && \
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
+  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session open && \
+SHARED_CDP_BROWSER_SESSION="$SESSION" \
+SHARED_CDP_BROWSER_QUIET=1 \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp open https://example.com && \
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp snapshot -i
+SHARED_CDP_BROWSER_QUIET=1 \
+  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp snapshot -i && \
+SHARED_CDP_BROWSER_SESSION="$SESSION" \
+  /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session close
 ```
 
-The session wrapper now supports explicit lease management with TTL:
+The session wrapper supports explicit lease management with TTL. `session open` and `session close` are the intended explicit lifecycle boundaries; keep quiet mode on for the normal page actions between them:
 
 ```bash
 SESSION=$(/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/new-session-name)
