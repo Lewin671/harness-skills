@@ -45,7 +45,7 @@ Treat one `SHARED_CDP_BROWSER_SESSION` value as one workspace for one agent or o
 3. Otherwise launches Chrome with remote debugging enabled.
 4. Forwards the original command to `agent-browser --cdp ...`.
 
-If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper may also keep a lightweight lease file for the current tab so explicit session commands can inspect, renew, or clean up that workspace later.
+If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper may also keep a lightweight lease file for the session's leased tab so explicit session commands can inspect, renew, or clean up that workspace later.
 
 ## Session Helpers
 
@@ -80,7 +80,7 @@ Useful environment variables:
 
 ```bash
 SHARED_CDP_BROWSER_SESSION_TTL=1800   # default lease TTL in seconds
-SHARED_CDP_BROWSER_AUTO_RENEW=1       # renew the tracked tab lease on successful commands
+SHARED_CDP_BROWSER_AUTO_RENEW=1       # renew the existing leased tab on successful commands
 SHARED_CDP_BROWSER_BACKGROUND=1       # macOS app launches stay in the background by default
 SHARED_CDP_BROWSER_USE_LOCK=1         # serialize wrapper calls only when you need it
 ```

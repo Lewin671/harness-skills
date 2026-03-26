@@ -345,12 +345,13 @@ test_tab_new_failure_preserves_existing_lease() {
   [ "${before_target}" = "${after_target}" ] || fail "failed tab new should preserve prior lease"
 }
 
-test_normal_command_tracks_current_tab_without_reactivation() {
-  local fixture_dir="${tmp_root}/track-current-tab"
+test_normal_command_preserves_leased_target_without_reactivation() {
+  local fixture_dir="${tmp_root}/preserve-leased-target"
   local target_id
   make_fixture "${fixture_dir}"
 
   run_wrapper "${fixture_dir}" session open >/dev/null
+  target_id="$(lease_target_id "${fixture_dir}")"
   printf 'target-extra\thttps://example.com\tExample\n' >>"${fixture_dir}/state/tabs"
   printf '1\n' >"${fixture_dir}/state/current"
   printf '0\n' >"${fixture_dir}/state/activate-count"
@@ -358,8 +359,22 @@ test_normal_command_tracks_current_tab_without_reactivation() {
   run_wrapper "${fixture_dir}" tab list >/dev/null
 
   [ "$(cat "${fixture_dir}/state/activate-count")" = "0" ] || fail "normal commands should not reactivate browser tabs"
-  target_id="$(lease_target_id "${fixture_dir}")"
-  [ "${target_id}" = "target-extra" ] || fail "normal commands should track the current tab instead of rebinding the old lease"
+  [ "${target_id}" = "$(lease_target_id "${fixture_dir}")" ] || fail "normal commands should keep the existing leased target"
+}
+
+test_tab_switch_preserves_leased_target() {
+  local fixture_dir="${tmp_root}/tab-switch-preserves-target"
+  local before_target after_target
+  make_fixture "${fixture_dir}"
+
+  run_wrapper "${fixture_dir}" session open >/dev/null
+  before_target="$(lease_target_id "${fixture_dir}")"
+
+  printf 'target-extra\thttps://example.com\tExample\n' >>"${fixture_dir}/state/tabs"
+  run_wrapper "${fixture_dir}" tab 1 >/dev/null
+
+  after_target="$(lease_target_id "${fixture_dir}")"
+  [ "${before_target}" = "${after_target}" ] || fail "switching tabs should not rewrite the leased target"
 }
 
 test_stale_lock_with_reused_pid_is_recovered() {
@@ -387,7 +402,8 @@ test_stale_lock_without_pid_is_recovered() {
 
 test_session_ttl_does_not_switch_active_tab
 test_tab_new_failure_preserves_existing_lease
-test_normal_command_tracks_current_tab_without_reactivation
+test_normal_command_preserves_leased_target_without_reactivation
+test_tab_switch_preserves_leased_target
 test_stale_lock_with_reused_pid_is_recovered
 test_stale_lock_without_pid_is_recovered
 

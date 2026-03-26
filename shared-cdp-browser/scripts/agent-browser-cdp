@@ -176,30 +176,6 @@ target_exists() {
   list_targets_tsv | awk -F '\t' -v target_id="${target_id}" '$1 == target_id { found = 1 } END { exit(found ? 0 : 1) }'
 }
 
-current_tab_index() {
-  run_agent_browser --json tab list 2>/dev/null | json_filter '
-import json
-import sys
-
-payload = json.load(sys.stdin)
-active = payload.get("data", {}).get("active")
-if active is None:
-    raise SystemExit(1)
-print(active)
-'
-}
-
-target_id_for_index() {
-  local wanted_index="${1}"
-  list_targets_tsv | awk -F '\t' -v wanted_index="${wanted_index}" 'NR - 1 == wanted_index { print $1; found = 1; exit } END { exit(found ? 0 : 1) }'
-}
-
-current_target_id() {
-  local idx
-  idx="$(current_tab_index)"
-  target_id_for_index "${idx}"
-}
-
 close_target() {
   local target_id="${1}"
 
@@ -253,12 +229,15 @@ mark_target() {
 
 mark_current_tab() {
   local ttl="${1:-${session_ttl_default}}"
-  local target_id
 
   [ -n "${session_name}" ] || return 0
-  target_id="$(current_target_id 2>/dev/null || true)"
-  [ -n "${target_id}" ] || return 1
-  mark_target "${target_id}" "${ttl}"
+  if ! load_session_lease 2>/dev/null; then
+    return 1
+  fi
+  if ! target_exists "${lease_target_id}"; then
+    return 1
+  fi
+  mark_target "${lease_target_id}" "${ttl}"
 }
 
 cleanup_stale_session_tabs() {
@@ -349,10 +328,16 @@ session_open() {
   run_agent_browser tab new >/dev/null
   capture_target_ids >"${after_ids}"
   target_id="$(find_new_target_id "${before_ids}" "${after_ids}" || true)"
+
+  if [ -z "${target_id}" ]; then
+    target_id="$(tail -n 1 "${after_ids}" | tr -d '\r\n' || true)"
+  fi
+
   rm -f "${before_ids}" "${after_ids}"
 
   if [ -z "${target_id}" ]; then
-    target_id="$(current_target_id)"
+    echo "Unable to identify the tab created for session ${session_name}." >&2
+    exit 1
   fi
 
   mark_target "${target_id}" "${parsed_ttl}"
@@ -523,7 +508,7 @@ with_optional_command_lock() {
 }
 
 main() {
-  local status current_target current_exists
+  local status current_exists
 
   if [ "${exec_cmd[0]}" = "session" ] && [ "${#exec_cmd[@]}" -ge 2 ]; then
     handle_session_command
@@ -556,10 +541,7 @@ main() {
     fi
   fi
 
-  current_target="$(current_target_id 2>/dev/null || true)"
-  if [ -n "${current_target}" ]; then
-    mark_target "${current_target}" "${session_ttl_default}"
-  else
+  if ! mark_current_tab "${session_ttl_default}"; then
     lease_remove
   fi
 
