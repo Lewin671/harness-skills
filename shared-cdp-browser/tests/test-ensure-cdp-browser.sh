@@ -78,6 +78,23 @@ test_stale_lock_without_pid_is_recovered() {
   assert_exists "${fixture_dir}/profile"
 }
 
+test_stale_lock_with_reused_pid_is_recovered() {
+  local fixture_dir="${tmp_root}/stale-lock-pid"
+  make_fixture "${fixture_dir}"
+  mkdir -p "${fixture_dir}/browser.lock"
+  cat >"${fixture_dir}/browser.lock/pid" <<EOF
+pid=$$
+started=Thu Jan  1 00:00:00 1970
+EOF
+
+  output="$(run_wrapper "${fixture_dir}")"
+
+  [ "${output}" = "http://127.0.0.1:9222" ] || fail "unexpected cdp url: ${output}"
+  assert_not_exists "${fixture_dir}/browser.lock"
+  assert_exists "${fixture_dir}/state/cdp-ready"
+}
+
 test_stale_lock_without_pid_is_recovered
+test_stale_lock_with_reused_pid_is_recovered
 
 printf 'PASS: %s\n' "$(basename "$0")"

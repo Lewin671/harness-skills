@@ -68,6 +68,11 @@ now_epoch() {
   date +%s
 }
 
+process_start_time() {
+  local pid="${1}"
+  ps -o lstart= -p "${pid}" 2>/dev/null | sed 's/^[[:space:]]*//'
+}
+
 lock_age_seconds() {
   local path="${1}"
   local modified_at
@@ -109,7 +114,10 @@ mkdir_lock() {
 }
 
 write_lock_pid() {
-  printf '%s\n' "$$" >"${lock_pid_file}"
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'started=%s\n' "$(process_start_time "$$")"
+  } >"${lock_pid_file}"
 }
 
 clear_lock() {
@@ -118,15 +126,25 @@ clear_lock() {
 }
 
 lock_is_stale() {
-  local lock_pid lock_age
+  local lock_pid lock_started current_start lock_age
   if [ ! -f "${lock_pid_file}" ]; then
     lock_age="$(lock_age_seconds "${lock_dir}" 2>/dev/null || true)"
     [ -n "${lock_age}" ] && [ "${lock_age}" -ge "${lock_stale_after}" ]
     return
   fi
-  lock_pid="$(cat "${lock_pid_file}" 2>/dev/null || true)"
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      pid) lock_pid="${value}" ;;
+      started) lock_started="${value}" ;;
+    esac
+  done <"${lock_pid_file}"
   [ -n "${lock_pid}" ] || return 1
-  ! kill -0 "${lock_pid}" 2>/dev/null
+  if ! kill -0 "${lock_pid}" 2>/dev/null; then
+    return 0
+  fi
+  current_start="$(process_start_time "${lock_pid}")"
+  [ -n "${current_start}" ] || return 0
+  [ "${current_start}" != "${lock_started}" ]
 }
 
 remove_stale_lock() {

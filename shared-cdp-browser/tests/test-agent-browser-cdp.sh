@@ -22,9 +22,14 @@ assert_exists() {
   [ -e "${path}" ] || fail "expected path to exist: ${path}"
 }
 
+lease_file_path() {
+  local fixture_dir="$1"
+  printf '%s/state-dir/leases/%s.lease\n' "${fixture_dir}" "$(printf 'test-session' | base64 | tr -d '\r\n' | tr '/+=' '_-.')"
+}
+
 make_fixture() {
   local fixture_dir="$1"
-  mkdir -p "${fixture_dir}/scripts" "${fixture_dir}/bin" "${fixture_dir}/state"
+  mkdir -p "${fixture_dir}/scripts" "${fixture_dir}/bin" "${fixture_dir}/state" "${fixture_dir}/state-dir"
   cp "${script_under_test}" "${fixture_dir}/scripts/agent-browser-cdp"
   chmod +x "${fixture_dir}/scripts/agent-browser-cdp"
 
@@ -42,14 +47,22 @@ set -euo pipefail
 state_dir="${TEST_STATE_DIR:?}"
 tabs_file="${state_dir}/tabs"
 current_file="${state_dir}/current"
+next_id_file="${state_dir}/next-id"
 mkdir -p "${state_dir}"
 touch "${tabs_file}"
+[ -f "${current_file}" ] || printf '0\n' >"${current_file}"
+[ -f "${next_id_file}" ] || printf '0\n' >"${next_id_file}"
 
 argv=("$@")
+json_mode=0
 while [ "${#argv[@]}" -gt 0 ]; do
   case "${argv[0]}" in
     --cdp|--session)
       argv=("${argv[@]:2}")
+      ;;
+    --json)
+      json_mode=1
+      argv=("${argv[@]:1}")
       ;;
     *)
       break
@@ -60,62 +73,113 @@ done
 [ "${#argv[@]}" -gt 0 ] || exit 1
 
 current_tab() {
-  if [ -f "${current_file}" ]; then
-    cat "${current_file}"
-  fi
+  cat "${current_file}"
 }
 
 set_current_tab() {
   printf '%s\n' "$1" >"${current_file}"
 }
 
-set_tab_name() {
-  local idx="$1"
-  local name="$2"
-  local tmp_file
-  local found=0
-  tmp_file="$(mktemp)"
-  while IFS=: read -r existing_idx existing_name || [ -n "${existing_idx:-}" ]; do
-    if [ "${existing_idx}" = "${idx}" ]; then
-      printf '%s:%s\n' "${idx}" "${name}" >>"${tmp_file}"
-      found=1
-    elif [ -n "${existing_idx}" ]; then
-      printf '%s:%s\n' "${existing_idx}" "${existing_name}" >>"${tmp_file}"
-    fi
-  done <"${tabs_file}"
-  if [ "${found}" -eq 0 ]; then
-    printf '%s:%s\n' "${idx}" "${name}" >>"${tmp_file}"
+next_target_id() {
+  local next_id
+  next_id="$(cat "${next_id_file}")"
+  printf '%s\n' "$((next_id + 1))" >"${next_id_file}"
+  printf 'target-%s' "${next_id}"
+}
+
+tab_count() {
+  if [ -s "${tabs_file}" ]; then
+    wc -l <"${tabs_file}" | tr -d ' '
+  else
+    printf '0'
   fi
+}
+
+append_tab() {
+  local target_id="$1"
+  local url="${2:-about:blank}"
+  local title="${3:-}"
+  printf '%s\t%s\t%s\n' "${target_id}" "${url}" "${title}" >>"${tabs_file}"
+}
+
+remove_tab_by_index() {
+  local target_index="$1"
+  local tmp_file
+  local idx=0
+  tmp_file="$(mktemp)"
+  while IFS=$'\t' read -r target_id url title || [ -n "${target_id:-}" ]; do
+    if [ "${idx}" -ne "${target_index}" ]; then
+      printf '%s\t%s\t%s\n' "${target_id}" "${url}" "${title}" >>"${tmp_file}"
+    fi
+    idx=$((idx + 1))
+  done <"${tabs_file}"
   mv "${tmp_file}" "${tabs_file}"
 }
 
-get_tab_name() {
-  local idx="$1"
-  local line
-  line="$(grep -E "^${idx}:" "${tabs_file}" || true)"
-  printf '%s' "${line#*:}"
+tab_target_by_index() {
+  local wanted_index="$1"
+  awk -F '\t' -v wanted_index="${wanted_index}" 'NR - 1 == wanted_index { print $1; exit }' "${tabs_file}"
 }
 
 case "${argv[0]}" in
   tab)
-    case "${argv[1]:-}" in
+    case "${argv[1]:-list}" in
       list)
-        while IFS=: read -r idx _; do
-          [ -n "${idx}" ] && printf '[%s]\n' "${idx}"
-        done <"${tabs_file}"
+        if [ "${json_mode}" -eq 1 ]; then
+          printf '{"data":{"tabs":['
+          first=1
+          idx=0
+          active="$(current_tab)"
+          while IFS=$'\t' read -r target_id url title || [ -n "${target_id:-}" ]; do
+            [ -n "${target_id}" ] || continue
+            [ "${first}" -eq 1 ] || printf ','
+            first=0
+            if [ "${idx}" -eq "${active}" ]; then
+              active_json=true
+            else
+              active_json=false
+            fi
+            printf '{"index":%s,"url":"%s","title":"%s","active":%s}' "${idx}" "${url}" "${title}" "${active_json}"
+            idx=$((idx + 1))
+          done <"${tabs_file}"
+          printf '],"active":%s}}\n' "${active}"
+        else
+          idx=0
+          active="$(current_tab)"
+          while IFS=$'\t' read -r target_id _ _ || [ -n "${target_id:-}" ]; do
+            [ -n "${target_id}" ] || continue
+            if [ "${idx}" -eq "${active}" ]; then
+              printf '→ [%s]\n' "${idx}"
+            else
+              printf '[%s]\n' "${idx}"
+            fi
+            idx=$((idx + 1))
+          done <"${tabs_file}"
+        fi
         ;;
       new)
-        if [ "${TEST_FAIL_TAB_NEW:-0}" = "1" ]; then
+        if [ -f "${state_dir}/fail-tab-new" ]; then
           exit 23
         fi
-        next_idx=1
-        if [ -s "${tabs_file}" ]; then
-          last_idx="$(cut -d: -f1 "${tabs_file}" | tail -n1)"
-          next_idx=$((last_idx + 1))
+        target_id="$(next_target_id)"
+        append_tab "${target_id}" "${2:-about:blank}" ""
+        new_index=$(( $(tab_count) - 1 ))
+        set_current_tab "${new_index}"
+        printf '[%s]\n' "${new_index}"
+        ;;
+      close)
+        if [ "${#argv[@]}" -ge 3 ]; then
+          close_index="${argv[2]}"
+        else
+          close_index="$(current_tab)"
         fi
-        printf '%s:\n' "${next_idx}" >>"${tabs_file}"
-        set_current_tab "${next_idx}"
-        printf '[%s]\n' "${next_idx}"
+        remove_tab_by_index "${close_index}"
+        remaining="$(tab_count)"
+        if [ "${remaining}" -le 0 ]; then
+          printf '0\n' >"${current_file}"
+        elif [ "$(current_tab)" -ge "${remaining}" ]; then
+          printf '%s\n' "$((remaining - 1))" >"${current_file}"
+        fi
         ;;
       *)
         set_current_tab "${argv[1]}"
@@ -123,30 +187,7 @@ case "${argv[0]}" in
     esac
     ;;
   eval)
-    expr="${argv[*]:1}"
-    idx="$(current_tab)"
-    [ -n "${idx}" ] || exit 1
-    case "${expr}" in
-      "window.name")
-        printf '"%s"\n' "$(get_tab_name "${idx}")"
-        ;;
-      "window.name = '"*"'; window.name")
-        name="${expr#window.name = \'}"
-        name="${name%\'; window.name}"
-        set_tab_name "${idx}" "${name}"
-        printf '"%s"\n' "${name}"
-        ;;
-      "if (window.name === '"*"') window.name = '';")
-        name="${expr#if (window.name === \'}"
-        name="${name%\') window.name = \';}"
-        if [ "$(get_tab_name "${idx}")" = "${name}" ]; then
-          set_tab_name "${idx}" ""
-        fi
-        ;;
-      *)
-        exit 1
-        ;;
-    esac
+    fail "wrapper unexpectedly called eval: ${argv[*]:1}"
     ;;
   *)
     exit 1
@@ -154,6 +195,75 @@ case "${argv[0]}" in
 esac
 EOF
   chmod +x "${fixture_dir}/bin/agent-browser"
+
+  cat >"${fixture_dir}/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_dir="${TEST_STATE_DIR:?}"
+tabs_file="${state_dir}/tabs"
+current_file="${state_dir}/current"
+url="${*: -1}"
+
+[ -f "${tabs_file}" ] || touch "${tabs_file}"
+[ -f "${current_file}" ] || printf '0\n' >"${current_file}"
+
+write_tabs_json() {
+  printf '['
+  first=1
+  while IFS=$'\t' read -r target_id page_url title || [ -n "${target_id:-}" ]; do
+    [ -n "${target_id}" ] || continue
+    [ "${first}" -eq 1 ] || printf ','
+    first=0
+    printf '{"id":"%s","type":"page","title":"%s","url":"%s"}' "${target_id}" "${title}" "${page_url}"
+  done <"${tabs_file}"
+  printf ']\n'
+}
+
+set_current_for_target() {
+  local wanted_target="$1"
+  local idx=0
+  while IFS=$'\t' read -r target_id _ _ || [ -n "${target_id:-}" ]; do
+    if [ "${target_id}" = "${wanted_target}" ]; then
+      printf '%s\n' "${idx}" >"${current_file}"
+      return 0
+    fi
+    idx=$((idx + 1))
+  done <"${tabs_file}"
+  return 1
+}
+
+remove_target() {
+  local wanted_target="$1"
+  local tmp_file
+  tmp_file="$(mktemp)"
+  while IFS=$'\t' read -r target_id page_url title || [ -n "${target_id:-}" ]; do
+    [ -n "${target_id}" ] || continue
+    if [ "${target_id}" != "${wanted_target}" ]; then
+      printf '%s\t%s\t%s\n' "${target_id}" "${page_url}" "${title}" >>"${tmp_file}"
+    fi
+  done <"${tabs_file}"
+  mv "${tmp_file}" "${tabs_file}"
+}
+
+case "${url}" in
+  http://127.0.0.1:9222/json/list)
+    write_tabs_json
+    ;;
+  http://127.0.0.1:9222/json/activate/*)
+    target_id="${url##*/}"
+    set_current_for_target "${target_id}"
+    ;;
+  http://127.0.0.1:9222/json/close/*)
+    target_id="${url##*/}"
+    remove_target "${target_id}"
+    ;;
+  *)
+    exit 22
+    ;;
+esac
+EOF
+  chmod +x "${fixture_dir}/bin/curl"
 }
 
 run_wrapper() {
@@ -163,23 +273,64 @@ run_wrapper() {
   TEST_STATE_DIR="${fixture_dir}/state" \
   SHARED_CDP_BROWSER_DISABLE_FLOCK=1 \
   SHARED_CDP_BROWSER_SESSION="test-session" \
+  SHARED_CDP_BROWSER_STATE_DIR="${fixture_dir}/state-dir" \
   SHARED_CDP_BROWSER_COMMAND_LOCK="${fixture_dir}/command.lock" \
   "${fixture_dir}/scripts/agent-browser-cdp" "$@"
 }
 
-test_tab_new_cleans_fallback_lock() {
-  local fixture_dir="${tmp_root}/success"
-  make_fixture "${fixture_dir}"
-  run_wrapper "${fixture_dir}" tab new >/dev/null
-  assert_not_exists "${fixture_dir}/command.lock.d"
+lease_target_id() {
+  local fixture_dir="$1"
+  local lease_file
+  lease_file="$(lease_file_path "${fixture_dir}")"
+  awk -F '=' '$1 == "target_id" { print $2; exit }' "${lease_file}"
 }
 
-test_tab_new_failure_cleans_fallback_lock() {
-  local fixture_dir="${tmp_root}/failure"
+test_session_ttl_does_not_switch_active_tab() {
+  local fixture_dir="${tmp_root}/ttl"
+  local lease_file
   make_fixture "${fixture_dir}"
-  if TEST_FAIL_TAB_NEW=1 run_wrapper "${fixture_dir}" tab new >/dev/null 2>&1; then
+
+  run_wrapper "${fixture_dir}" session open >/dev/null
+  lease_file="$(lease_file_path "${fixture_dir}")"
+  assert_exists "${lease_file}"
+
+  printf 'target-extra\thttps://example.com\tExample\n' >>"${fixture_dir}/state/tabs"
+  printf '1\n' >"${fixture_dir}/state/current"
+
+  output="$(run_wrapper "${fixture_dir}" session ttl)"
+
+  [ "$(cat "${fixture_dir}/state/current")" = "1" ] || fail "session ttl should not change active tab"
+  printf '%s' "${output}" | grep -q '^status=active$' || fail "session ttl should report active session"
+}
+
+test_tab_new_failure_preserves_existing_lease() {
+  local fixture_dir="${tmp_root}/tab-new-failure"
+  local before_target after_target
+  make_fixture "${fixture_dir}"
+
+  run_wrapper "${fixture_dir}" session open >/dev/null
+  before_target="$(lease_target_id "${fixture_dir}")"
+
+  touch "${fixture_dir}/state/fail-tab-new"
+  if run_wrapper "${fixture_dir}" tab new >/dev/null 2>&1; then
     fail "expected tab new to fail"
   fi
+  rm -f "${fixture_dir}/state/fail-tab-new"
+
+  after_target="$(lease_target_id "${fixture_dir}")"
+  [ "${before_target}" = "${after_target}" ] || fail "failed tab new should preserve prior lease"
+}
+
+test_stale_lock_with_reused_pid_is_recovered() {
+  local fixture_dir="${tmp_root}/stale-pid-lock"
+  make_fixture "${fixture_dir}"
+  mkdir -p "${fixture_dir}/command.lock.d"
+  cat >"${fixture_dir}/command.lock.d/pid" <<EOF
+pid=$$
+started=Thu Jan  1 00:00:00 1970
+EOF
+
+  run_wrapper "${fixture_dir}" tab list >/dev/null
   assert_not_exists "${fixture_dir}/command.lock.d"
 }
 
@@ -188,13 +339,14 @@ test_stale_lock_without_pid_is_recovered() {
   make_fixture "${fixture_dir}"
   mkdir -p "${fixture_dir}/command.lock.d"
   touch -t 200001010000 "${fixture_dir}/command.lock.d"
+
   run_wrapper "${fixture_dir}" tab list >/dev/null
   assert_not_exists "${fixture_dir}/command.lock.d"
-  assert_exists "${fixture_dir}/state/tabs"
 }
 
-test_tab_new_cleans_fallback_lock
-test_tab_new_failure_cleans_fallback_lock
+test_session_ttl_does_not_switch_active_tab
+test_tab_new_failure_preserves_existing_lease
+test_stale_lock_with_reused_pid_is_recovered
 test_stale_lock_without_pid_is_recovered
 
 printf 'PASS: %s\n' "$(basename "$0")"

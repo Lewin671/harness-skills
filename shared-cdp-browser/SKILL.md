@@ -25,7 +25,7 @@ The wrapper performs this sequence on every call:
 1. Check whether `http://127.0.0.1:9222/json/version` is live.
 2. If not, launch Chrome with `--remote-debugging-port=9222`.
 3. Reuse `~/agent-browser-data` so cookies, login state, and extensions persist.
-4. If `SHARED_CDP_BROWSER_SESSION` is set, recover that session's leased tab by `window.name`.
+4. If `SHARED_CDP_BROWSER_SESSION` is set, recover that session's leased tab from wrapper-managed lease metadata keyed by the CDP target id.
 5. Forward the original arguments to `agent-browser --cdp http://127.0.0.1:9222`.
 
 ## Multiple Agents
@@ -79,7 +79,7 @@ SHARED_CDP_BROWSER_BIN=/Applications/Google\ Chrome.app/Contents/MacOS/Google\ C
 
 ### `scripts/agent-browser-cdp`
 
-Preferred entry point. It calls `ensure-cdp-browser` first, then runs `agent-browser` with the shared CDP endpoint. If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper binds that session to a stable tab using `window.name`, tracks a TTL on that lease, auto-renews it on normal commands, and reclaims expired leased tabs before later commands. It also exposes wrapper-level session helpers: `session open`, `session renew`, `session ttl`, `session close`, and `session cleanup`. If `agent-browser` is not on `PATH`, it falls back to `npx -y agent-browser`.
+Preferred entry point. It calls `ensure-cdp-browser` first, then runs `agent-browser` with the shared CDP endpoint. If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper binds that session to a stable tab with wrapper-managed lease files keyed by the tab's CDP target id, tracks a TTL on that lease, auto-renews it on normal commands, and reclaims expired leased tabs before later commands. Session lookup no longer depends on page-controlled fields, so normal site scripts cannot steal or erase the lease. It also exposes wrapper-level session helpers: `session open`, `session renew`, `session ttl`, `session close`, and `session cleanup`. Read-only helpers such as `session ttl` inspect lease metadata without changing the active tab. If `agent-browser` is not on `PATH`, it falls back to `npx -y agent-browser`.
 
 Useful environment variables:
 
@@ -95,6 +95,7 @@ Generates a unique session name for parallel agents. Use it when several agents 
 ## Notes
 
 - The launcher uses a filesystem lock with stale-lock recovery so several agents can race to start the browser safely.
+- Lock ownership records both PID and process start time, so stale-lock recovery is resilient to PID reuse.
 - The command wrapper also uses a per-endpoint lock, so agents can share one browser safely even when they issue commands at the same time. Commands are serialized per CDP endpoint, not truly simultaneous at the browser action level.
 - Session tabs behave like leases. `session close` is the explicit end-of-life path, but TTL-based cleanup is the safety net if a model forgets to close.
 - The browser profile is shared on purpose. Agents should assume cookies, tabs, and logged-in state may already exist.

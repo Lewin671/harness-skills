@@ -8,11 +8,13 @@ port="${SHARED_CDP_BROWSER_PORT:-9222}"
 lock_key="${host//[^[:alnum:]]/_}-${port}"
 session_name="${SHARED_CDP_BROWSER_SESSION:-}"
 session_name_b64="$(printf '%s' "${session_name}" | base64 | tr -d '\r\n')"
-session_marker_prefix="shared-cdp"
+session_key="$(printf '%s' "${session_name_b64}" | tr '/+=' '_-.')"
 command_lock="${SHARED_CDP_BROWSER_COMMAND_LOCK:-/tmp/shared-cdp-browser-command-${lock_key}.lock}"
 session_ttl_default="${SHARED_CDP_BROWSER_SESSION_TTL:-1800}"
 session_auto_renew="${SHARED_CDP_BROWSER_AUTO_RENEW:-1}"
 lock_stale_after="${SHARED_CDP_BROWSER_LOCK_STALE_AFTER:-5}"
+state_dir="${SHARED_CDP_BROWSER_STATE_DIR:-${TMPDIR:-/tmp}/shared-cdp-browser-state-${lock_key}}"
+lease_dir="${state_dir}/leases"
 
 base64_decode() {
   if printf '%s' "${1}" | base64 --decode >/dev/null 2>&1; then
@@ -25,6 +27,11 @@ base64_decode() {
 
 now_epoch() {
   date +%s
+}
+
+process_start_time() {
+  local pid="${1}"
+  ps -o lstart= -p "${pid}" 2>/dev/null | sed 's/^[[:space:]]*//'
 }
 
 require_positive_integer() {
@@ -97,197 +104,268 @@ run_agent_browser() {
   "${cmd[@]}" "$@"
 }
 
-build_session_marker() {
-  local expires_at="${1}"
-  local ttl="${2}"
-  printf '%s:%s:%s:%s' "${session_marker_prefix}" "${session_name_b64}" "${expires_at}" "${ttl}"
+lease_file_path() {
+  printf '%s/%s.lease\n' "${lease_dir}" "${session_key}"
 }
 
-parse_session_marker() {
-  local raw="${1}"
-  local prefix session_b64 expires_at ttl extra
-  local decoded legacy_prefix legacy_name legacy_extra
-
-  IFS=':' read -r prefix session_b64 expires_at ttl extra <<< "${raw}"
-  if [ "${prefix}" = "${session_marker_prefix}" ] && [ -z "${extra}" ] && [ -n "${session_b64}" ] && [[ "${expires_at}" =~ ^[0-9]+$ ]] && [[ "${ttl}" =~ ^[0-9]+$ ]]; then
-    parsed_marker_session_b64="${session_b64}"
-    parsed_marker_expires_at="${expires_at}"
-    parsed_marker_ttl="${ttl}"
-    parsed_marker_is_legacy=0
-    return 0
-  fi
-
-  IFS=':' read -r legacy_prefix legacy_name legacy_extra <<< "${raw}"
-  if [ "${legacy_prefix}" = "${session_marker_prefix}" ] && [ -n "${legacy_name}" ] && [ -z "${legacy_extra}" ]; then
-    parsed_marker_session_b64="$(printf '%s' "${legacy_name}" | base64 | tr -d '\r\n')"
-    parsed_marker_expires_at=0
-    parsed_marker_ttl=0
-    parsed_marker_is_legacy=1
-    return 0
-  fi
-
-  if decoded="$(base64_decode "${raw}" 2>/dev/null)"; then
-    IFS=':' read -r legacy_prefix legacy_name legacy_extra <<< "${decoded}"
-    if [ "${legacy_prefix}" = "${session_marker_prefix}" ] && [ -n "${legacy_name}" ] && [ -z "${legacy_extra}" ]; then
-      parsed_marker_session_b64="$(printf '%s' "${legacy_name}" | base64 | tr -d '\r\n')"
-      parsed_marker_expires_at=0
-      parsed_marker_ttl=0
-      parsed_marker_is_legacy=1
-      return 0
-    fi
-  fi
-
-  return 1
+ensure_state_dirs() {
+  mkdir -p "${lease_dir}"
 }
 
-list_tab_indexes() {
-  run_agent_browser tab list 2>/dev/null | sed -n 's/.*\[\([0-9][0-9]*\)\].*/\1/p'
+lease_write() {
+  local target_id="${1}"
+  local expires_at="${2}"
+  local ttl="${3}"
+  local lease_file
+
+  ensure_state_dirs
+  lease_file="$(lease_file_path)"
+  cat >"${lease_file}" <<EOF
+session_name_b64=${session_name_b64}
+target_id=${target_id}
+expires_at=${expires_at}
+ttl=${ttl}
+EOF
+}
+
+lease_remove() {
+  local lease_file
+  lease_file="$(lease_file_path)"
+  rm -f "${lease_file}"
+}
+
+read_lease_file() {
+  local lease_file="${1}"
+  [ -f "${lease_file}" ] || return 1
+
+  lease_session_name_b64=""
+  lease_target_id=""
+  lease_expires_at=""
+  lease_ttl=""
+
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      session_name_b64) lease_session_name_b64="${value}" ;;
+      target_id) lease_target_id="${value}" ;;
+      expires_at) lease_expires_at="${value}" ;;
+      ttl) lease_ttl="${value}" ;;
+    esac
+  done <"${lease_file}"
+
+  [ -n "${lease_target_id}" ] || return 1
+  [[ "${lease_expires_at}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${lease_ttl}" =~ ^[0-9]+$ ]] || return 1
+}
+
+load_session_lease() {
+  local lease_file
+  lease_file="$(lease_file_path)"
+  read_lease_file "${lease_file}"
+}
+
+json_filter() {
+  local script="${1}"
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "${script}"
+    return
+  fi
+
+  python -c "${script}"
+}
+
+list_targets_tsv() {
+  local targets_json
+
+  targets_json="$(curl --silent --show-error --fail "${cdp_url}/json/list")"
+  printf '%s' "${targets_json}" | json_filter '
+import json
+import sys
+
+data = json.load(sys.stdin)
+for item in data:
+    if item.get("type") != "page":
+        continue
+    target_id = item.get("id", "")
+    if not target_id:
+        continue
+    title = item.get("title", "").replace("\t", " ").replace("\n", " ")
+    url = item.get("url", "").replace("\t", " ").replace("\n", " ")
+    print(f"{target_id}\t{title}\t{url}")
+'
+}
+
+target_exists() {
+  local target_id="${1}"
+  list_targets_tsv | awk -F '\t' -v target_id="${target_id}" '$1 == target_id { found = 1 } END { exit(found ? 0 : 1) }'
 }
 
 current_tab_index() {
-  run_agent_browser tab list 2>/dev/null | sed -n 's/^.*→ \[\([0-9][0-9]*\)\].*/\1/p'
+  run_agent_browser --json tab list 2>/dev/null | json_filter '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+active = payload.get("data", {}).get("active")
+if active is None:
+    raise SystemExit(1)
+print(active)
+'
 }
 
-current_window_name() {
-  run_agent_browser eval 'window.name' 2>/dev/null | tr -d '"' || true
+target_id_for_index() {
+  local wanted_index="${1}"
+  list_targets_tsv | awk -F '\t' -v wanted_index="${wanted_index}" 'NR - 1 == wanted_index { print $1; found = 1; exit } END { exit(found ? 0 : 1) }'
 }
 
-find_session_tab() {
-  local idx name
-
-  while IFS= read -r idx; do
-    [ -n "${idx}" ] || continue
-    run_agent_browser tab "${idx}" >/dev/null 2>&1 || continue
-    name="$(current_window_name)"
-    if parse_session_marker "${name}" && [ "${parsed_marker_session_b64}" = "${session_name_b64}" ]; then
-      found_session_tab_idx="${idx}"
-      found_session_expires_at="${parsed_marker_expires_at}"
-      found_session_ttl="${parsed_marker_ttl}"
-      found_session_is_legacy="${parsed_marker_is_legacy}"
-      printf '%s\n' "${idx}"
-      return 0
-    fi
-  done < <(list_tab_indexes)
-
-  return 1
+current_target_id() {
+  local idx
+  idx="$(current_tab_index)"
+  target_id_for_index "${idx}"
 }
 
-clear_session_tabs() {
-  [ -n "${session_name}" ] || return 0
+activate_target() {
+  local target_id="${1}"
 
-  local idx name
-  while IFS= read -r idx; do
-    [ -n "${idx}" ] || continue
-    run_agent_browser tab "${idx}" >/dev/null 2>&1 || continue
-    name="$(current_window_name)"
-    if parse_session_marker "${name}" && [ "${parsed_marker_session_b64}" = "${session_name_b64}" ]; then
-      run_agent_browser eval "if (window.name === '${name}') window.name = '';" >/dev/null
-    fi
-  done < <(list_tab_indexes)
+  if curl --silent --show-error --fail "${cdp_url}/json/activate/${target_id}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local idx
+  idx="$(target_id_for_index_lookup "${target_id}")" || return 1
+  run_agent_browser tab "${idx}" >/dev/null
+}
+
+close_target() {
+  local target_id="${1}"
+
+  if curl --silent --show-error --fail "${cdp_url}/json/close/${target_id}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local idx
+  idx="$(target_id_for_index_lookup "${target_id}")" || return 1
+  run_agent_browser tab close "${idx}" >/dev/null
+}
+
+target_id_for_index_lookup() {
+  local target_id="${1}"
+  list_targets_tsv | awk -F '\t' -v target_id="${target_id}" '{
+    if ($1 == target_id) {
+      print NR - 1
+      found = 1
+      exit
+    }
+  } END { exit(found ? 0 : 1) }'
+}
+
+capture_target_ids() {
+  list_targets_tsv | awk -F '\t' '{ print $1 }'
+}
+
+find_new_target_id() {
+  local before_file="${1}"
+  local after_file="${2}"
+
+  awk 'NR==FNR { seen[$0]=1; next } !seen[$0] { print; exit }' "${before_file}" "${after_file}"
 }
 
 mark_current_tab() {
   local ttl="${1:-${session_ttl_default}}"
-  local expires_at marker
+  local expires_at target_id
 
   [ -n "${session_name}" ] || return 0
   require_positive_integer "${ttl}" "TTL"
+  target_id="$(current_target_id)"
   expires_at="$(( $(now_epoch) + ttl ))"
-  marker="$(build_session_marker "${expires_at}" "${ttl}")"
-  run_agent_browser eval "window.name = '${marker}'; window.name" >/dev/null
+  lease_write "${target_id}" "${expires_at}" "${ttl}"
+}
+
+session_target_id() {
+  require_session_name
+  load_session_lease
+  printf '%s\n' "${lease_target_id}"
 }
 
 ensure_session_tab() {
   [ -n "${session_name}" ] || return 0
 
-  local idx
-  if idx="$(find_session_tab)"; then
-    run_agent_browser tab "${idx}" >/dev/null
+  if load_session_lease 2>/dev/null && target_exists "${lease_target_id}"; then
+    activate_target "${lease_target_id}" >/dev/null
     return 0
   fi
 
+  lease_remove
   run_agent_browser tab new >/dev/null
   mark_current_tab "${session_ttl_default}"
 }
 
 cleanup_stale_session_tabs() {
-  local now current_idx idx name adjusted_current
-  local -a stale_indexes=()
+  local now lease_file
 
+  cleanup_removed_count=0
+  ensure_state_dirs
   now="$(now_epoch)"
-  current_idx="$(current_tab_index || true)"
 
-  while IFS= read -r idx; do
-    [ -n "${idx}" ] || continue
-    run_agent_browser tab "${idx}" >/dev/null 2>/dev/null || continue
-    name="$(current_window_name)"
-    if parse_session_marker "${name}" && [ "${parsed_marker_is_legacy}" != "1" ] && [ "${parsed_marker_expires_at}" -le "${now}" ]; then
-      stale_indexes+=("${idx}")
+  while IFS= read -r lease_file; do
+    [ -n "${lease_file}" ] || continue
+
+    if ! read_lease_file "${lease_file}"; then
+      rm -f "${lease_file}"
+      continue
     fi
-  done < <(list_tab_indexes)
 
-  if [ "${#stale_indexes[@]}" -eq 0 ]; then
-    if [ -n "${current_idx}" ]; then
-      run_agent_browser tab "${current_idx}" >/dev/null 2>&1 || true
+    if ! target_exists "${lease_target_id}"; then
+      rm -f "${lease_file}"
+      continue
     fi
-    cleanup_removed_count=0
-    return 0
-  fi
 
-  while IFS= read -r idx; do
-    [ -n "${idx}" ] || continue
-    run_agent_browser tab close "${idx}" >/dev/null 2>&1 || true
-  done < <(printf '%s\n' "${stale_indexes[@]}" | sort -rn)
-
-  cleanup_removed_count="${#stale_indexes[@]}"
-
-  if [ -n "${current_idx}" ]; then
-    adjusted_current="${current_idx}"
-    for idx in "${stale_indexes[@]}"; do
-      if [ "${idx}" = "${current_idx}" ]; then
-        adjusted_current=""
-        break
-      fi
-      if [ "${idx}" -lt "${current_idx}" ]; then
-        adjusted_current="$(( adjusted_current - 1 ))"
-      fi
-    done
-
-    if [ -n "${adjusted_current}" ] && [ "${adjusted_current}" -ge 0 ]; then
-      run_agent_browser tab "${adjusted_current}" >/dev/null 2>&1 || true
+    if [ "${lease_expires_at}" -gt "${now}" ]; then
+      continue
     fi
-  fi
+
+    close_target "${lease_target_id}" >/dev/null 2>&1 || true
+    rm -f "${lease_file}"
+    cleanup_removed_count=$((cleanup_removed_count + 1))
+  done < <(find "${lease_dir}" -type f -name '*.lease' -print 2>/dev/null | sort)
 }
 
 session_status() {
-  local idx now remaining decoded_name
+  local now remaining decoded_name
 
   require_session_name
   cleanup_stale_session_tabs
 
-  if ! idx="$(find_session_tab)"; then
+  if ! load_session_lease 2>/dev/null; then
     echo "session=${session_name}"
     echo "status=missing"
     return 1
   fi
 
-  decoded_name="$(base64_decode "${parsed_marker_session_b64}")"
+  if ! target_exists "${lease_target_id}"; then
+    lease_remove
+    echo "session=${session_name}"
+    echo "status=missing"
+    return 1
+  fi
+
+  decoded_name="$(base64_decode "${lease_session_name_b64}")"
   now="$(now_epoch)"
-  remaining="$(( parsed_marker_expires_at - now ))"
+  remaining="$(( lease_expires_at - now ))"
   if [ "${remaining}" -lt 0 ]; then
     remaining=0
   fi
 
   echo "session=${decoded_name}"
   echo "status=active"
-  echo "tab_index=${idx}"
-  echo "ttl_seconds=${parsed_marker_ttl}"
-  echo "expires_at=${parsed_marker_expires_at}"
+  echo "target_id=${lease_target_id}"
+  echo "ttl_seconds=${lease_ttl}"
+  echo "expires_at=${lease_expires_at}"
   echo "remaining_seconds=${remaining}"
 }
 
 session_open() {
-  local idx
+  local before_ids after_ids target_id
 
   require_session_name
   parse_ttl_flag
@@ -298,10 +376,23 @@ session_open() {
 
   cleanup_stale_session_tabs
 
-  if idx="$(find_session_tab)"; then
-    run_agent_browser tab "${idx}" >/dev/null
+  if load_session_lease 2>/dev/null && target_exists "${lease_target_id}"; then
+    activate_target "${lease_target_id}" >/dev/null
   else
+    lease_remove
+    before_ids="$(mktemp)"
+    after_ids="$(mktemp)"
+    capture_target_ids >"${before_ids}"
     run_agent_browser tab new >/dev/null
+    capture_target_ids >"${after_ids}"
+    target_id="$(find_new_target_id "${before_ids}" "${after_ids}" || true)"
+    rm -f "${before_ids}" "${after_ids}"
+    if [ -z "${target_id}" ]; then
+      target_id="$(current_target_id)"
+    fi
+    lease_write "${target_id}" "$(( $(now_epoch) + parsed_ttl ))" "${parsed_ttl}"
+    session_status
+    return 0
   fi
 
   mark_current_tab "${parsed_ttl}"
@@ -309,8 +400,6 @@ session_open() {
 }
 
 session_renew() {
-  local idx
-
   require_session_name
   parse_ttl_flag
   if [ "${#session_args[@]}" -gt 0 ]; then
@@ -320,19 +409,18 @@ session_renew() {
 
   cleanup_stale_session_tabs
 
-  if ! idx="$(find_session_tab)"; then
+  if ! load_session_lease 2>/dev/null || ! target_exists "${lease_target_id}"; then
+    lease_remove
     echo "Session not found: ${session_name}" >&2
     exit 1
   fi
 
-  run_agent_browser tab "${idx}" >/dev/null
+  activate_target "${lease_target_id}" >/dev/null
   mark_current_tab "${parsed_ttl}"
   session_status
 }
 
 session_close() {
-  local idx
-
   require_session_name
   if [ "${#session_args[@]}" -gt 0 ]; then
     echo "session close does not accept extra arguments." >&2
@@ -341,13 +429,15 @@ session_close() {
 
   cleanup_stale_session_tabs
 
-  if ! idx="$(find_session_tab)"; then
+  if ! load_session_lease 2>/dev/null || ! target_exists "${lease_target_id}"; then
+    lease_remove
     echo "session=${session_name}"
     echo "status=missing"
     return 1
   fi
 
-  run_agent_browser tab close "${idx}" >/dev/null
+  close_target "${lease_target_id}" >/dev/null
+  lease_remove
   echo "session=${session_name}"
   echo "status=closed"
 }
@@ -396,6 +486,46 @@ handle_session_command() {
   esac
 }
 
+write_lock_owner() {
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'started=%s\n' "$(process_start_time "$$")"
+  } >"${lock_pid_file}"
+}
+
+read_lock_owner() {
+  lock_owner_pid=""
+  lock_owner_started=""
+  [ -f "${lock_pid_file}" ] || return 1
+
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      pid) lock_owner_pid="${value}" ;;
+      started) lock_owner_started="${value}" ;;
+    esac
+  done <"${lock_pid_file}"
+
+  [ -n "${lock_owner_pid}" ] || return 1
+}
+
+lock_is_stale() {
+  local current_start lock_age
+
+  if ! read_lock_owner; then
+    lock_age="$(lock_age_seconds "${lock_dir}" 2>/dev/null || true)"
+    [ -n "${lock_age}" ] && [ "${lock_age}" -ge "${lock_stale_after}" ]
+    return
+  fi
+
+  if ! kill -0 "${lock_owner_pid}" 2>/dev/null; then
+    return 0
+  fi
+
+  current_start="$(process_start_time "${lock_owner_pid}")"
+  [ -n "${current_start}" ] || return 0
+  [ "${current_start}" != "${lock_owner_started}" ]
+}
+
 with_command_lock() {
   if [ "${SHARED_CDP_BROWSER_DISABLE_FLOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
     exec 9>"${command_lock}"
@@ -405,27 +535,19 @@ with_command_lock() {
   fi
 
   local lock_dir="${command_lock}.d"
-  local lock_pid_file="${lock_dir}/pid"
-  local lock_pid lock_age status
+  lock_pid_file="${lock_dir}/pid"
+  local status
 
   while ! mkdir "${lock_dir}" 2>/dev/null; do
-    if [ -f "${lock_pid_file}" ]; then
-      lock_pid="$(cat "${lock_pid_file}" 2>/dev/null || true)"
-      if [ -n "${lock_pid}" ] && ! kill -0 "${lock_pid}" 2>/dev/null; then
-        rm -f "${lock_pid_file}"
-        rmdir "${lock_dir}" 2>/dev/null || true
-        continue
-      fi
-    else
-      lock_age="$(lock_age_seconds "${lock_dir}" 2>/dev/null || true)"
-      if [ -n "${lock_age}" ] && [ "${lock_age}" -ge "${lock_stale_after}" ]; then
-        rmdir "${lock_dir}" 2>/dev/null || true
-        continue
-      fi
+    if lock_is_stale; then
+      rm -f "${lock_pid_file}"
+      rmdir "${lock_dir}" 2>/dev/null || true
+      continue
     fi
     sleep 0.1
   done
-  printf '%s\n' "$$" >"${lock_pid_file}"
+
+  write_lock_owner
   if "$@"; then
     status=0
   else
@@ -450,29 +572,43 @@ main() {
         ;;
       tab)
         if [ "${exec_cmd[1]:-}" = "new" ]; then
-          local tmp_output status
+          local tmp_output before_ids after_ids target_id status
           tmp_output="$(mktemp)"
-          clear_session_tabs
+          before_ids="$(mktemp)"
+          after_ids="$(mktemp)"
+          capture_target_ids >"${before_ids}"
           if run_agent_browser "${exec_cmd[@]}" >"${tmp_output}"; then
+            capture_target_ids >"${after_ids}"
             if [ "${session_auto_renew}" != "0" ]; then
-              mark_current_tab "${session_ttl_default}"
+              target_id="$(find_new_target_id "${before_ids}" "${after_ids}" || true)"
+              if [ -z "${target_id}" ]; then
+                target_id="$(current_target_id)"
+              fi
+              lease_write "${target_id}" "$(( $(now_epoch) + session_ttl_default ))" "${session_ttl_default}"
             fi
             cat "${tmp_output}"
-            rm -f "${tmp_output}"
+            rm -f "${tmp_output}" "${before_ids}" "${after_ids}"
             return 0
           else
             status=$?
-            rm -f "${tmp_output}"
+            rm -f "${tmp_output}" "${before_ids}" "${after_ids}"
             return "${status}"
           fi
         fi
         if [[ "${exec_cmd[1]:-}" =~ ^[0-9]+$ ]]; then
-          clear_session_tabs
           run_agent_browser "${exec_cmd[@]}"
           if [ "${session_auto_renew}" != "0" ]; then
             mark_current_tab "${session_ttl_default}"
           fi
           return 0
+        fi
+        if [ "${exec_cmd[1]:-}" = "close" ]; then
+          ensure_session_tab
+          if load_session_lease 2>/dev/null; then
+            run_agent_browser "${exec_cmd[@]}"
+            lease_remove
+            return 0
+          fi
         fi
         ensure_session_tab
         ;;
