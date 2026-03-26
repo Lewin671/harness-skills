@@ -7,9 +7,70 @@ host="${SHARED_CDP_BROWSER_HOST:-127.0.0.1}"
 port="${SHARED_CDP_BROWSER_PORT:-9222}"
 lock_key="${host//[^[:alnum:]]/_}-${port}"
 session_name="${SHARED_CDP_BROWSER_SESSION:-}"
-session_marker="shared-cdp:${session_name}"
-session_marker_b64="$(printf '%s' "${session_marker}" | base64 | tr -d '\r\n')"
+session_name_b64="$(printf '%s' "${session_name}" | base64 | tr -d '\r\n')"
+session_marker_prefix="shared-cdp"
 command_lock="${SHARED_CDP_BROWSER_COMMAND_LOCK:-/tmp/shared-cdp-browser-command-${lock_key}.lock}"
+session_ttl_default="${SHARED_CDP_BROWSER_SESSION_TTL:-1800}"
+session_auto_renew="${SHARED_CDP_BROWSER_AUTO_RENEW:-1}"
+
+base64_decode() {
+  if printf '%s' "${1}" | base64 --decode >/dev/null 2>&1; then
+    printf '%s' "${1}" | base64 --decode
+    return 0
+  fi
+
+  printf '%s' "${1}" | base64 -D
+}
+
+now_epoch() {
+  date +%s
+}
+
+require_positive_integer() {
+  local value="${1}"
+  local label="${2}"
+
+  if ! [[ "${value}" =~ ^[0-9]+$ ]] || [ "${value}" -le 0 ]; then
+    echo "${label} must be a positive integer." >&2
+    exit 1
+  fi
+}
+
+require_session_name() {
+  if [ -z "${session_name}" ]; then
+    echo "SHARED_CDP_BROWSER_SESSION must be set for session commands." >&2
+    exit 1
+  fi
+}
+
+parse_ttl_flag() {
+  local ttl="${session_ttl_default}"
+  local arg
+
+  while [ "${#session_args[@]}" -gt 0 ]; do
+    arg="${session_args[0]}"
+    case "${arg}" in
+      --ttl)
+        if [ "${#session_args[@]}" -lt 2 ]; then
+          echo "--ttl requires a value." >&2
+          exit 1
+        fi
+        ttl="${session_args[1]}"
+        session_args=("${session_args[@]:2}")
+        ;;
+      --ttl=*)
+        ttl="${arg#--ttl=}"
+        session_args=("${session_args[@]:1}")
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  require_positive_integer "${ttl}" "TTL"
+  parsed_ttl="${ttl}"
+}
 
 run_agent_browser() {
   local cmd=()
@@ -27,17 +88,73 @@ run_agent_browser() {
   "${cmd[@]}" "$@"
 }
 
+build_session_marker() {
+  local expires_at="${1}"
+  local ttl="${2}"
+  printf '%s:%s:%s:%s' "${session_marker_prefix}" "${session_name_b64}" "${expires_at}" "${ttl}"
+}
+
+parse_session_marker() {
+  local raw="${1}"
+  local prefix session_b64 expires_at ttl extra
+  local decoded legacy_prefix legacy_name legacy_extra
+
+  IFS=':' read -r prefix session_b64 expires_at ttl extra <<< "${raw}"
+  if [ "${prefix}" = "${session_marker_prefix}" ] && [ -z "${extra}" ] && [ -n "${session_b64}" ] && [[ "${expires_at}" =~ ^[0-9]+$ ]] && [[ "${ttl}" =~ ^[0-9]+$ ]]; then
+    parsed_marker_session_b64="${session_b64}"
+    parsed_marker_expires_at="${expires_at}"
+    parsed_marker_ttl="${ttl}"
+    parsed_marker_is_legacy=0
+    return 0
+  fi
+
+  IFS=':' read -r legacy_prefix legacy_name legacy_extra <<< "${raw}"
+  if [ "${legacy_prefix}" = "${session_marker_prefix}" ] && [ -n "${legacy_name}" ] && [ -z "${legacy_extra}" ]; then
+    parsed_marker_session_b64="$(printf '%s' "${legacy_name}" | base64 | tr -d '\r\n')"
+    parsed_marker_expires_at=0
+    parsed_marker_ttl=0
+    parsed_marker_is_legacy=1
+    return 0
+  fi
+
+  if decoded="$(base64_decode "${raw}" 2>/dev/null)"; then
+    IFS=':' read -r legacy_prefix legacy_name legacy_extra <<< "${decoded}"
+    if [ "${legacy_prefix}" = "${session_marker_prefix}" ] && [ -n "${legacy_name}" ] && [ -z "${legacy_extra}" ]; then
+      parsed_marker_session_b64="$(printf '%s' "${legacy_name}" | base64 | tr -d '\r\n')"
+      parsed_marker_expires_at=0
+      parsed_marker_ttl=0
+      parsed_marker_is_legacy=1
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 list_tab_indexes() {
   run_agent_browser tab list 2>/dev/null | sed -n 's/.*\[\([0-9][0-9]*\)\].*/\1/p'
 }
 
+current_tab_index() {
+  run_agent_browser tab list 2>/dev/null | sed -n 's/^.*→ \[\([0-9][0-9]*\)\].*/\1/p'
+}
+
+current_window_name() {
+  run_agent_browser eval 'window.name' 2>/dev/null | tr -d '"' || true
+}
+
 find_session_tab() {
   local idx name
+
   while IFS= read -r idx; do
     [ -n "${idx}" ] || continue
     run_agent_browser tab "${idx}" >/dev/null 2>&1 || continue
-    name="$(run_agent_browser eval 'window.name' 2>/dev/null | tr -d '"' || true)"
-    if [ "${name}" = "${session_marker_b64}" ]; then
+    name="$(current_window_name)"
+    if parse_session_marker "${name}" && [ "${parsed_marker_session_b64}" = "${session_name_b64}" ]; then
+      found_session_tab_idx="${idx}"
+      found_session_expires_at="${parsed_marker_expires_at}"
+      found_session_ttl="${parsed_marker_ttl}"
+      found_session_is_legacy="${parsed_marker_is_legacy}"
       printf '%s\n' "${idx}"
       return 0
     fi
@@ -53,16 +170,22 @@ clear_session_tabs() {
   while IFS= read -r idx; do
     [ -n "${idx}" ] || continue
     run_agent_browser tab "${idx}" >/dev/null 2>&1 || continue
-    name="$(run_agent_browser eval 'window.name' 2>/dev/null | tr -d '"' || true)"
-    if [ "${name}" = "${session_marker_b64}" ]; then
-      run_agent_browser eval "if (window.name === '${session_marker_b64}') window.name = '';" >/dev/null
+    name="$(current_window_name)"
+    if parse_session_marker "${name}" && [ "${parsed_marker_session_b64}" = "${session_name_b64}" ]; then
+      run_agent_browser eval "if (window.name === '${name}') window.name = '';" >/dev/null
     fi
   done < <(list_tab_indexes)
 }
 
 mark_current_tab() {
+  local ttl="${1:-${session_ttl_default}}"
+  local expires_at marker
+
   [ -n "${session_name}" ] || return 0
-  run_agent_browser eval "window.name = '${session_marker_b64}'; window.name" >/dev/null
+  require_positive_integer "${ttl}" "TTL"
+  expires_at="$(( $(now_epoch) + ttl ))"
+  marker="$(build_session_marker "${expires_at}" "${ttl}")"
+  run_agent_browser eval "window.name = '${marker}'; window.name" >/dev/null
 }
 
 ensure_session_tab() {
@@ -75,16 +198,200 @@ ensure_session_tab() {
   fi
 
   run_agent_browser tab new >/dev/null
-  mark_current_tab
+  mark_current_tab "${session_ttl_default}"
+}
+
+cleanup_stale_session_tabs() {
+  local now current_idx idx name adjusted_current
+  local -a stale_indexes=()
+
+  now="$(now_epoch)"
+  current_idx="$(current_tab_index || true)"
+
+  while IFS= read -r idx; do
+    [ -n "${idx}" ] || continue
+    run_agent_browser tab "${idx}" >/dev/null 2>/dev/null || continue
+    name="$(current_window_name)"
+    if parse_session_marker "${name}" && [ "${parsed_marker_is_legacy}" != "1" ] && [ "${parsed_marker_expires_at}" -le "${now}" ]; then
+      stale_indexes+=("${idx}")
+    fi
+  done < <(list_tab_indexes)
+
+  if [ "${#stale_indexes[@]}" -eq 0 ]; then
+    if [ -n "${current_idx}" ]; then
+      run_agent_browser tab "${current_idx}" >/dev/null 2>&1 || true
+    fi
+    cleanup_removed_count=0
+    return 0
+  fi
+
+  while IFS= read -r idx; do
+    [ -n "${idx}" ] || continue
+    run_agent_browser tab close "${idx}" >/dev/null 2>&1 || true
+  done < <(printf '%s\n' "${stale_indexes[@]}" | sort -rn)
+
+  cleanup_removed_count="${#stale_indexes[@]}"
+
+  if [ -n "${current_idx}" ]; then
+    adjusted_current="${current_idx}"
+    for idx in "${stale_indexes[@]}"; do
+      if [ "${idx}" = "${current_idx}" ]; then
+        adjusted_current=""
+        break
+      fi
+      if [ "${idx}" -lt "${current_idx}" ]; then
+        adjusted_current="$(( adjusted_current - 1 ))"
+      fi
+    done
+
+    if [ -n "${adjusted_current}" ] && [ "${adjusted_current}" -ge 0 ]; then
+      run_agent_browser tab "${adjusted_current}" >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
+session_status() {
+  local idx now remaining decoded_name
+
+  require_session_name
+  cleanup_stale_session_tabs
+
+  if ! idx="$(find_session_tab)"; then
+    echo "session=${session_name}"
+    echo "status=missing"
+    return 1
+  fi
+
+  decoded_name="$(base64_decode "${parsed_marker_session_b64}")"
+  now="$(now_epoch)"
+  remaining="$(( parsed_marker_expires_at - now ))"
+  if [ "${remaining}" -lt 0 ]; then
+    remaining=0
+  fi
+
+  echo "session=${decoded_name}"
+  echo "status=active"
+  echo "tab_index=${idx}"
+  echo "ttl_seconds=${parsed_marker_ttl}"
+  echo "expires_at=${parsed_marker_expires_at}"
+  echo "remaining_seconds=${remaining}"
+}
+
+session_open() {
+  local idx
+
+  require_session_name
+  parse_ttl_flag
+  if [ "${#session_args[@]}" -gt 0 ]; then
+    echo "session open does not accept extra arguments." >&2
+    exit 1
+  fi
+
+  cleanup_stale_session_tabs
+
+  if idx="$(find_session_tab)"; then
+    run_agent_browser tab "${idx}" >/dev/null
+  else
+    run_agent_browser tab new >/dev/null
+  fi
+
+  mark_current_tab "${parsed_ttl}"
+  session_status
+}
+
+session_renew() {
+  local idx
+
+  require_session_name
+  parse_ttl_flag
+  if [ "${#session_args[@]}" -gt 0 ]; then
+    echo "session renew does not accept extra arguments." >&2
+    exit 1
+  fi
+
+  cleanup_stale_session_tabs
+
+  if ! idx="$(find_session_tab)"; then
+    echo "Session not found: ${session_name}" >&2
+    exit 1
+  fi
+
+  run_agent_browser tab "${idx}" >/dev/null
+  mark_current_tab "${parsed_ttl}"
+  session_status
+}
+
+session_close() {
+  local idx
+
+  require_session_name
+  if [ "${#session_args[@]}" -gt 0 ]; then
+    echo "session close does not accept extra arguments." >&2
+    exit 1
+  fi
+
+  cleanup_stale_session_tabs
+
+  if ! idx="$(find_session_tab)"; then
+    echo "session=${session_name}"
+    echo "status=missing"
+    return 1
+  fi
+
+  run_agent_browser tab close "${idx}" >/dev/null
+  echo "session=${session_name}"
+  echo "status=closed"
+}
+
+session_cleanup() {
+  if [ "${#session_args[@]}" -gt 0 ]; then
+    echo "session cleanup does not accept extra arguments." >&2
+    exit 1
+  fi
+
+  cleanup_stale_session_tabs
+  echo "removed=${cleanup_removed_count}"
+}
+
+handle_session_command() {
+  local subcommand="${exec_cmd[1]:-}"
+
+  session_args=("${exec_cmd[@]:2}")
+  case "${subcommand}" in
+    open)
+      session_open
+      ;;
+    renew)
+      session_renew
+      ;;
+    ttl)
+      if [ "${#session_args[@]}" -gt 0 ]; then
+        echo "session ttl does not accept extra arguments." >&2
+        exit 1
+      fi
+      session_status
+      ;;
+    close)
+      session_close
+      ;;
+    cleanup)
+      session_cleanup
+      ;;
+    ""|list)
+      run_agent_browser "${exec_cmd[@]}"
+      ;;
+    *)
+      echo "Unknown session command: ${subcommand}" >&2
+      exit 1
+      ;;
+  esac
 }
 
 with_command_lock() {
-  if [ "${SHARED_CDP_BROWSER_DISABLE_FLOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
-    (
-      exec 9>"${command_lock}"
-      flock 9
-      "$@"
-    )
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"${command_lock}"
+    flock 9
+    "$@"
     return
   fi
 
@@ -104,13 +411,18 @@ with_command_lock() {
     sleep 0.1
   done
   printf '%s\n' "$$" >"${lock_pid_file}"
-  (
-    trap 'rm -f "${lock_pid_file}"; rmdir "${lock_dir}" 2>/dev/null || true' EXIT
-    "$@"
-  )
+  trap 'rm -f "${lock_pid_file}"; rmdir "${lock_dir}" 2>/dev/null || true' RETURN
+  "$@"
 }
 
 main() {
+  if [ "${exec_cmd[0]}" = "session" ] && [ "${#exec_cmd[@]}" -ge 2 ]; then
+    handle_session_command
+    return 0
+  fi
+
+  cleanup_stale_session_tabs
+
   if [ -n "${session_name}" ]; then
     case "${exec_cmd[0]}" in
       session|connect)
@@ -118,26 +430,22 @@ main() {
       tab)
         if [ "${exec_cmd[1]:-}" = "new" ]; then
           local tmp_output
-          local status
           tmp_output="$(mktemp)"
+          trap 'rm -f "${tmp_output}"' RETURN
           clear_session_tabs
-          set +e
           run_agent_browser "${exec_cmd[@]}" >"${tmp_output}"
-          status=$?
-          set -e
-          if [ "${status}" -ne 0 ]; then
-            rm -f "${tmp_output}"
-            return "${status}"
+          if [ "${session_auto_renew}" != "0" ]; then
+            mark_current_tab "${session_ttl_default}"
           fi
-          mark_current_tab
           cat "${tmp_output}"
-          rm -f "${tmp_output}"
           return 0
         fi
         if [[ "${exec_cmd[1]:-}" =~ ^[0-9]+$ ]]; then
           clear_session_tabs
           run_agent_browser "${exec_cmd[@]}"
-          mark_current_tab
+          if [ "${session_auto_renew}" != "0" ]; then
+            mark_current_tab "${session_ttl_default}"
+          fi
           return 0
         fi
         ensure_session_tab
@@ -146,6 +454,10 @@ main() {
         ensure_session_tab
         ;;
     esac
+
+    if [ "${session_auto_renew}" != "0" ] && ! { [ "${exec_cmd[0]}" = "tab" ] && [ "${exec_cmd[1]:-}" = "close" ]; }; then
+      mark_current_tab "${session_ttl_default}"
+    fi
   fi
 
   run_agent_browser "${exec_cmd[@]}"
