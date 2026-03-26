@@ -4,6 +4,7 @@
 
 - This repo stores local agent skills at the top level.
 - A top-level directory counts as a skill only when it contains `SKILL.md`.
+- Keep `SKILL.md` focused and reasonably short. It should usually stay within `2,000` words. If it gets longer, split it into layered docs and keep only the essential workflow in `SKILL.md`.
 - `./link-skills-to-agents` links those skill directories into an external agents skills directory.
 - Root docs should stay brief; detailed behavior belongs in the relevant skill directory.
 
