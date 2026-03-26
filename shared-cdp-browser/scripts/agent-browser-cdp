@@ -79,10 +79,12 @@ ensure_session_tab() {
 }
 
 with_command_lock() {
-  if command -v flock >/dev/null 2>&1; then
-    exec 9>"${command_lock}"
-    flock 9
-    "$@"
+  if [ "${SHARED_CDP_BROWSER_DISABLE_FLOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
+    (
+      exec 9>"${command_lock}"
+      flock 9
+      "$@"
+    )
     return
   fi
 
@@ -102,8 +104,10 @@ with_command_lock() {
     sleep 0.1
   done
   printf '%s\n' "$$" >"${lock_pid_file}"
-  trap 'rm -f "${lock_pid_file}"; rmdir "${lock_dir}" 2>/dev/null || true' RETURN
-  "$@"
+  (
+    trap 'rm -f "${lock_pid_file}"; rmdir "${lock_dir}" 2>/dev/null || true' EXIT
+    "$@"
+  )
 }
 
 main() {
@@ -114,12 +118,20 @@ main() {
       tab)
         if [ "${exec_cmd[1]:-}" = "new" ]; then
           local tmp_output
+          local status
           tmp_output="$(mktemp)"
-          trap 'rm -f "${tmp_output}"' RETURN
           clear_session_tabs
+          set +e
           run_agent_browser "${exec_cmd[@]}" >"${tmp_output}"
+          status=$?
+          set -e
+          if [ "${status}" -ne 0 ]; then
+            rm -f "${tmp_output}"
+            return "${status}"
+          fi
           mark_current_tab
           cat "${tmp_output}"
+          rm -f "${tmp_output}"
           return 0
         fi
         if [[ "${exec_cmd[1]:-}" =~ ^[0-9]+$ ]]; then
