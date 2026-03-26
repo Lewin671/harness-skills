@@ -22,10 +22,8 @@ SESSION=$(/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/new-
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session open
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-SHARED_CDP_BROWSER_QUIET=1 \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp open https://example.com
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-SHARED_CDP_BROWSER_QUIET=1 \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp snapshot -i
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session close
@@ -36,47 +34,42 @@ The wrapper performs this sequence on every call:
 1. Check whether `http://127.0.0.1:9222/json/version` is live.
 2. If not, launch Chrome with `--remote-debugging-port=9222`.
 3. Reuse `~/agent-browser-data` so cookies, login state, and extensions persist.
-4. If `SHARED_CDP_BROWSER_SESSION` is set, recover that session's workspace anchor from wrapper-managed lease metadata keyed by the CDP target id.
+4. If `SHARED_CDP_BROWSER_SESSION` is set, optionally track the current tab in a lightweight lease file so explicit `session` helpers can inspect or clean it up later.
 5. Forward the original arguments to `agent-browser --cdp http://127.0.0.1:9222`.
 
 On macOS, app-bundle launches use `open -g` by default so a fresh shared browser starts in the background instead of stealing the foreground app.
 
 ## Multiple Agents
 
-Multiple agents can attach to the same browser process. To avoid stepping on each other's `agent-browser` session state, give each agent its own session name and keep normal commands in quiet mode:
+Multiple agents can attach to the same browser process. To avoid stepping on each other's `agent-browser` session state, give each agent its own session name:
 
 ```bash
 SESSION=$(/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/new-session-name)
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session open
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-SHARED_CDP_BROWSER_QUIET=1 \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp open https://example.com
 ```
 
-When the same agent needs several commands in sequence, reuse the same `SHARED_CDP_BROWSER_SESSION` value for that whole workflow and keep `SHARED_CDP_BROWSER_QUIET=1` on the normal commands. Within that session, it is normal to keep several tabs open and switch between them with `tab list`, `tab new`, and `tab <index>`:
+When the same agent needs several commands in sequence, reuse the same `SHARED_CDP_BROWSER_SESSION` value for that whole workflow. Within that session, it is normal to keep several tabs open and switch between them with `tab list`, `tab new`, and `tab <index>`:
 
 ```bash
 SESSION=$(/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/new-session-name) && \
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session open && \
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-SHARED_CDP_BROWSER_QUIET=1 \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp open https://example.com && \
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-SHARED_CDP_BROWSER_QUIET=1 \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp tab new && \
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-SHARED_CDP_BROWSER_QUIET=1 \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp open https://example.org && \
 SHARED_CDP_BROWSER_SESSION="$SESSION" \
-SHARED_CDP_BROWSER_QUIET=1 \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp tab list
 ```
 
 Create a new session only when the work should be isolated, such as handing a separate browsing task to another agent, keeping unrelated login states apart, or reserving a tab set for a long-running flow.
 
-The session wrapper supports explicit lease management with TTL. `session open` and `session close` are the intended explicit lifecycle boundaries for the workspace anchor; keep quiet mode on for the normal page actions between them:
+The session wrapper supports explicit lease management with TTL. `session open` and `session close` are the intended explicit lifecycle boundaries for the workspace anchor:
 
 ```bash
 SESSION=$(/Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/new-session-name)
@@ -90,7 +83,7 @@ SHARED_CDP_BROWSER_SESSION="$SESSION" \
   /Users/qingyingliu/Code/harness-skills/shared-cdp-browser/scripts/agent-browser-cdp session close
 ```
 
-If a model forgets to close a session, the wrapper treats the workspace anchor tab as a lease and reclaims it after its TTL expires. Expired leased tabs are cleaned up opportunistically before later commands run.
+If a model forgets to close a session, the wrapper treats the last tracked tab as a lease and reclaims it after its TTL expires. Expired leased tabs are cleaned up opportunistically before later commands run.
 
 ## Scripts
 
@@ -107,7 +100,7 @@ SHARED_CDP_BROWSER_BIN=/Applications/Google\ Chrome.app/Contents/MacOS/Google\ C
 
 ### `scripts/agent-browser-cdp`
 
-Preferred entry point. It calls `ensure-cdp-browser` first, then runs `agent-browser` with the shared CDP endpoint. If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper binds that session to a stable workspace anchor tab with wrapper-managed lease files keyed by the tab's CDP target id, tracks a TTL on that lease, auto-renews it on normal commands, and reclaims expired leased tabs before later commands. The session is still free to open and switch across multiple tabs; the anchor exists so the wrapper can recover the workspace reliably after daemon restarts or later calls. Session lookup no longer depends on page-controlled fields, so normal site scripts cannot steal or erase the lease. The wrapper also records which `agent-browser` daemon currently owns the leased tab; once that daemon is already bound, later commands reuse its in-memory active page instead of re-activating the Chrome tab on every call. If you need a stricter non-intrusive mode, set `SHARED_CDP_BROWSER_QUIET=1`: normal commands will refuse implicit session recovery instead of activating or creating tabs, while explicit `session open` is still allowed. It also exposes wrapper-level session helpers: `session open`, `session renew`, `session ttl`, `session close`, and `session cleanup`. Read-only helpers such as `session ttl` inspect lease metadata without changing the active tab. If `agent-browser` is not on `PATH`, it falls back to `npx -y agent-browser`.
+Preferred entry point. It calls `ensure-cdp-browser` first, then runs `agent-browser` with the shared CDP endpoint. If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper can keep a lightweight lease file for the current tab, auto-renew that lease on successful commands, and reclaim expired leased tabs before later commands run. It no longer tries to implicitly re-activate a leased tab or infer daemon ownership on normal commands; `agent-browser` remains responsible for its own session semantics. Wrapper-level session helpers remain available: `session open`, `session renew`, `session ttl`, `session close`, and `session cleanup`. Read-only helpers such as `session ttl` inspect lease metadata without changing the active tab. If `agent-browser` is not on `PATH`, it falls back to `npx -y agent-browser`.
 
 Useful environment variables:
 
@@ -115,7 +108,7 @@ Useful environment variables:
 SHARED_CDP_BROWSER_SESSION_TTL=1800   # default lease TTL in seconds
 SHARED_CDP_BROWSER_AUTO_RENEW=1       # renew leased tabs on normal commands
 SHARED_CDP_BROWSER_BACKGROUND=1       # macOS app launches stay in the background by default
-SHARED_CDP_BROWSER_QUIET=1            # refuse implicit session recovery on normal commands
+SHARED_CDP_BROWSER_USE_LOCK=1         # serialize wrapper calls when you really need it
 ```
 
 ### `scripts/new-session-name`
@@ -126,13 +119,11 @@ Generates a unique session name for parallel agents. Use it when several agents 
 
 - The launcher uses a filesystem lock with stale-lock recovery so several agents can race to start the browser safely.
 - Lock ownership records both PID and process start time, so stale-lock recovery is resilient to PID reuse.
-- The command wrapper also uses a per-endpoint lock, so agents can share one browser safely even when they issue commands at the same time. Commands are serialized per CDP endpoint, not truly simultaneous at the browser action level.
-- Each session has one leased anchor tab for recovery, but that session may still contain and navigate across multiple tabs.
+- Wrapper command locking is now opt-in via `SHARED_CDP_BROWSER_USE_LOCK=1`. Leave it off unless you have a concrete race to suppress.
+- The session lease is lightweight metadata for cleanup and visibility, not an extra control plane layered on top of `agent-browser`.
 - `session close` is the explicit end-of-life path, but TTL-based cleanup is the safety net if a model forgets to close.
 - The browser profile is shared on purpose. Agents should assume cookies, tabs, and logged-in state may already exist.
 - This skill launches a dedicated Chrome instance only when the CDP endpoint is missing. If another Chrome is already listening on port `9222`, the skill reuses it.
-- Session recovery is quieter than before, but the very first bind after a daemon restart may still need to re-target the leased tab once.
-- With `SHARED_CDP_BROWSER_QUIET=1`, that implicit re-target step is disabled; callers must use `session open` explicitly if they want to rebind a leased tab.
 
 ## Resources (optional)
 

@@ -12,27 +12,13 @@ session_key="$(printf '%s' "${session_name_b64}" | tr '/+=' '_-.')"
 command_lock="${SHARED_CDP_BROWSER_COMMAND_LOCK:-/tmp/shared-cdp-browser-command-${lock_key}.lock}"
 session_ttl_default="${SHARED_CDP_BROWSER_SESSION_TTL:-1800}"
 session_auto_renew="${SHARED_CDP_BROWSER_AUTO_RENEW:-1}"
-quiet_mode="${SHARED_CDP_BROWSER_QUIET:-0}"
+use_command_lock="${SHARED_CDP_BROWSER_USE_LOCK:-0}"
 lock_stale_after="${SHARED_CDP_BROWSER_LOCK_STALE_AFTER:-5}"
 state_dir="${SHARED_CDP_BROWSER_STATE_DIR:-${TMPDIR:-/tmp}/shared-cdp-browser-state-${lock_key}}"
 lease_dir="${state_dir}/leases"
 
-base64_decode() {
-  if printf '%s' "${1}" | base64 --decode >/dev/null 2>&1; then
-    printf '%s' "${1}" | base64 --decode
-    return 0
-  fi
-
-  printf '%s' "${1}" | base64 -D
-}
-
 now_epoch() {
   date +%s
-}
-
-process_start_time() {
-  local pid="${1}"
-  ps -o lstart= -p "${pid}" 2>/dev/null | sed 's/^[[:space:]]*//'
 }
 
 require_positive_integer() {
@@ -43,6 +29,11 @@ require_positive_integer() {
     echo "${label} must be a positive integer." >&2
     exit 1
   fi
+}
+
+process_start_time() {
+  local pid="${1}"
+  ps -o lstart= -p "${pid}" 2>/dev/null | sed 's/^[[:space:]]*//'
 }
 
 lock_age_seconds() {
@@ -57,14 +48,6 @@ require_session_name() {
   if [ -z "${session_name}" ]; then
     echo "SHARED_CDP_BROWSER_SESSION must be set for session commands." >&2
     exit 1
-  fi
-}
-
-quiet_mode_auto_bind_error() {
-  if [ -n "${session_name}" ]; then
-    echo "Quiet mode will not auto-recover session ${session_name}. Run 'session open' explicitly if you want to rebind it." >&2
-  else
-    echo "Quiet mode will not auto-switch or create a session tab." >&2
   fi
 }
 
@@ -113,53 +96,12 @@ run_agent_browser() {
   "${cmd[@]}" "$@"
 }
 
-agent_browser_runtime_dir() {
-  if [ -n "${AGENT_BROWSER_SOCKET_DIR:-}" ]; then
-    printf '%s\n' "${AGENT_BROWSER_SOCKET_DIR}"
-    return 0
-  fi
-
-  if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
-    printf '%s/agent-browser\n' "${XDG_RUNTIME_DIR}"
-    return 0
-  fi
-
-  if [ -n "${HOME:-}" ]; then
-    printf '%s/.agent-browser\n' "${HOME}"
-    return 0
-  fi
-
-  printf '%s/agent-browser\n' "${TMPDIR:-/tmp}"
-}
-
-agent_browser_pid_file() {
-  printf '%s/%s.pid\n' "$(agent_browser_runtime_dir)" "${session_name}"
-}
-
-current_daemon_identity() {
-  local pid_file pid started
-
-  [ -n "${session_name}" ] || return 1
-  pid_file="$(agent_browser_pid_file)"
-  [ -f "${pid_file}" ] || return 1
-
-  pid="$(cat "${pid_file}" 2>/dev/null || true)"
-  [ -n "${pid}" ] || return 1
-  kill -0 "${pid}" 2>/dev/null || return 1
-
-  started="$(process_start_time "${pid}")"
-  [ -n "${started}" ] || return 1
-
-  current_daemon_pid="${pid}"
-  current_daemon_started="${started}"
+ensure_state_dirs() {
+  mkdir -p "${lease_dir}"
 }
 
 lease_file_path() {
   printf '%s/%s.lease\n' "${lease_dir}" "${session_key}"
-}
-
-ensure_state_dirs() {
-  mkdir -p "${lease_dir}"
 }
 
 lease_remove() {
@@ -176,8 +118,6 @@ read_lease_file() {
   lease_target_id=""
   lease_expires_at=""
   lease_ttl=""
-  lease_daemon_pid=""
-  lease_daemon_started=""
 
   while IFS='=' read -r key value; do
     case "${key}" in
@@ -185,8 +125,6 @@ read_lease_file() {
       target_id) lease_target_id="${value}" ;;
       expires_at) lease_expires_at="${value}" ;;
       ttl) lease_ttl="${value}" ;;
-      daemon_pid) lease_daemon_pid="${value}" ;;
-      daemon_started) lease_daemon_started="${value}" ;;
     esac
   done <"${lease_file}"
 
@@ -262,18 +200,6 @@ current_target_id() {
   target_id_for_index "${idx}"
 }
 
-activate_target() {
-  local target_id="${1}"
-
-  if curl --silent --show-error --fail "${cdp_url}/json/activate/${target_id}" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  local idx
-  idx="$(target_id_for_index_lookup "${target_id}")" || return 1
-  run_agent_browser tab "${idx}" >/dev/null
-}
-
 close_target() {
   local target_id="${1}"
 
@@ -282,19 +208,8 @@ close_target() {
   fi
 
   local idx
-  idx="$(target_id_for_index_lookup "${target_id}")" || return 1
+  idx="$(list_targets_tsv | awk -F '\t' -v target_id="${target_id}" '$1 == target_id { print NR - 1; found = 1; exit } END { exit(found ? 0 : 1) }')" || return 1
   run_agent_browser tab close "${idx}" >/dev/null
-}
-
-target_id_for_index_lookup() {
-  local target_id="${1}"
-  list_targets_tsv | awk -F '\t' -v target_id="${target_id}" '{
-    if ($1 == target_id) {
-      print NR - 1
-      found = 1
-      exit
-    }
-  } END { exit(found ? 0 : 1) }'
 }
 
 capture_target_ids() {
@@ -308,101 +223,42 @@ find_new_target_id() {
   awk 'NR==FNR { seen[$0]=1; next } !seen[$0] { print; exit }' "${before_file}" "${after_file}"
 }
 
-mark_current_tab() {
-  local ttl="${1:-${session_ttl_default}}"
-  local expires_at target_id
-
-  [ -n "${session_name}" ] || return 0
-  require_positive_integer "${ttl}" "TTL"
-  target_id="$(current_target_id)"
-  expires_at="$(( $(now_epoch) + ttl ))"
-  lease_write "${target_id}" "${expires_at}" "${ttl}"
-}
-
-write_existing_lease() {
-  [ -n "${lease_target_id:-}" ] || return 1
-  lease_write "${lease_target_id}" "${lease_expires_at}" "${lease_ttl}"
-}
-
-write_existing_lease_preserving_binding() {
-  local lease_file
-
-  [ -n "${lease_target_id:-}" ] || return 1
-  ensure_state_dirs
-  lease_file="$(lease_file_path)"
-  cat >"${lease_file}" <<EOF
-session_name_b64=${lease_session_name_b64}
-target_id=${lease_target_id}
-expires_at=${lease_expires_at}
-ttl=${lease_ttl}
-daemon_pid=${lease_daemon_pid}
-daemon_started=${lease_daemon_started}
-EOF
-}
-
 lease_write() {
   local target_id="${1}"
   local expires_at="${2}"
   local ttl="${3}"
   local lease_file
-  local daemon_pid_to_write daemon_started_to_write
 
   ensure_state_dirs
   lease_file="$(lease_file_path)"
-  if current_daemon_identity 2>/dev/null; then
-    daemon_pid_to_write="${current_daemon_pid}"
-    daemon_started_to_write="${current_daemon_started}"
-  else
-    daemon_pid_to_write=""
-    daemon_started_to_write=""
-  fi
   cat >"${lease_file}" <<EOF
 session_name_b64=${session_name_b64}
 target_id=${target_id}
 expires_at=${expires_at}
 ttl=${ttl}
-daemon_pid=${daemon_pid_to_write}
-daemon_started=${daemon_started_to_write}
 EOF
 }
 
-daemon_binding_is_current() {
-  [ -n "${lease_daemon_pid:-}" ] || return 1
-  [ -n "${lease_daemon_started:-}" ] || return 1
-  current_daemon_identity || return 1
-  [ "${lease_daemon_pid}" = "${current_daemon_pid}" ] && [ "${lease_daemon_started}" = "${current_daemon_started}" ]
-}
+mark_target() {
+  local target_id="${1}"
+  local ttl="${2:-${session_ttl_default}}"
+  local expires_at
 
-session_target_id() {
-  require_session_name
-  load_session_lease
-  printf '%s\n' "${lease_target_id}"
-}
-
-ensure_session_tab() {
   [ -n "${session_name}" ] || return 0
+  [ -n "${target_id}" ] || return 1
+  require_positive_integer "${ttl}" "TTL"
+  expires_at="$(( $(now_epoch) + ttl ))"
+  lease_write "${target_id}" "${expires_at}" "${ttl}"
+}
 
-  if load_session_lease 2>/dev/null && target_exists "${lease_target_id}"; then
-    if daemon_binding_is_current; then
-      return 0
-    fi
-    if [ "${quiet_mode}" = "1" ]; then
-      quiet_mode_auto_bind_error
-      return 1
-    fi
-    activate_target "${lease_target_id}" >/dev/null
-    write_existing_lease
-    return 0
-  fi
+mark_current_tab() {
+  local ttl="${1:-${session_ttl_default}}"
+  local target_id
 
-  if [ "${quiet_mode}" = "1" ]; then
-    quiet_mode_auto_bind_error
-    return 1
-  fi
-
-  lease_remove
-  run_agent_browser tab new >/dev/null
-  mark_current_tab "${session_ttl_default}"
+  [ -n "${session_name}" ] || return 0
+  target_id="$(current_target_id 2>/dev/null || true)"
+  [ -n "${target_id}" ] || return 1
+  mark_target "${target_id}" "${ttl}"
 }
 
 cleanup_stale_session_tabs() {
@@ -436,7 +292,7 @@ cleanup_stale_session_tabs() {
 }
 
 session_status() {
-  local now remaining decoded_name
+  local now remaining
 
   require_session_name
   cleanup_stale_session_tabs
@@ -454,14 +310,13 @@ session_status() {
     return 1
   fi
 
-  decoded_name="$(base64_decode "${lease_session_name_b64}")"
   now="$(now_epoch)"
   remaining="$(( lease_expires_at - now ))"
   if [ "${remaining}" -lt 0 ]; then
     remaining=0
   fi
 
-  echo "session=${decoded_name}"
+  echo "session=${session_name}"
   echo "status=active"
   echo "target_id=${lease_target_id}"
   echo "ttl_seconds=${lease_ttl}"
@@ -482,27 +337,25 @@ session_open() {
   cleanup_stale_session_tabs
 
   if load_session_lease 2>/dev/null && target_exists "${lease_target_id}"; then
-    if ! daemon_binding_is_current; then
-      activate_target "${lease_target_id}" >/dev/null
-    fi
-  else
-    lease_remove
-    before_ids="$(mktemp)"
-    after_ids="$(mktemp)"
-    capture_target_ids >"${before_ids}"
-    run_agent_browser tab new >/dev/null
-    capture_target_ids >"${after_ids}"
-    target_id="$(find_new_target_id "${before_ids}" "${after_ids}" || true)"
-    rm -f "${before_ids}" "${after_ids}"
-    if [ -z "${target_id}" ]; then
-      target_id="$(current_target_id)"
-    fi
-    lease_write "${target_id}" "$(( $(now_epoch) + parsed_ttl ))" "${parsed_ttl}"
+    mark_target "${lease_target_id}" "${parsed_ttl}"
     session_status
     return 0
   fi
 
-  mark_current_tab "${parsed_ttl}"
+  lease_remove
+  before_ids="$(mktemp)"
+  after_ids="$(mktemp)"
+  capture_target_ids >"${before_ids}"
+  run_agent_browser tab new >/dev/null
+  capture_target_ids >"${after_ids}"
+  target_id="$(find_new_target_id "${before_ids}" "${after_ids}" || true)"
+  rm -f "${before_ids}" "${after_ids}"
+
+  if [ -z "${target_id}" ]; then
+    target_id="$(current_target_id)"
+  fi
+
+  mark_target "${target_id}" "${parsed_ttl}"
   session_status
 }
 
@@ -522,9 +375,7 @@ session_renew() {
     exit 1
   fi
 
-  lease_expires_at="$(( $(now_epoch) + parsed_ttl ))"
-  lease_ttl="${parsed_ttl}"
-  write_existing_lease_preserving_binding
+  mark_target "${lease_target_id}" "${parsed_ttl}"
   session_status
 }
 
@@ -634,7 +485,12 @@ lock_is_stale() {
   [ "${current_start}" != "${lock_owner_started}" ]
 }
 
-with_command_lock() {
+with_optional_command_lock() {
+  if [ "${use_command_lock}" != "1" ]; then
+    "$@"
+    return
+  fi
+
   if [ "${SHARED_CDP_BROWSER_DISABLE_FLOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
     exec 9>"${command_lock}"
     flock 9
@@ -667,7 +523,7 @@ with_command_lock() {
 }
 
 main() {
-  local status
+  local status current_target current_exists
 
   if [ "${exec_cmd[0]}" = "session" ] && [ "${#exec_cmd[@]}" -ge 2 ]; then
     handle_session_command
@@ -676,70 +532,38 @@ main() {
 
   cleanup_stale_session_tabs
 
-  if [ -n "${session_name}" ]; then
-    case "${exec_cmd[0]}" in
-      session|connect)
-        ;;
-      tab)
-        if [ "${exec_cmd[1]:-}" = "new" ]; then
-          local tmp_output before_ids after_ids target_id status
-          tmp_output="$(mktemp)"
-          before_ids="$(mktemp)"
-          after_ids="$(mktemp)"
-          capture_target_ids >"${before_ids}"
-          if run_agent_browser "${exec_cmd[@]}" >"${tmp_output}"; then
-            capture_target_ids >"${after_ids}"
-            if [ "${session_auto_renew}" != "0" ]; then
-              target_id="$(find_new_target_id "${before_ids}" "${after_ids}" || true)"
-              if [ -z "${target_id}" ]; then
-                target_id="$(current_target_id)"
-              fi
-              lease_write "${target_id}" "$(( $(now_epoch) + session_ttl_default ))" "${session_ttl_default}"
-            fi
-            cat "${tmp_output}"
-            rm -f "${tmp_output}" "${before_ids}" "${after_ids}"
-            return 0
-          else
-            status=$?
-            rm -f "${tmp_output}" "${before_ids}" "${after_ids}"
-            return "${status}"
-          fi
-        fi
-        if [[ "${exec_cmd[1]:-}" =~ ^[0-9]+$ ]]; then
-          run_agent_browser "${exec_cmd[@]}"
-          if [ "${session_auto_renew}" != "0" ]; then
-            mark_current_tab "${session_ttl_default}"
-          fi
-          return 0
-        fi
-        if [ "${exec_cmd[1]:-}" = "close" ]; then
-          ensure_session_tab || return $?
-          if load_session_lease 2>/dev/null; then
-            run_agent_browser "${exec_cmd[@]}"
-            lease_remove
-            return 0
-          fi
-        fi
-        ensure_session_tab || return $?
-        ;;
-      *)
-        ensure_session_tab || return $?
-        ;;
-    esac
-
-  fi
-
   if run_agent_browser "${exec_cmd[@]}"; then
     status=0
   else
     status=$?
   fi
 
-  if [ "${status}" -eq 0 ] && [ -n "${session_name}" ] && [ "${session_auto_renew}" != "0" ] && ! { [ "${exec_cmd[0]}" = "tab" ] && [ "${exec_cmd[1]:-}" = "close" ]; }; then
-    mark_current_tab "${session_ttl_default}"
+  if [ "${status}" -ne 0 ] || [ -z "${session_name}" ] || [ "${session_auto_renew}" = "0" ]; then
+    return "${status}"
   fi
 
-  return "${status}"
+  if [ "${exec_cmd[0]}" = "tab" ] && [ "${exec_cmd[1]:-}" = "close" ]; then
+    if load_session_lease 2>/dev/null; then
+      current_exists=0
+      if target_exists "${lease_target_id}"; then
+        current_exists=1
+      fi
+
+      if [ "${current_exists}" -eq 0 ]; then
+        lease_remove
+        return 0
+      fi
+    fi
+  fi
+
+  current_target="$(current_target_id 2>/dev/null || true)"
+  if [ -n "${current_target}" ]; then
+    mark_target "${current_target}" "${session_ttl_default}"
+  else
+    lease_remove
+  fi
+
+  return 0
 }
 
 exec_cmd=("$@")
@@ -748,4 +572,4 @@ if [ "${#exec_cmd[@]}" -eq 0 ]; then
   exit 1
 fi
 
-with_command_lock main
+with_optional_command_lock main

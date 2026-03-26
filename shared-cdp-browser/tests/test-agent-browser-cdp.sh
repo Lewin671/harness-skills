@@ -282,24 +282,23 @@ run_wrapper() {
   PATH="${fixture_dir}/bin:${PATH}" \
   TEST_STATE_DIR="${fixture_dir}/state" \
   AGENT_BROWSER_SOCKET_DIR="${fixture_dir}/socket-dir" \
-  SHARED_CDP_BROWSER_DISABLE_FLOCK=1 \
   SHARED_CDP_BROWSER_SESSION="test-session" \
   SHARED_CDP_BROWSER_STATE_DIR="${fixture_dir}/state-dir" \
   SHARED_CDP_BROWSER_COMMAND_LOCK="${fixture_dir}/command.lock" \
   "${fixture_dir}/scripts/agent-browser-cdp" "$@"
 }
 
-run_wrapper_quiet() {
+run_wrapper_locked() {
   local fixture_dir="$1"
   shift
   PATH="${fixture_dir}/bin:${PATH}" \
   TEST_STATE_DIR="${fixture_dir}/state" \
   AGENT_BROWSER_SOCKET_DIR="${fixture_dir}/socket-dir" \
   SHARED_CDP_BROWSER_DISABLE_FLOCK=1 \
+  SHARED_CDP_BROWSER_USE_LOCK=1 \
   SHARED_CDP_BROWSER_SESSION="test-session" \
   SHARED_CDP_BROWSER_STATE_DIR="${fixture_dir}/state-dir" \
   SHARED_CDP_BROWSER_COMMAND_LOCK="${fixture_dir}/command.lock" \
-  SHARED_CDP_BROWSER_QUIET=1 \
   "${fixture_dir}/scripts/agent-browser-cdp" "$@"
 }
 
@@ -346,44 +345,21 @@ test_tab_new_failure_preserves_existing_lease() {
   [ "${before_target}" = "${after_target}" ] || fail "failed tab new should preserve prior lease"
 }
 
-test_bound_session_does_not_reactivate_browser_tab() {
-  local fixture_dir="${tmp_root}/bound-session"
+test_normal_command_tracks_current_tab_without_reactivation() {
+  local fixture_dir="${tmp_root}/track-current-tab"
+  local target_id
   make_fixture "${fixture_dir}"
 
   run_wrapper "${fixture_dir}" session open >/dev/null
+  printf 'target-extra\thttps://example.com\tExample\n' >>"${fixture_dir}/state/tabs"
+  printf '1\n' >"${fixture_dir}/state/current"
   printf '0\n' >"${fixture_dir}/state/activate-count"
 
   run_wrapper "${fixture_dir}" tab list >/dev/null
 
-  [ "$(cat "${fixture_dir}/state/activate-count")" = "0" ] || fail "bound session should not reactivate browser tab on normal commands"
-}
-
-test_quiet_mode_refuses_implicit_rebind() {
-  local fixture_dir="${tmp_root}/quiet-rebind"
-  make_fixture "${fixture_dir}"
-
-  run_wrapper "${fixture_dir}" session open >/dev/null
-  printf '0\n' >"${fixture_dir}/state/activate-count"
-  printf '999999\n' >"${fixture_dir}/socket-dir/test-session.pid"
-
-  if run_wrapper_quiet "${fixture_dir}" tab list >/dev/null 2>&1; then
-    fail "quiet mode should refuse implicit rebind"
-  fi
-
-  [ "$(cat "${fixture_dir}/state/activate-count")" = "0" ] || fail "quiet mode should not activate browser tab during implicit rebind"
-}
-
-test_quiet_mode_allows_explicit_session_open() {
-  local fixture_dir="${tmp_root}/quiet-session-open"
-  make_fixture "${fixture_dir}"
-
-  run_wrapper "${fixture_dir}" session open >/dev/null
-  printf '0\n' >"${fixture_dir}/state/activate-count"
-  printf '999999\n' >"${fixture_dir}/socket-dir/test-session.pid"
-
-  run_wrapper_quiet "${fixture_dir}" session open >/dev/null
-
-  [ "$(cat "${fixture_dir}/state/activate-count")" = "1" ] || fail "explicit session open should still rebind the leased tab in quiet mode"
+  [ "$(cat "${fixture_dir}/state/activate-count")" = "0" ] || fail "normal commands should not reactivate browser tabs"
+  target_id="$(lease_target_id "${fixture_dir}")"
+  [ "${target_id}" = "target-extra" ] || fail "normal commands should track the current tab instead of rebinding the old lease"
 }
 
 test_stale_lock_with_reused_pid_is_recovered() {
@@ -395,7 +371,7 @@ pid=$$
 started=Thu Jan  1 00:00:00 1970
 EOF
 
-  run_wrapper "${fixture_dir}" tab list >/dev/null
+  run_wrapper_locked "${fixture_dir}" tab list >/dev/null
   assert_not_exists "${fixture_dir}/command.lock.d"
 }
 
@@ -405,15 +381,13 @@ test_stale_lock_without_pid_is_recovered() {
   mkdir -p "${fixture_dir}/command.lock.d"
   touch -t 200001010000 "${fixture_dir}/command.lock.d"
 
-  run_wrapper "${fixture_dir}" tab list >/dev/null
+  run_wrapper_locked "${fixture_dir}" tab list >/dev/null
   assert_not_exists "${fixture_dir}/command.lock.d"
 }
 
 test_session_ttl_does_not_switch_active_tab
 test_tab_new_failure_preserves_existing_lease
-test_bound_session_does_not_reactivate_browser_tab
-test_quiet_mode_refuses_implicit_rebind
-test_quiet_mode_allows_explicit_session_open
+test_normal_command_tracks_current_tab_without_reactivation
 test_stale_lock_with_reused_pid_is_recovered
 test_stale_lock_without_pid_is_recovered
 
