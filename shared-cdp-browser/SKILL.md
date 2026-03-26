@@ -28,6 +28,8 @@ The wrapper performs this sequence on every call:
 4. If `SHARED_CDP_BROWSER_SESSION` is set, recover that session's leased tab from wrapper-managed lease metadata keyed by the CDP target id.
 5. Forward the original arguments to `agent-browser --cdp http://127.0.0.1:9222`.
 
+On macOS, app-bundle launches use `open -g` by default so a fresh shared browser starts in the background instead of stealing the foreground app.
+
 ## Multiple Agents
 
 Multiple agents can attach to the same browser process. To avoid stepping on each other's `agent-browser` session state, give each agent its own session name:
@@ -79,13 +81,14 @@ SHARED_CDP_BROWSER_BIN=/Applications/Google\ Chrome.app/Contents/MacOS/Google\ C
 
 ### `scripts/agent-browser-cdp`
 
-Preferred entry point. It calls `ensure-cdp-browser` first, then runs `agent-browser` with the shared CDP endpoint. If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper binds that session to a stable tab with wrapper-managed lease files keyed by the tab's CDP target id, tracks a TTL on that lease, auto-renews it on normal commands, and reclaims expired leased tabs before later commands. Session lookup no longer depends on page-controlled fields, so normal site scripts cannot steal or erase the lease. It also exposes wrapper-level session helpers: `session open`, `session renew`, `session ttl`, `session close`, and `session cleanup`. Read-only helpers such as `session ttl` inspect lease metadata without changing the active tab. If `agent-browser` is not on `PATH`, it falls back to `npx -y agent-browser`.
+Preferred entry point. It calls `ensure-cdp-browser` first, then runs `agent-browser` with the shared CDP endpoint. If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper binds that session to a stable tab with wrapper-managed lease files keyed by the tab's CDP target id, tracks a TTL on that lease, auto-renews it on normal commands, and reclaims expired leased tabs before later commands. Session lookup no longer depends on page-controlled fields, so normal site scripts cannot steal or erase the lease. The wrapper also records which `agent-browser` daemon currently owns the leased tab; once that daemon is already bound, later commands reuse its in-memory active page instead of re-activating the Chrome tab on every call. It also exposes wrapper-level session helpers: `session open`, `session renew`, `session ttl`, `session close`, and `session cleanup`. Read-only helpers such as `session ttl` inspect lease metadata without changing the active tab. If `agent-browser` is not on `PATH`, it falls back to `npx -y agent-browser`.
 
 Useful environment variables:
 
 ```bash
 SHARED_CDP_BROWSER_SESSION_TTL=1800   # default lease TTL in seconds
 SHARED_CDP_BROWSER_AUTO_RENEW=1       # renew leased tabs on normal commands
+SHARED_CDP_BROWSER_BACKGROUND=1       # macOS app launches stay in the background by default
 ```
 
 ### `scripts/new-session-name`
@@ -100,6 +103,7 @@ Generates a unique session name for parallel agents. Use it when several agents 
 - Session tabs behave like leases. `session close` is the explicit end-of-life path, but TTL-based cleanup is the safety net if a model forgets to close.
 - The browser profile is shared on purpose. Agents should assume cookies, tabs, and logged-in state may already exist.
 - This skill launches a dedicated Chrome instance only when the CDP endpoint is missing. If another Chrome is already listening on port `9222`, the skill reuses it.
+- Session recovery is quieter than before, but the very first bind after a daemon restart may still need to re-target the leased tab once.
 
 ## Resources (optional)
 

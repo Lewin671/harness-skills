@@ -51,6 +51,17 @@ printf '%s\n' "$*" >"${state_dir}/launch-args"
 touch "${state_dir}/cdp-ready"
 EOF
   chmod +x "${fixture_dir}/bin/fake-browser"
+
+  cat >"${fixture_dir}/bin/open" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_dir="${TEST_STATE_DIR:?}"
+mkdir -p "${state_dir}"
+printf '%s\n' "$*" >"${state_dir}/open-args"
+touch "${state_dir}/cdp-ready"
+EOF
+  chmod +x "${fixture_dir}/bin/open"
 }
 
 run_wrapper() {
@@ -94,7 +105,25 @@ EOF
   assert_exists "${fixture_dir}/state/cdp-ready"
 }
 
+test_app_launch_uses_background_open_by_default() {
+  local fixture_dir="${tmp_root}/background-open"
+  make_fixture "${fixture_dir}"
+  mkdir -p "${fixture_dir}/Fake Chrome.app"
+
+  PATH="${fixture_dir}/bin:${PATH}" \
+  TEST_STATE_DIR="${fixture_dir}/state" \
+  SHARED_CDP_BROWSER_BIN="${fixture_dir}/Fake Chrome.app" \
+  SHARED_CDP_BROWSER_LOCK_DIR="${fixture_dir}/browser.lock" \
+  SHARED_CDP_BROWSER_LOG_FILE="${fixture_dir}/browser.log" \
+  SHARED_CDP_BROWSER_USER_DATA_DIR="${fixture_dir}/profile" \
+  "${fixture_dir}/scripts/ensure-cdp-browser" >/dev/null
+
+  assert_exists "${fixture_dir}/state/open-args"
+  grep -q -- '-g -na' "${fixture_dir}/state/open-args" || fail "expected app launch to use background open"
+}
+
 test_stale_lock_without_pid_is_recovered
 test_stale_lock_with_reused_pid_is_recovered
+test_app_launch_uses_background_open_by_default
 
 printf 'PASS: %s\n' "$(basename "$0")"

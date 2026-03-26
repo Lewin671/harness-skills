@@ -9,6 +9,7 @@ lock_dir="${SHARED_CDP_BROWSER_LOCK_DIR:-/tmp/shared-cdp-browser-${port}.lock}"
 log_file="${SHARED_CDP_BROWSER_LOG_FILE:-/tmp/shared-cdp-browser-${port}.log}"
 lock_pid_file="${lock_dir}/pid"
 lock_stale_after="${SHARED_CDP_BROWSER_LOCK_STALE_AFTER:-5}"
+background_launch="${SHARED_CDP_BROWSER_BACKGROUND:-1}"
 
 is_cdp_ready() {
   local version_json
@@ -98,7 +99,11 @@ launch_browser() {
   )
 
   if [[ "${browser}" == *.app ]]; then
-    nohup open -na "${browser}" --args "${browser_args[@]}" >"${log_file}" 2>&1 &
+    if [ "${background_launch}" = "0" ]; then
+      nohup open -na "${browser}" --args "${browser_args[@]}" >"${log_file}" 2>&1 &
+    else
+      nohup open -g -na "${browser}" --args "${browser_args[@]}" >"${log_file}" 2>&1 &
+    fi
   else
     nohup "${browser}" "${browser_args[@]}" >"${log_file}" 2>&1 &
   fi

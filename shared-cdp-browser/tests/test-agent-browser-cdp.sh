@@ -29,9 +29,13 @@ lease_file_path() {
 
 make_fixture() {
   local fixture_dir="$1"
-  mkdir -p "${fixture_dir}/scripts" "${fixture_dir}/bin" "${fixture_dir}/state" "${fixture_dir}/state-dir"
+  mkdir -p "${fixture_dir}/scripts" "${fixture_dir}/bin" "${fixture_dir}/state" "${fixture_dir}/state-dir" "${fixture_dir}/socket-dir"
   cp "${script_under_test}" "${fixture_dir}/scripts/agent-browser-cdp"
   chmod +x "${fixture_dir}/scripts/agent-browser-cdp"
+
+  cat >"${fixture_dir}/socket-dir/test-session.pid" <<EOF
+$$
+EOF
 
   cat >"${fixture_dir}/scripts/ensure-cdp-browser" <<'EOF'
 #!/usr/bin/env bash
@@ -252,6 +256,12 @@ case "${url}" in
     ;;
   http://127.0.0.1:9222/json/activate/*)
     target_id="${url##*/}"
+    if [ -f "${state_dir}/activate-count" ]; then
+      count="$(cat "${state_dir}/activate-count")"
+    else
+      count=0
+    fi
+    printf '%s\n' "$((count + 1))" >"${state_dir}/activate-count"
     set_current_for_target "${target_id}"
     ;;
   http://127.0.0.1:9222/json/close/*)
@@ -271,6 +281,7 @@ run_wrapper() {
   shift
   PATH="${fixture_dir}/bin:${PATH}" \
   TEST_STATE_DIR="${fixture_dir}/state" \
+  AGENT_BROWSER_SOCKET_DIR="${fixture_dir}/socket-dir" \
   SHARED_CDP_BROWSER_DISABLE_FLOCK=1 \
   SHARED_CDP_BROWSER_SESSION="test-session" \
   SHARED_CDP_BROWSER_STATE_DIR="${fixture_dir}/state-dir" \
@@ -321,6 +332,18 @@ test_tab_new_failure_preserves_existing_lease() {
   [ "${before_target}" = "${after_target}" ] || fail "failed tab new should preserve prior lease"
 }
 
+test_bound_session_does_not_reactivate_browser_tab() {
+  local fixture_dir="${tmp_root}/bound-session"
+  make_fixture "${fixture_dir}"
+
+  run_wrapper "${fixture_dir}" session open >/dev/null
+  printf '0\n' >"${fixture_dir}/state/activate-count"
+
+  run_wrapper "${fixture_dir}" tab list >/dev/null
+
+  [ "$(cat "${fixture_dir}/state/activate-count")" = "0" ] || fail "bound session should not reactivate browser tab on normal commands"
+}
+
 test_stale_lock_with_reused_pid_is_recovered() {
   local fixture_dir="${tmp_root}/stale-pid-lock"
   make_fixture "${fixture_dir}"
@@ -346,6 +369,7 @@ test_stale_lock_without_pid_is_recovered() {
 
 test_session_ttl_does_not_switch_active_tab
 test_tab_new_failure_preserves_existing_lease
+test_bound_session_does_not_reactivate_browser_tab
 test_stale_lock_with_reused_pid_is_recovered
 test_stale_lock_without_pid_is_recovered
 
