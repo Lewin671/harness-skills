@@ -289,6 +289,20 @@ run_wrapper() {
   "${fixture_dir}/scripts/agent-browser-cdp" "$@"
 }
 
+run_wrapper_quiet() {
+  local fixture_dir="$1"
+  shift
+  PATH="${fixture_dir}/bin:${PATH}" \
+  TEST_STATE_DIR="${fixture_dir}/state" \
+  AGENT_BROWSER_SOCKET_DIR="${fixture_dir}/socket-dir" \
+  SHARED_CDP_BROWSER_DISABLE_FLOCK=1 \
+  SHARED_CDP_BROWSER_SESSION="test-session" \
+  SHARED_CDP_BROWSER_STATE_DIR="${fixture_dir}/state-dir" \
+  SHARED_CDP_BROWSER_COMMAND_LOCK="${fixture_dir}/command.lock" \
+  SHARED_CDP_BROWSER_QUIET=1 \
+  "${fixture_dir}/scripts/agent-browser-cdp" "$@"
+}
+
 lease_target_id() {
   local fixture_dir="$1"
   local lease_file
@@ -344,6 +358,34 @@ test_bound_session_does_not_reactivate_browser_tab() {
   [ "$(cat "${fixture_dir}/state/activate-count")" = "0" ] || fail "bound session should not reactivate browser tab on normal commands"
 }
 
+test_quiet_mode_refuses_implicit_rebind() {
+  local fixture_dir="${tmp_root}/quiet-rebind"
+  make_fixture "${fixture_dir}"
+
+  run_wrapper "${fixture_dir}" session open >/dev/null
+  printf '0\n' >"${fixture_dir}/state/activate-count"
+  printf '999999\n' >"${fixture_dir}/socket-dir/test-session.pid"
+
+  if run_wrapper_quiet "${fixture_dir}" tab list >/dev/null 2>&1; then
+    fail "quiet mode should refuse implicit rebind"
+  fi
+
+  [ "$(cat "${fixture_dir}/state/activate-count")" = "0" ] || fail "quiet mode should not activate browser tab during implicit rebind"
+}
+
+test_quiet_mode_allows_explicit_session_open() {
+  local fixture_dir="${tmp_root}/quiet-session-open"
+  make_fixture "${fixture_dir}"
+
+  run_wrapper "${fixture_dir}" session open >/dev/null
+  printf '0\n' >"${fixture_dir}/state/activate-count"
+  printf '999999\n' >"${fixture_dir}/socket-dir/test-session.pid"
+
+  run_wrapper_quiet "${fixture_dir}" session open >/dev/null
+
+  [ "$(cat "${fixture_dir}/state/activate-count")" = "1" ] || fail "explicit session open should still rebind the leased tab in quiet mode"
+}
+
 test_stale_lock_with_reused_pid_is_recovered() {
   local fixture_dir="${tmp_root}/stale-pid-lock"
   make_fixture "${fixture_dir}"
@@ -370,6 +412,8 @@ test_stale_lock_without_pid_is_recovered() {
 test_session_ttl_does_not_switch_active_tab
 test_tab_new_failure_preserves_existing_lease
 test_bound_session_does_not_reactivate_browser_tab
+test_quiet_mode_refuses_implicit_rebind
+test_quiet_mode_allows_explicit_session_open
 test_stale_lock_with_reused_pid_is_recovered
 test_stale_lock_without_pid_is_recovered
 

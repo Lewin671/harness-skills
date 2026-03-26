@@ -12,6 +12,7 @@ session_key="$(printf '%s' "${session_name_b64}" | tr '/+=' '_-.')"
 command_lock="${SHARED_CDP_BROWSER_COMMAND_LOCK:-/tmp/shared-cdp-browser-command-${lock_key}.lock}"
 session_ttl_default="${SHARED_CDP_BROWSER_SESSION_TTL:-1800}"
 session_auto_renew="${SHARED_CDP_BROWSER_AUTO_RENEW:-1}"
+quiet_mode="${SHARED_CDP_BROWSER_QUIET:-0}"
 lock_stale_after="${SHARED_CDP_BROWSER_LOCK_STALE_AFTER:-5}"
 state_dir="${SHARED_CDP_BROWSER_STATE_DIR:-${TMPDIR:-/tmp}/shared-cdp-browser-state-${lock_key}}"
 lease_dir="${state_dir}/leases"
@@ -56,6 +57,14 @@ require_session_name() {
   if [ -z "${session_name}" ]; then
     echo "SHARED_CDP_BROWSER_SESSION must be set for session commands." >&2
     exit 1
+  fi
+}
+
+quiet_mode_auto_bind_error() {
+  if [ -n "${session_name}" ]; then
+    echo "Quiet mode will not auto-recover session ${session_name}. Run 'session open' explicitly if you want to rebind it." >&2
+  else
+    echo "Quiet mode will not auto-switch or create a session tab." >&2
   fi
 }
 
@@ -377,9 +386,18 @@ ensure_session_tab() {
     if daemon_binding_is_current; then
       return 0
     fi
+    if [ "${quiet_mode}" = "1" ]; then
+      quiet_mode_auto_bind_error
+      return 1
+    fi
     activate_target "${lease_target_id}" >/dev/null
     write_existing_lease
     return 0
+  fi
+
+  if [ "${quiet_mode}" = "1" ]; then
+    quiet_mode_auto_bind_error
+    return 1
   fi
 
   lease_remove
@@ -695,17 +713,17 @@ main() {
           return 0
         fi
         if [ "${exec_cmd[1]:-}" = "close" ]; then
-          ensure_session_tab
+          ensure_session_tab || return $?
           if load_session_lease 2>/dev/null; then
             run_agent_browser "${exec_cmd[@]}"
             lease_remove
             return 0
           fi
         fi
-        ensure_session_tab
+        ensure_session_tab || return $?
         ;;
       *)
-        ensure_session_tab
+        ensure_session_tab || return $?
         ;;
     esac
 
