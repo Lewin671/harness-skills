@@ -3,9 +3,13 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cdp_url="$("${script_dir}/ensure-cdp-browser")"
+host="${SHARED_CDP_BROWSER_HOST:-127.0.0.1}"
+port="${SHARED_CDP_BROWSER_PORT:-9222}"
+lock_key="${host//[^[:alnum:]]/_}-${port}"
 session_name="${SHARED_CDP_BROWSER_SESSION:-}"
 session_marker="shared-cdp:${session_name}"
-command_lock="${SHARED_CDP_BROWSER_COMMAND_LOCK:-/tmp/shared-cdp-browser-command.lock}"
+session_marker_b64="$(printf '%s' "${session_marker}" | base64 | tr -d '\r\n')"
+command_lock="${SHARED_CDP_BROWSER_COMMAND_LOCK:-/tmp/shared-cdp-browser-command-${lock_key}.lock}"
 
 run_agent_browser() {
   local cmd=()
@@ -23,12 +27,6 @@ run_agent_browser() {
   "${cmd[@]}" "$@"
 }
 
-escape_js_single_quoted() {
-  local value="${1//\\/\\\\}"
-  value="${value//\'/\\\'}"
-  printf "%s" "${value}"
-}
-
 list_tab_indexes() {
   run_agent_browser tab list 2>/dev/null | sed -n 's/.*\[\([0-9][0-9]*\)\].*/\1/p'
 }
@@ -39,7 +37,7 @@ find_session_tab() {
     [ -n "${idx}" ] || continue
     run_agent_browser tab "${idx}" >/dev/null 2>&1 || continue
     name="$(run_agent_browser eval 'window.name' 2>/dev/null | tr -d '"' || true)"
-    if [ "${name}" = "${session_marker}" ]; then
+    if [ "${name}" = "${session_marker_b64}" ]; then
       printf '%s\n' "${idx}"
       return 0
     fi
@@ -51,15 +49,14 @@ find_session_tab() {
 ensure_session_tab() {
   [ -n "${session_name}" ] || return 0
 
-  local idx marker_js
+  local idx
   if idx="$(find_session_tab)"; then
     run_agent_browser tab "${idx}" >/dev/null
     return 0
   fi
 
   run_agent_browser tab new >/dev/null
-  marker_js="$(escape_js_single_quoted "${session_marker}")"
-  run_agent_browser eval "window.name = '${marker_js}'; window.name" >/dev/null
+  run_agent_browser eval "window.name = '${session_marker_b64}'; window.name" >/dev/null
 }
 
 with_command_lock() {
@@ -71,10 +68,22 @@ with_command_lock() {
   fi
 
   local lock_dir="${command_lock}.d"
-  until mkdir "${lock_dir}" 2>/dev/null; do
+  local lock_pid_file="${lock_dir}/pid"
+  local lock_pid
+
+  while ! mkdir "${lock_dir}" 2>/dev/null; do
+    if [ -f "${lock_pid_file}" ]; then
+      lock_pid="$(cat "${lock_pid_file}" 2>/dev/null || true)"
+      if [ -n "${lock_pid}" ] && ! kill -0 "${lock_pid}" 2>/dev/null; then
+        rm -f "${lock_pid_file}"
+        rmdir "${lock_dir}" 2>/dev/null || true
+        continue
+      fi
+    fi
     sleep 0.1
   done
-  trap 'rmdir "${lock_dir}" 2>/dev/null || true' RETURN
+  printf '%s\n' "$$" >"${lock_pid_file}"
+  trap 'rm -f "${lock_pid_file}"; rmdir "${lock_dir}" 2>/dev/null || true' RETURN
   "$@"
 }
 
@@ -85,10 +94,13 @@ main() {
         ;;
       tab)
         if [ "${exec_cmd[1]:-}" = "new" ]; then
-          run_agent_browser "${exec_cmd[@]}" >/dev/null
-          marker_js="$(escape_js_single_quoted "${session_marker}")"
-          run_agent_browser eval "window.name = '${marker_js}'; window.name" >/dev/null
-          exit 0
+          local tmp_output
+          tmp_output="$(mktemp)"
+          trap 'rm -f "${tmp_output}"' RETURN
+          run_agent_browser "${exec_cmd[@]}" >"${tmp_output}"
+          run_agent_browser eval "window.name = '${session_marker_b64}'; window.name" >/dev/null
+          cat "${tmp_output}"
+          return 0
         fi
         ensure_session_tab
         ;;

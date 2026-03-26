@@ -63,7 +63,7 @@ SHARED_CDP_BROWSER_BIN=/Applications/Google\ Chrome.app/Contents/MacOS/Google\ C
 
 ### `scripts/agent-browser-cdp`
 
-Preferred entry point. It calls `ensure-cdp-browser` first, then runs `agent-browser` with the shared CDP endpoint. If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper binds that session to a stable tab using `window.name`, and serializes commands with a global lock so parallel agents do not race each other. If `agent-browser` is not on `PATH`, it falls back to `npx -y agent-browser`.
+Preferred entry point. It calls `ensure-cdp-browser` first, then runs `agent-browser` with the shared CDP endpoint. If `SHARED_CDP_BROWSER_SESSION` is set, the wrapper binds that session to a stable tab using `window.name`, and serializes commands with a per-endpoint lock so parallel agents do not race each other. If `agent-browser` is not on `PATH`, it falls back to `npx -y agent-browser`.
 
 ### `scripts/new-session-name`
 
@@ -71,8 +71,8 @@ Generates a unique session name for parallel agents. Use it when several agents 
 
 ## Notes
 
-- The launcher uses a filesystem lock so several agents can race to start the browser safely.
-- The command wrapper also uses a global lock, so agents can share one browser safely even when they issue commands at the same time. Commands are serialized, not truly simultaneous at the browser action level.
+- The launcher uses a filesystem lock with stale-lock recovery so several agents can race to start the browser safely.
+- The command wrapper also uses a per-endpoint lock, so agents can share one browser safely even when they issue commands at the same time. Commands are serialized per CDP endpoint, not truly simultaneous at the browser action level.
 - The browser profile is shared on purpose. Agents should assume cookies, tabs, and logged-in state may already exist.
 - This skill launches a dedicated Chrome instance only when the CDP endpoint is missing. If another Chrome is already listening on port `9222`, the skill reuses it.
 

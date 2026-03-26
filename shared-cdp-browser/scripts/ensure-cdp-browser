@@ -7,9 +7,12 @@ cdp_url="http://${host}:${port}"
 user_data_dir="${SHARED_CDP_BROWSER_USER_DATA_DIR:-$HOME/agent-browser-data}"
 lock_dir="${SHARED_CDP_BROWSER_LOCK_DIR:-/tmp/shared-cdp-browser-${port}.lock}"
 log_file="${SHARED_CDP_BROWSER_LOG_FILE:-/tmp/shared-cdp-browser-${port}.log}"
+lock_pid_file="${lock_dir}/pid"
 
 is_cdp_ready() {
-  curl --silent --show-error --fail --max-time 1 "${cdp_url}/json/version" >/dev/null 2>&1
+  local version_json
+  version_json="$(curl --silent --show-error --fail --max-time 1 "${cdp_url}/json/version" 2>/dev/null)" || return 1
+  [[ "${version_json}" == *'"Browser"'* ]] && [[ "${version_json}" == *'"webSocketDebuggerUrl"'* ]]
 }
 
 find_browser() {
@@ -92,20 +95,58 @@ mkdir_lock() {
   mkdir "${lock_dir}" 2>/dev/null
 }
 
-if mkdir_lock; then
-  trap 'rmdir "${lock_dir}" 2>/dev/null || true' EXIT
-  if ! is_cdp_ready; then
-    launch_browser
-    if ! wait_for_cdp 150; then
-      echo "Timed out waiting for Chrome CDP at ${cdp_url}. Check ${log_file}." >&2
-      exit 1
-    fi
+write_lock_pid() {
+  printf '%s\n' "$$" >"${lock_pid_file}"
+}
+
+clear_lock() {
+  rm -f "${lock_pid_file}"
+  rmdir "${lock_dir}" 2>/dev/null || true
+}
+
+lock_is_stale() {
+  local lock_pid
+  [ -f "${lock_pid_file}" ] || return 1
+  lock_pid="$(cat "${lock_pid_file}" 2>/dev/null || true)"
+  [ -n "${lock_pid}" ] || return 1
+  ! kill -0 "${lock_pid}" 2>/dev/null
+}
+
+remove_stale_lock() {
+  if lock_is_stale; then
+    rm -f "${lock_pid_file}"
+    rmdir "${lock_dir}" 2>/dev/null || true
+    return 0
   fi
-else
+  return 1
+}
+
+while true; do
+  if mkdir_lock; then
+    trap 'clear_lock' EXIT
+    write_lock_pid
+    if ! is_cdp_ready; then
+      launch_browser
+      if ! wait_for_cdp 150; then
+        echo "Timed out waiting for Chrome CDP at ${cdp_url}. Check ${log_file}." >&2
+        exit 1
+      fi
+    fi
+    break
+  fi
+
+  if remove_stale_lock; then
+    continue
+  fi
+
   if ! wait_for_cdp 100; then
+    if remove_stale_lock; then
+      continue
+    fi
     echo "Another process is starting Chrome, but CDP never became ready at ${cdp_url}." >&2
     exit 1
   fi
-fi
+  break
+done
 
 printf '%s\n' "${cdp_url}"
