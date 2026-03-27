@@ -13,8 +13,9 @@ Use this skill when you need to start a local browser instance for CDP-based aut
 - Remote debugging port defaults to `9222`
 - Remote debugging address defaults to `127.0.0.1`
 - The launcher creates the profile directory if needed
-- The launcher prefers `Google Chrome`, then falls back to other Chromium-based browsers if available
-- On macOS, it starts the browser via `open -na ... --args ...` to reliably create a fresh app instance
+- The launcher waits for the CDP endpoint to become reachable before reporting success
+- On macOS, it prefers installed app bundles and starts them via `open -na ... --args ...`
+- On Linux, it falls back to common Chromium-family executables when available
 
 ## Run
 
@@ -34,6 +35,6 @@ CDP_REMOTE_DEBUGGING_PORT=9333 \
 
 ## Notes
 
-- The requested default profile path `/Users/qingyingliu/agent-browser-data` is satisfied on this machine through `$HOME/agent-browser-data`.
-- If a specific browser executable is required, set `CDP_BROWSER_BIN` to its executable path before running the script.
-- The script prints the chosen browser binary, profile path, and debugging endpoint after launch.
+- Set `CDP_BROWSER_BIN` when you need a specific browser executable. On macOS, auto-detection may choose an app bundle, but the explicit override should point to an executable.
+- The current implementation targets macOS and Linux. Other platforms should use `CDP_BROWSER_BIN` explicitly or extend the script.
+- The script prints the selected browser target, profile path, log path, and verified CDP endpoint after launch.
