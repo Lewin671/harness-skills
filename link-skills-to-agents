@@ -1,13 +1,90 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-src_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+src_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 dest_root="${1:-/Users/qingyingliu/.agents/skills}"
 
 mkdir -p "${dest_root}"
 
 linked=0
 skipped=0
+removed=0
+
+is_repo_managed_link() {
+  local path="$1"
+  local target
+
+  target="$(normalized_link_target "${path}")" || return 1
+  path_is_under "${target}" "${src_root}"
+}
+
+casefold_path() {
+  printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+paths_equal() {
+  [ "$(casefold_path "$1")" = "$(casefold_path "$2")" ]
+}
+
+path_is_under() {
+  local path base
+
+  path="$(casefold_path "$1")"
+  base="$(casefold_path "$2")"
+  [[ "${path}" = "${base}"/* ]]
+}
+
+normalized_path() {
+  local path="$1"
+  local parent
+
+  parent="$(cd "$(dirname "${path}")" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s\n' "${parent}" "$(basename "${path}")"
+}
+
+normalized_link_target() {
+  local path="$1"
+  local target
+
+  target="$(readlink "${path}")"
+  if [[ "${target}" != /* ]]; then
+    target="$(cd "$(dirname "${path}")" && pwd -P)/${target}"
+  fi
+
+  normalized_path "${target}"
+}
+
+cleanup_invalid_links() {
+  local dest_path skill_name expected_target target
+
+  for dest_path in "${dest_root}"/*; do
+    [ -L "${dest_path}" ] || continue
+    skill_name="$(basename "${dest_path}")"
+    expected_target="${src_root}/${skill_name}"
+    target="$(normalized_link_target "${dest_path}" 2>/dev/null || true)"
+
+    if [ ! -e "${dest_path}" ]; then
+      if is_repo_managed_link "${dest_path}"; then
+        rm "${dest_path}"
+        echo "clean ${skill_name} (broken link)"
+        removed=$((removed + 1))
+      fi
+      continue
+    fi
+
+    if ! is_repo_managed_link "${dest_path}"; then
+      continue
+    fi
+
+    if [ ! -f "${expected_target}/SKILL.md" ] || ! paths_equal "${target}" "${expected_target}"; then
+      rm "${dest_path}"
+      echo "clean ${skill_name} (stale link)"
+      removed=$((removed + 1))
+    fi
+  done
+}
+
+cleanup_invalid_links
 
 for skill_dir in "${src_root}"/*; do
   [ -d "${skill_dir}" ] || continue
@@ -17,8 +94,8 @@ for skill_dir in "${src_root}"/*; do
   dest_path="${dest_root}/${skill_name}"
 
   if [ -L "${dest_path}" ]; then
-    target="$(readlink "${dest_path}")"
-    if [ "${target}" = "${skill_dir}" ]; then
+    target="$(normalized_link_target "${dest_path}" 2>/dev/null || true)"
+    if [ -n "${target}" ] && paths_equal "${target}" "${skill_dir}"; then
       echo "skip  ${skill_name} (already linked)"
       skipped=$((skipped + 1))
       continue
@@ -35,4 +112,4 @@ for skill_dir in "${src_root}"/*; do
   linked=$((linked + 1))
 done
 
-echo "done  linked=${linked} skipped=${skipped} dest=${dest_root}"
+echo "done  linked=${linked} skipped=${skipped} removed=${removed} dest=${dest_root}"
