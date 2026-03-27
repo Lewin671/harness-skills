@@ -9,7 +9,7 @@ Each skill should include its own `SKILL.md`, scripts, and any agent-facing meta
 
 ## What Is Here
 
-- `shared-cdp-browser/`: a skill for attaching agents to one shared Chrome CDP instance.
+- `cdp-browser-launcher/`: a skill for launching a local Chromium-based browser with Chrome DevTools Protocol enabled.
 - `link-skills-to-agents`: symlinks every local skill into an agents skill directory.
 
 ## How To Use
