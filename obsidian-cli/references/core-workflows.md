@@ -92,7 +92,8 @@ obsidian templates
 obsidian template:read name=Travel resolve title="Paris"
 obsidian template:insert name=Standup
 obsidian commands filter=workspace
-obsidian command id="workspace:save"
+# Pick an actual ID from `obsidian commands ...`, then run it:
+obsidian command id="workspace:new-tab"
 obsidian bases
 obsidian base:views path="CRM.base"
 obsidian base:query path="CRM.base" view="Open Deals" format=json

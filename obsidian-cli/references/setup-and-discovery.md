@@ -86,13 +86,14 @@ Common CLI syntax rules:
 - Boolean flags are passed without a value, for example `open`, `overwrite`, `inline`.
 - Quote values with spaces: `name="Project Plan"`.
 - Use `\n` for multiline content and `\t` for tabs.
-- The docs state that `--copy` can be added to commands to copy output to the clipboard.
+- The online docs mention `--copy` for copying output to the clipboard, but treat it as version-sensitive and verify locally before relying on it.
 
 Examples:
 
 ```bash
 obsidian create name="Meeting Note" content="# Agenda\n\n- topic 1" open
-obsidian search query="weekly review" --copy
+obsidian help
+# Only use --copy if local behavior confirms support for it.
 ```
 
 ## Good first read-only probes
