@@ -90,12 +90,14 @@ These commands help when the user wants Obsidian-native automation.
 ```bash
 obsidian templates
 obsidian template:read name=Travel resolve title="Paris"
+# Inserts into the active file only. Do not use in unattended scripts unless the active file is intentional.
 obsidian template:insert name=Standup
 obsidian commands filter=workspace
 # Pick an actual ID from `obsidian commands ...`, then run it:
 obsidian command id="workspace:new-tab"
 obsidian bases
-obsidian base:views path="CRM.base"
+# base:views operates on the current/active base file.
+obsidian base:views
 obsidian base:query path="CRM.base" view="Open Deals" format=json
 obsidian base:create path="CRM.base" view="Open Deals" name="Acme"
 ```
@@ -103,6 +105,7 @@ obsidian base:create path="CRM.base" view="Open Deals" name="Acme"
 Guidance:
 
 - Use `commands` first when you need to trigger an existing Obsidian command by ID.
+- Treat `template:insert` and `base:views` as active-context commands unless local help shows explicit targeting parameters.
 - Re-check `obsidian help` for Base and workspace-related commands because these areas are changing quickly.
 
 ## 6. Plugins, themes, snippets, and app state

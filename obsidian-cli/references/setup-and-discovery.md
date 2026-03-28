@@ -52,11 +52,11 @@ Use live help when:
 
 ## Vault targeting
 
-Vault targeting follows these rules from the official docs:
+Vault targeting follows these rules from the official docs and current local help:
 
 - If the current working directory is a vault folder, that vault is used by default.
 - Otherwise, the active vault is used by default.
-- `vault=<name>` or `vault=<id>` must be the first argument before the command when you want to force the target vault.
+- `vault=<name>` must be the first argument before the command when you want to force the target vault.
 
 Examples:
 
@@ -64,6 +64,8 @@ Examples:
 obsidian vault="Work Vault" search query="roadmap"
 obsidian vault=Notes daily
 ```
+
+If newer docs or builds mention `vault=<id>`, verify locally how those IDs are surfaced before relying on them in automation.
 
 ## File targeting
 
