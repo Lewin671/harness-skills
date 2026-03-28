@@ -127,7 +127,47 @@ obsidian restart
 
 Prefer these commands when the user explicitly wants Obsidian configuration changes, not just file edits.
 
-## 7. Developer workflows
+## 7. Canvas files
+
+Use this when the user wants an Obsidian Canvas (`.canvas`) rather than a Markdown diagram.
+
+Canvas files are JSON Canvas documents. Treat them as structured data:
+
+- Use exact `path="Board.canvas"` targeting.
+- Write the whole file content as valid JSON.
+- Keep the first pass simple: start with `text` nodes, `group` nodes, and basic `edges`.
+- Prefer single-line node text unless you are certain escaping is correct.
+
+Minimal pattern:
+
+```bash
+obsidian create path="Architecture.canvas" overwrite content='{
+  "nodes": [
+    {"id": "a", "type": "text", "text": "User", "x": 0, "y": 0, "width": 160, "height": 60},
+    {"id": "b", "type": "text", "text": "Agent", "x": 260, "y": 0, "width": 160, "height": 60}
+  ],
+  "edges": [
+    {"id": "e1", "fromNode": "a", "fromSide": "right", "toNode": "b", "toSide": "left"}
+  ]
+}'
+obsidian open path="Architecture.canvas"
+```
+
+Validation pattern:
+
+```bash
+obsidian read path="Architecture.canvas" | jq -e .
+obsidian open path="Architecture.canvas"
+obsidian dev:errors
+```
+
+Guidance:
+
+- `obsidian read` is useful for checking the exact serialized canvas contents after writing.
+- If `jq` is unavailable, use another JSON validator before assuming the canvas is valid.
+- If the user only needs a quick diagram, Mermaid in Markdown is lower risk than Canvas.
+
+## 8. Developer workflows
 
 Use only when the user is doing plugin/theme development or explicitly asks for developer tooling.
 

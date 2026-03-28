@@ -19,6 +19,24 @@ Important command behaviors:
 - `move` and `rename` can update internal links, but that depends on the vault setting for automatic internal link updates.
 - `property:set` is safer than handwritten frontmatter edits when the user wants typed properties.
 - `task`, `daily:append`, `append`, and `prepend` are mutating commands even if they look lightweight.
+- `.canvas` files are not Markdown. They must remain valid JSON Canvas documents after every write.
+
+For `.canvas` writes, use these guardrails:
+
+- Prefer exact `path=` and overwrite the whole file deliberately rather than attempting partial text surgery through append/prepend.
+- Keep node text simple on the first pass; multiline strings and shell escaping are easy to get wrong.
+- Validate the serialized file before declaring success.
+- Reopen the canvas in Obsidian after writing.
+
+Suggested verification flow:
+
+```bash
+obsidian read path="Board.canvas" | jq -e .
+obsidian open path="Board.canvas"
+obsidian dev:errors
+```
+
+If `jq` is unavailable, use another JSON validator or reduce the canvas to a simpler known-good structure and retry.
 
 ## Commands that deserve extra caution
 
@@ -72,6 +90,16 @@ obsidian help <command>
 ```bash
 obsidian reload
 ```
+
+6. If the target is a `.canvas`, is the file still valid JSON?
+
+```bash
+obsidian read path="Board.canvas" | jq -e .
+```
+
+7. If the canvas opens as blank or fails, can you reproduce with a minimal two-node canvas?
+
+Start from a known-good minimal canvas and add complexity incrementally.
 
 ## Platform notes from the official docs
 
