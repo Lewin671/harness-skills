@@ -10,20 +10,25 @@ Each skill should include its own `SKILL.md`, scripts, and any agent-facing meta
 ## What Is Here
 
 - `cdp-browser-launcher/`: a skill for launching a local Chromium-based browser with Chrome DevTools Protocol enabled.
-- `link-skills-to-agents`: symlinks every local skill into an agents skill directory and cleans stale repo-managed links.
+- `link-skills-to-agents`: symlinks every local skill into one or more external skill directories and cleans stale repo-managed links.
 
 ## How To Use
 
-Link all skills into your local agents directory:
+Link all skills into the default local skill directories:
 
 ```bash
 ./link-skills-to-agents
 ```
 
-Or choose a custom destination:
+By default this syncs to:
+
+- `~/.agents/skills`
+- `~/.kiro/skills`
+
+Or choose one or more custom destinations:
 
 ```bash
-./link-skills-to-agents /path/to/agents/skills
+./link-skills-to-agents /path/to/agents/skills /path/to/other/skills
 ```
 
 ## Repository Convention
