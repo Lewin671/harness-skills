@@ -1,6 +1,6 @@
 ---
 name: obsidian-cli
-description: Use this skill when a task should read, search, create, update, organize, or inspect an Obsidian vault through the official Obsidian CLI instead of editing Markdown files directly. This skill is especially relevant for daily notes, templates, properties, tasks, backlinks, vault search, plugin/theme management, and Obsidian developer commands.
+description: Use this skill when the task is to read, search, create, update, or inspect content in an Obsidian vault through the official Obsidian CLI instead of raw file edits. Typical triggers include opening or updating daily notes, searching the vault, reading or writing a note by path, managing tasks, tags, properties, backlinks, templates, or checking plugins, themes, and developer commands.
 ---
 
 # Obsidian CLI

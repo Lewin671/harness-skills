@@ -1,6 +1,6 @@
 ---
 name: cdp-browser-launcher
-description: Launch a local Chromium-based browser with Chrome DevTools Protocol enabled. Use this skill when the task requires starting a CDP browser, especially when the profile should default to $HOME/agent-browser-data and the remote debugging port should default to 9222.
+description: Use this skill when the task is to launch or relaunch a local Chromium-based browser with Chrome DevTools Protocol enabled for automation, debugging, or web testing. Typical triggers include starting Chrome on port 9222, launching a browser before CDP-based automation, or bringing up a local browser with a known profile and remote debugging endpoint.
 ---
 
 # CDP Browser Launcher
