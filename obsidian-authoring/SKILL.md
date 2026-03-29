@@ -63,6 +63,18 @@ Use these defaults when creating or refining Obsidian Canvas content.
 - Use edges to show meaningful relationships, not merely visual adjacency.
 - Avoid crossing lines and clutter when a simpler arrangement would communicate the structure better.
 
+## Excalidraw rules
+
+Use these defaults when the target artifact is an Excalidraw diagram rather than a generic Canvas board.
+
+- Default to a small, opinionated diagram. Do not mirror every sentence from the source note onto the canvas.
+- Pick one organizing principle before drawing: flow, hierarchy, comparison, or hub-and-spoke. If unclear, prefer a single main line of reasoning.
+- Keep node text short and paraphrased. Excalidraw should expose the structure of the thought, not duplicate the prose.
+- Use a separate `.excalidraw.md` file for the diagram and embed it back into the note instead of mixing long drawing data into the note body.
+- Prefer 4-7 nodes for a first pass. Add detail only if the user asks for a denser diagram.
+- Make visual emphasis intentional: one central node, a few supporting nodes, and restrained color differences.
+- If the note already feels too dense or too AI-written, use the diagram to simplify the argument, not to add more concepts.
+
 ## Quality bar
 
 Before finishing, check:
@@ -72,3 +84,4 @@ Before finishing, check:
 - Does the structure match the note type or problem shape?
 - Are links or relationships explicit where they should be?
 - Has complexity been reduced rather than merely reformatted?
+- If an Excalidraw was added, does it clarify the main idea faster than the note alone?
