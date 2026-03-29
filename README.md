@@ -23,6 +23,7 @@ Link all skills into the default local skill directories:
 By default this syncs to:
 
 - `~/.agents/skills`
+- `~/.codex/skills`
 - `~/.kiro/skills`
 
 Or choose one or more custom destinations:
