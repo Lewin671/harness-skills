@@ -1,6 +1,6 @@
 ---
 name: obsidian-authoring
-description: Use this skill when the task requires creating or refining Obsidian Markdown notes or Canvas files using vault-specific authoring rules, note structure conventions, and layout heuristics. Use alongside obsidian-cli when the result should be applied inside a vault through the Obsidian CLI.
+description: Use this skill when the task is to write, rewrite, organize, or improve content inside an Obsidian vault, including Markdown notes, Canvas boards, and Excalidraw diagrams. Typical triggers include restructuring messy notes, turning raw thoughts into clean sections, applying vault note conventions, adding links or properties, or creating a visual map from a note. Use alongside obsidian-cli when the result should be written back into the vault.
 ---
 
 # Obsidian Authoring
