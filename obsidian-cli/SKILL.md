@@ -24,6 +24,18 @@ obsidian help <command>
 
 Treat local `obsidian help` output as the source of truth for the installed build. The online docs can lead or lag the local binary.
 
+## Note CRUD quick reference
+
+| Operation | Command |
+|-----------|---------|
+| Read | `obsidian read path="folder/note.md"` |
+| Create | `obsidian create path="folder/note.md" content="..."` |
+| **Overwrite / update** | `obsidian create path="folder/note.md" overwrite content="..."` |
+| Append | `obsidian append path="folder/note.md" content="..."` |
+| List files in folder | `obsidian files folder="Projects"` — use `folder=`, **not** `path=` |
+
+There is no standalone `write` or `update` command. `create overwrite` is the correct pattern to replace an existing note's content.
+
 ## Default workflow
 
 - Prefer read-only discovery first: `vault`, `vaults`, `files`, `read`, `search`, `tags`, `tasks`, `properties`.

@@ -9,7 +9,7 @@ Use these when the task is exploratory or reporting-oriented.
 ```bash
 obsidian read path="Inbox/Capture.md"
 obsidian file path="Projects/Plan.md"
-obsidian files folder="Projects"
+obsidian files folder="Projects"          # list files inside a folder (use folder=, not path=)
 obsidian folders total
 obsidian outline path="Projects/Plan.md" format=json
 obsidian search query="meeting notes"
@@ -32,6 +32,7 @@ Use these when the CLI should be the write path instead of direct Markdown edits
 
 ```bash
 obsidian create path="Inbox/New Note.md" content="# Title\n\nBody"
+obsidian create path="Inbox/Existing.md" overwrite content="# New content"  # overwrite an existing file
 obsidian create name="Trip Plan" template=Travel open
 obsidian append path="Inbox/Capture.md" content="- [ ] Follow up"
 obsidian prepend path="Projects/Plan.md" content="## Update\n"
@@ -42,6 +43,7 @@ obsidian delete path="Scratch/Old.md"
 
 Notes:
 
+- **To overwrite an existing file**, use `create path=... overwrite content=...`. There is no standalone `update` or `write` command — `create overwrite` is the correct pattern.
 - `create` can combine `template`, `open`, and `newtab`.
 - `move` and `rename` are preferable to raw file-system moves when you want Obsidian-aware behavior.
 - `delete` uses trash by default unless `permanent` is passed.
