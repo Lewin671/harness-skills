@@ -86,9 +86,22 @@ PY
     exit 0
 fi
 
-if [ -n "$suffix" ]; then
+# Check if second argument is a command (common agent-browser commands)
+valid_commands="^snapshot$|^open$|^click$|^fill$|^get$|^find$|^wait$|^screenshot$|^navigate$|^goto$|^type$|^press$|^scroll$|^close$|^state$|^session$|^stream$"
+
+# First check: URL + suffix + command (3+ args, middle is not a command)
+if [ "$#" -gt 2 ] && ! echo "$2" | grep -qE "^\-|$valid_commands"; then
     shift 2
+# Second check: URL + command (2+ args, second is command)
+elif [ "$#" -gt 1 ] && echo "$2" | grep -qE "^\-|$valid_commands"; then
+    suffix=""
+    shift 1
+# Third check: URL + suffix only (2 args, second is not command)
+elif [ "$#" -eq 2 ] && ! echo "$2" | grep -qE "^\-|$valid_commands"; then
+    shift 2
+# Default: URL only or URL + command
 else
+    suffix=""
     shift 1
 fi
 

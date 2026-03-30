@@ -46,9 +46,6 @@ The script automatically handles authentication when cookies are present:
 ```bash
 # Authenticated sites (auto-detected)
 ./scripts/concurrent-browser.sh https://app.example.com/dashboard
-
-# Manual bootstrap
-agent-browser --auto-connect state save "$HOME/.agent-browser-concurrent/agent-browser-state.json"
 ```
 
 ### Parallel Execution
