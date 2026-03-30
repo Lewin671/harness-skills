@@ -9,7 +9,7 @@ Each skill should include its own `SKILL.md`, scripts, and any agent-facing meta
 
 ## What Is Here
 
-- `agent-browser-concurrent/`: a repo-local browser automation workflow skill for concurrent agents, with sessions derived from origin and optional login-state reuse through `AGENT_BROWSER_STATE_FILE`.
+- `agent-browser-concurrent/`: a repo-local browser automation workflow skill for concurrent agents, with sessions derived from origin and optional login-state reuse through `~/.agent-browser-concurrent/agent-browser-state.json`.
 - `link-skills-to-agents`: symlinks every local skill into one or more external skill directories and cleans stale repo-managed links.
 
 ## How To Use
