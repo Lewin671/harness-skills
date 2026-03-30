@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# concurrent-browser.sh - Unified entry point for concurrent browser automation
+# concurrent-browser.sh - Simple concurrent browser automation
 # Usage: ./scripts/concurrent-browser.sh <url> [suffix] [command...]
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -11,22 +11,14 @@ show_usage() {
 Usage: concurrent-browser.sh <url> [suffix] [command...]
 
 Arguments:
-  url      Target URL (e.g., https://app.example.com/dashboard)
-  suffix   Optional suffix for concurrent sessions (e.g., reviewer-a)
+  url      Target URL
+  suffix   Optional suffix for concurrent sessions  
   command  Optional agent-browser commands to execute
 
 Examples:
-  # Start interactive session
   ./scripts/concurrent-browser.sh https://app.example.com/dashboard
-  
-  # Run command directly
   ./scripts/concurrent-browser.sh https://app.example.com/dashboard snapshot -i
-  
-  # Concurrent session with suffix
-  ./scripts/concurrent-browser.sh https://app.example.com/dashboard reviewer-a click @e2
-  
-  # Just prepare session (returns session name)
-  SESSION="$(./scripts/concurrent-browser.sh https://app.example.com)"
+  ./scripts/concurrent-browser.sh https://app.example.com reviewer-a click @e2
 EOF
 }
 
@@ -44,25 +36,66 @@ else
     shift 1
 fi
 
-# Generate session name
-session_name="$("${script_dir}/origin-session.sh" "$url" "$suffix")"
+# Generate session name from URL
+session_name=$(python3 - "$url" "$suffix" <<'PY'
+import re
+import sys
+from urllib.parse import urlparse
 
-# Prepare session state file
-session_state_file="$("${script_dir}/prepare-session-state.sh" "$session_name")"
+raw = sys.argv[1].strip()
+suffix = sys.argv[2].strip().lower() if len(sys.argv) > 2 and sys.argv[2] else ""
+candidate = raw if "://" in raw else f"https://{raw}"
+parsed = urlparse(candidate)
 
-# If no commands provided, just return session info
+if (
+    not parsed.scheme
+    or not parsed.netloc
+    or parsed.hostname is None
+    or any(ch.isspace() for ch in raw)
+    or any(ch.isspace() for ch in parsed.hostname)
+):
+    raise SystemExit(f"invalid url: {raw}")
+
+host = (parsed.hostname or "").lower()
+port = parsed.port
+default_port = (
+    (parsed.scheme == "http" and port in (None, 80))
+    or (parsed.scheme == "https" and port in (None, 443))
+)
+origin_key = f"{parsed.scheme}-{host}" if default_port else f"{parsed.scheme}-{host}-{port}"
+session = re.sub(r"[^a-z0-9]+", "-", origin_key).strip("-")
+if suffix:
+    suffix = re.sub(r"[^a-z0-9]+", "-", suffix).strip("-")
+    if suffix:
+        session = f"{session}-{suffix}"
+print(session or "default")
+PY
+)
+
+# Setup state directory and file
+state_dir="${AGENT_BROWSER_CONCURRENT_STATE_DIR:-${HOME}/.agent-browser-concurrent/session-states}"
+mkdir -p "$state_dir"
+session_name_clean="$(printf '%s' "$session_name" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '-' | sed -E 's/^-+//; s/-+$//')"
+session_state_file="${state_dir}/${session_name_clean}.json"
+
+# Copy seed state file if session doesn't exist yet
+default_seed_file="$HOME/.agent-browser-concurrent/agent-browser-state.json"
+if [ ! -f "$session_state_file" ] && [ -f "$default_seed_file" ]; then
+    cp "$default_seed_file" "$session_state_file"
+fi
+
+# If no commands, show session info
 if [ "$#" -eq 0 ]; then
     cat <<EOF
 Session: $session_name
-State file: $session_state_file
+State: $session_state_file
 
-Use with agent-browser:
-agent-browser --session "$session_name" --state "$session_state_file" open "$url"
+Use: agent-browser --session "$session_name" --state "$session_state_file" open "$url"
 EOF
     exit 0
 fi
 
-# Start session with proper authentication sequence
+# Execute commands with proper auth handling
 first_command="$1"
 shift
 
@@ -70,8 +103,13 @@ if [[ "$first_command" == "open" && "$#" -gt 0 ]]; then
     target_url="$1"
     shift
     
-    # Use proper auth sequence for authenticated sessions
-    if [[ -f "$session_state_file" && "$(jq -r '.cookies // empty' "$session_state_file" 2>/dev/null)" != "" ]]; then
+    # Check if we have authentication data
+    has_auth=""
+    if [[ -f "$session_state_file" ]]; then
+        has_auth="$(jq -r '.cookies // empty' "$session_state_file" 2>/dev/null || echo "")"
+    fi
+    
+    if [[ -n "$has_auth" ]]; then
         agent-browser --session "$session_name" --state "$session_state_file" open about:blank
         agent-browser --session "$session_name" state load "$session_state_file"
         agent-browser --session "$session_name" open "$target_url"
@@ -79,15 +117,16 @@ if [[ "$first_command" == "open" && "$#" -gt 0 ]]; then
         agent-browser --session "$session_name" --state "$session_state_file" open "$target_url"
     fi
     
-    # Execute remaining commands if any
     if [ "$#" -gt 0 ]; then
         agent-browser --session "$session_name" "$@"
     fi
 else
-    # For non-open commands, start with blank page then load state
     agent-browser --session "$session_name" --state "$session_state_file" open about:blank
-    if [[ -f "$session_state_file" && "$(jq -r '.cookies // empty' "$session_state_file" 2>/dev/null)" != "" ]]; then
-        agent-browser --session "$session_name" state load "$session_state_file"
+    if [[ -f "$session_state_file" ]]; then
+        has_auth="$(jq -r '.cookies // empty' "$session_state_file" 2>/dev/null || echo "")"
+        if [[ -n "$has_auth" ]]; then
+            agent-browser --session "$session_name" state load "$session_state_file"
+        fi
     fi
     agent-browser --session "$session_name" "$first_command" "$@"
 fi
