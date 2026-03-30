@@ -9,7 +9,7 @@ Each skill should include its own `SKILL.md`, scripts, and any agent-facing meta
 
 ## What Is Here
 
-- `cdp-browser-launcher/`: a skill for launching a local Chromium-based browser with Chrome DevTools Protocol enabled.
+- `agent-browser/`: a browser automation skill that defaults to one isolated session per origin and optional login-state reuse through `AGENT_BROWSER_STATE_FILE`.
 - `link-skills-to-agents`: symlinks every local skill into one or more external skill directories and cleans stale repo-managed links.
 
 ## How To Use
