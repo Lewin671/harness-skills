@@ -29,6 +29,13 @@ SESSION_STATE_FILE="$(./scripts/prepare-session-state.sh "${SESSION}")"
 
 `prepare-session-state.sh` copies `AGENT_BROWSER_STATE_FILE` into that per-session path the first time the session is used. After that, the session keeps writing to its own file instead of the shared seed.
 
+For automation, prefer passing the seed file explicitly when you have one:
+
+```bash
+SESSION="$(./scripts/origin-session.sh https://app.example.com/dashboard)"
+SESSION_STATE_FILE="$(./scripts/prepare-session-state.sh "${SESSION}" "/path/to/state.json")"
+```
+
 4. Start the session from that private state file:
 
 ```bash
@@ -63,6 +70,16 @@ agent-browser --session "${SESSION}" state save "${SESSION_STATE_FILE}"
 - Upstream `agent-browser` supports `AGENT_BROWSER_STATE`, but this repo standardizes on `AGENT_BROWSER_STATE_FILE`; always pass it through `--state` explicitly.
 - Explicit `state save` avoids the hidden assumption that `--state` auto-persists changes. It does not.
 - Session-private files remove concurrent write races on the shared seed file.
+
+## Shell environment caveat
+
+If `AGENT_BROWSER_STATE_FILE` is only exported from an interactive `zsh` startup file such as `~/.zshrc`, do not assume automation will see it.
+
+- Interactive `zsh` typically loads that config.
+- Non-interactive shells, `bash`, and many agent-run commands often do not.
+- When in doubt, pass the seed file path explicitly to `prepare-session-state.sh`.
+
+If a brand-new session is prepared without a seed, the script creates an empty state file and prints a warning. That is useful for anonymous browsing, but it does not preserve login state.
 
 ## State file storage
 
@@ -101,6 +118,7 @@ Important:
 - Reuse a session only for commands that belong to the same origin-level task.
 - Treat `AGENT_BROWSER_STATE_FILE` as the shared seed file, not the live write target for concurrent sessions.
 - The first run of a session copies from the seed. Later runs of the same session reuse that session's own file unless you delete it manually.
+- If you refresh the shared seed and want an existing session to pick it up, delete that session's private file first or use a new suffix.
 
 ## Parallel pattern
 
@@ -109,8 +127,8 @@ Run different origins in different sessions:
 ```bash
 SESSION_A="$(./scripts/origin-session.sh https://github.com)"
 SESSION_B="$(./scripts/origin-session.sh https://vercel.com)"
-STATE_A="$(./scripts/prepare-session-state.sh "${SESSION_A}")"
-STATE_B="$(./scripts/prepare-session-state.sh "${SESSION_B}")"
+STATE_A="$(./scripts/prepare-session-state.sh "${SESSION_A}" "/path/to/state.json")"
+STATE_B="$(./scripts/prepare-session-state.sh "${SESSION_B}" "/path/to/state.json")"
 
 agent-browser --session "${SESSION_A}" --state "${STATE_A}" open https://github.com
 agent-browser --session "${SESSION_B}" --state "${STATE_B}" open https://vercel.com
@@ -123,8 +141,8 @@ If two agents must hit the same origin at the same time, split the sessions:
 ```bash
 SESSION_A="$(./scripts/origin-session.sh https://app.example.com reviewer-a)"
 SESSION_B="$(./scripts/origin-session.sh https://app.example.com reviewer-b)"
-STATE_A="$(./scripts/prepare-session-state.sh "${SESSION_A}")"
-STATE_B="$(./scripts/prepare-session-state.sh "${SESSION_B}")"
+STATE_A="$(./scripts/prepare-session-state.sh "${SESSION_A}" "/path/to/state.json")"
+STATE_B="$(./scripts/prepare-session-state.sh "${SESSION_B}" "/path/to/state.json")"
 ```
 
 ## Bootstrapping auth
