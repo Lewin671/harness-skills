@@ -56,3 +56,5 @@ CDP_REMOTE_DEBUGGING_PORT=9333 \
 - Set `CDP_BROWSER_BIN` to use a specific browser executable. On macOS, auto-detection may choose an app bundle; the explicit override should point to an executable.
 - The script targets macOS and Linux. Other platforms should set `CDP_BROWSER_BIN` or extend the script.
 - After a successful launch the script prints the browser target, profile path, log path, and verified CDP endpoint.
+- **Port reuse**: the same debugging port can be reused across sequential runs as long as no browser is already bound to it.
+- **Concurrent isolation**: use a separate port and a separate profile directory for each parallel agent. Session names do not isolate agents that share a single CDP endpoint — only independent browser processes do.
