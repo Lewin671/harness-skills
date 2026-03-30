@@ -78,21 +78,11 @@ find_browser() {
   fi
 
   if [[ "${OSTYPE}" == darwin* ]]; then
-    local macos_candidates=(
-      "/Applications/Google Chrome.app"
-      "/Applications/Chromium.app"
-      "/Applications/Google Chrome Canary.app"
-      "/Applications/Microsoft Edge.app"
-      "/Applications/Brave Browser.app"
-    )
-    local candidate
-
-    for candidate in "${macos_candidates[@]}"; do
-      if [[ -d "${candidate}" ]]; then
-        printf '%s\n' "${candidate}"
-        return 0
-      fi
-    done
+    local chrome_bin="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    if [[ -x "${chrome_bin}" ]]; then
+      printf '%s\n' "${chrome_bin}"
+      return 0
+    fi
   fi
 
   local linux_candidates=(
@@ -138,21 +128,12 @@ fi
 
 mkdir -p "${profile_dir}"
 
-if [[ -n "${CDP_BROWSER_BIN:-}" || "${browser_target}" != *.app ]]; then
-  nohup "${browser_target}" \
-    "--user-data-dir=${profile_dir}" \
-    "--remote-debugging-address=${debug_addr}" \
-    "--remote-debugging-port=${debug_port}" \
-    "${start_url}" \
-    >"${log_file}" 2>&1 < /dev/null &
-else
-  nohup open -na "${browser_target}" --args \
-    "--user-data-dir=${profile_dir}" \
-    "--remote-debugging-address=${debug_addr}" \
-    "--remote-debugging-port=${debug_port}" \
-    "${start_url}" \
-    >"${log_file}" 2>&1 < /dev/null &
-fi
+nohup "${browser_target}" \
+  "--user-data-dir=${profile_dir}" \
+  "--remote-debugging-address=${debug_addr}" \
+  "--remote-debugging-port=${debug_port}" \
+  "${start_url}" \
+  >"${log_file}" 2>&1 < /dev/null &
 
 launcher_pid=$!
 endpoint="http://${debug_addr}:${debug_port}"
