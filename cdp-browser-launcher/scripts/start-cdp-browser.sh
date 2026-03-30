@@ -124,7 +124,15 @@ EOF
 }
 
 if port_is_listening "${debug_addr}" "${debug_port}"; then
-  printf 'CDP port is already in use at %s:%s\n' "${debug_addr}" "${debug_port}" >&2
+  endpoint="http://${debug_addr}:${debug_port}"
+  if curl --silent --show-error --fail "${endpoint}/json/version" >/dev/null 2>&1; then
+    cat <<EOF
+Reusing existing CDP browser.
+CDP endpoint: ${endpoint}
+EOF
+    exit 0
+  fi
+  printf 'Port %s:%s is already in use by a non-CDP process.\n' "${debug_addr}" "${debug_port}" >&2
   exit 1
 fi
 
