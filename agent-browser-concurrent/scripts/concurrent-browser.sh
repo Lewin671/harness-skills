@@ -191,6 +191,7 @@ if [[ "$first_command" == "open" && "$#" -gt 0 ]]; then
         agent-browser --session "$session_name" "$@"
     fi
 else
+    # First navigate to the target URL, then execute the command
     agent-browser --session "$session_name" --state "$session_state_file" open about:blank
     if [[ -f "$session_state_file" ]]; then
         has_auth="$(jq -r '.cookies // empty' "$session_state_file" 2>/dev/null || echo "")"
@@ -198,5 +199,6 @@ else
             agent-browser --session "$session_name" state load "$session_state_file"
         fi
     fi
+    agent-browser --session "$session_name" open "$url"
     agent-browser --session "$session_name" "$first_command" "$@"
 fi
