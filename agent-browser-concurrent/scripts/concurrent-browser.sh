@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# concurrent-browser.sh - Simple concurrent browser automation
-# Usage: ./scripts/concurrent-browser.sh <url> [suffix] [command...]
+# concurrent-browser-optimized.sh - Optimized version with better error handling and less code duplication
+# Usage: ./scripts/concurrent-browser-optimized.sh <url> [suffix] [command...]
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 show_usage() {
     cat <<'EOF'
-Usage: concurrent-browser.sh <url> [suffix] [command...]
+Usage: concurrent-browser-optimized.sh <url> [suffix] [command...]
 
 Arguments:
   url      Target URL
@@ -16,16 +16,56 @@ Arguments:
   command  Optional agent-browser commands to execute
 
 Examples:
-  ./scripts/concurrent-browser.sh https://app.example.com/dashboard
-  ./scripts/concurrent-browser.sh https://app.example.com/dashboard snapshot -i
-  ./scripts/concurrent-browser.sh https://app.example.com reviewer-a click @e2
+  ./scripts/concurrent-browser-optimized.sh https://app.example.com/dashboard
+  ./scripts/concurrent-browser-optimized.sh https://app.example.com/dashboard snapshot -i
+  ./scripts/concurrent-browser-optimized.sh https://app.example.com reviewer-a click @e2
 EOF
+}
+
+# Check for jq availability
+check_dependencies() {
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required but not installed. Please install jq first." >&2
+        exit 1
+    fi
+}
+
+# Check if state file has authentication data (cookies)
+has_authentication_data() {
+    local state_file="$1"
+    [[ -f "$state_file" ]] && [[ -n "$(jq -r '.cookies // empty' "$state_file" 2>/dev/null || echo "")" ]]
+}
+
+# Execute the standard browser flow: about:blank -> load state -> navigate
+execute_browser_flow() {
+    local session_name="$1"
+    local session_state_file="$2" 
+    local target_url="$3"
+    shift 3
+    local additional_commands=("$@")
+    
+    if has_authentication_data "$session_state_file"; then
+        echo "Loading session with authentication data..." >&2
+        agent-browser --session "$session_name" open about:blank
+        agent-browser --session "$session_name" state load "$session_state_file"
+        agent-browser --session "$session_name" open "$target_url"
+    else
+        echo "No authentication data found, proceeding directly..." >&2
+        agent-browser --session "$session_name" open "$target_url"
+    fi
+    
+    # Execute any additional commands
+    if [[ ${#additional_commands[@]} -gt 0 ]]; then
+        agent-browser --session "$session_name" "${additional_commands[@]}"
+    fi
 }
 
 if [ "$#" -lt 1 ] || [[ "$1" == "-h" || "$1" == "--help" ]]; then
     show_usage
     exit 0
 fi
+
+check_dependencies
 
 url="$1"
 suffix="${2:-}"
@@ -76,32 +116,41 @@ if suffix:
 print(session or "default")
 PY
 )
+
+    # Clean up session state
+    state_dir="${AGENT_BROWSER_CONCURRENT_STATE_DIR:-${HOME}/.agent-browser-concurrent/session-states}"
+    session_name_clean="$(printf '%s' "$session_name" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '-' | sed -E 's/^-+//; s/-+$//')"
+    session_state_file="${state_dir}/${session_name_clean}.json"
     
-    echo "Closing session: $session_name"
-    if agent-browser --session "$session_name" close 2>/dev/null; then
-        echo "Session closed successfully"
-    else
-        echo "Session was not running or already closed"
-    fi
+    echo "Cleaning up session: $session_name"
+    rm -f "$session_state_file"
+    agent-browser --session "$session_name" close 2>/dev/null || true
     exit 0
 fi
 
 # Check if second argument is a command (common agent-browser commands)
 valid_commands="^snapshot$|^open$|^click$|^fill$|^get$|^find$|^wait$|^screenshot$|^navigate$|^goto$|^type$|^press$|^scroll$|^close$|^state$|^session$|^stream$"
 
-# First check: URL + suffix + command (3+ args, middle is not a command)
-if [ "$#" -gt 2 ] && ! echo "$2" | grep -qE "^\-|$valid_commands"; then
-    shift 2
-# Second check: URL + command (2+ args, second is command)
-elif [ "$#" -gt 1 ] && echo "$2" | grep -qE "^\-|$valid_commands"; then
-    suffix=""
-    shift 1
-# Third check: URL + suffix only (2 args, second is not command)
-elif [ "$#" -eq 2 ] && ! echo "$2" | grep -qE "^\-|$valid_commands"; then
-    shift 2
-# Default: URL only or URL + command
+# Parse arguments to extract URL, suffix, and commands
+first_command=""
+if [ "$#" -gt 1 ]; then
+    if echo "$2" | grep -qE "^\-|$valid_commands"; then
+        # URL + command
+        first_command="$2"
+        shift 2
+    else
+        # URL + suffix or URL + suffix + command
+        if [ "$#" -gt 2 ] && echo "$3" | grep -qE "^\-|$valid_commands"; then
+            # URL + suffix + command
+            first_command="$3"
+            shift 3
+        else
+            # URL + suffix only
+            shift 2
+        fi
+    fi
 else
-    suffix=""
+    # URL only
     shift 1
 fi
 
@@ -154,51 +203,24 @@ if [ ! -f "$session_state_file" ] && [ -f "$default_seed_file" ]; then
 fi
 
 # If no commands, show session info
-if [ "$#" -eq 0 ]; then
+if [[ -z "$first_command" ]]; then
     cat <<EOF
 Session: $session_name
 State: $session_state_file
 
-Use: agent-browser --session "$session_name" --state "$session_state_file" open "$url"
-Cleanup: ./scripts/concurrent-browser.sh $url $suffix cleanup
+Use: agent-browser --session "$session_name" open "$url"
+Cleanup: ./scripts/concurrent-browser-optimized.sh $url $suffix cleanup
 EOF
     exit 0
 fi
 
-# Execute commands with proper auth handling
-first_command="$1"
-shift
-
+# Handle different command scenarios
 if [[ "$first_command" == "open" && "$#" -gt 0 ]]; then
+    # Special case: open command with target URL
     target_url="$1"
     shift
-    
-    # Check if we have authentication data
-    has_auth=""
-    if [[ -f "$session_state_file" ]]; then
-        has_auth="$(jq -r '.cookies // empty' "$session_state_file" 2>/dev/null || echo "")"
-    fi
-    
-    if [[ -n "$has_auth" ]]; then
-        agent-browser --session "$session_name" --state "$session_state_file" open about:blank
-        agent-browser --session "$session_name" state load "$session_state_file"
-        agent-browser --session "$session_name" open "$target_url"
-    else
-        agent-browser --session "$session_name" --state "$session_state_file" open "$target_url"
-    fi
-    
-    if [ "$#" -gt 0 ]; then
-        agent-browser --session "$session_name" "$@"
-    fi
+    execute_browser_flow "$session_name" "$session_state_file" "$target_url" "$@"
 else
-    # First navigate to the target URL, then execute the command
-    agent-browser --session "$session_name" --state "$session_state_file" open about:blank
-    if [[ -f "$session_state_file" ]]; then
-        has_auth="$(jq -r '.cookies // empty' "$session_state_file" 2>/dev/null || echo "")"
-        if [[ -n "$has_auth" ]]; then
-            agent-browser --session "$session_name" state load "$session_state_file"
-        fi
-    fi
-    agent-browser --session "$session_name" open "$url"
-    agent-browser --session "$session_name" "$first_command" "$@"
+    # Standard flow: navigate to original URL, then execute command
+    execute_browser_flow "$session_name" "$session_state_file" "$url" "$first_command" "$@"
 fi
