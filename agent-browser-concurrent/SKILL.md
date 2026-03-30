@@ -68,13 +68,16 @@ wait
 ### Cleanup
 
 ```bash
-# List sessions
+# Clean up current session only
+./scripts/concurrent-browser.sh https://app.example.com cleanup
+
+# List all sessions
 agent-browser session list
 
-# Close all sessions
+# Close all sessions (use with caution)
 agent-browser close --all
 
-# Reset session state
+# Reset specific session state
 rm "$HOME/.agent-browser-concurrent/session-states/<session>.json"
 ```
 

@@ -30,6 +30,62 @@ fi
 url="$1"
 suffix="${2:-}"
 
+# Handle cleanup command early
+if { [ "$#" -ge 2 ] && [[ "$2" == "cleanup" ]]; } || { [ "$#" -ge 3 ] && [[ "$3" == "cleanup" ]]; }; then
+    # Extract URL and suffix for cleanup
+    if [[ "$2" == "cleanup" ]]; then
+        url="$1"
+        suffix=""
+    else
+        url="$1"
+        suffix="$2"
+    fi
+    
+    # Generate session name for cleanup
+    session_name=$(python3 - "$url" "$suffix" <<'PY'
+import re
+import sys
+from urllib.parse import urlparse
+
+raw = sys.argv[1].strip()
+suffix = sys.argv[2].strip().lower() if len(sys.argv) > 2 and sys.argv[2] else ""
+candidate = raw if "://" in raw else f"https://{raw}"
+parsed = urlparse(candidate)
+
+if (
+    not parsed.scheme
+    or not parsed.netloc
+    or parsed.hostname is None
+    or any(ch.isspace() for ch in raw)
+    or any(ch.isspace() for ch in parsed.hostname)
+):
+    raise SystemExit(f"invalid url: {raw}")
+
+host = (parsed.hostname or "").lower()
+port = parsed.port
+default_port = (
+    (parsed.scheme == "http" and port in (None, 80))
+    or (parsed.scheme == "https" and port in (None, 443))
+)
+origin_key = f"{parsed.scheme}-{host}" if default_port else f"{parsed.scheme}-{host}-{port}"
+session = re.sub(r"[^a-z0-9]+", "-", origin_key).strip("-")
+if suffix:
+    suffix = re.sub(r"[^a-z0-9]+", "-", suffix).strip("-")
+    if suffix:
+        session = f"{session}-{suffix}"
+print(session or "default")
+PY
+)
+    
+    echo "Closing session: $session_name"
+    if agent-browser --session "$session_name" close 2>/dev/null; then
+        echo "Session closed successfully"
+    else
+        echo "Session was not running or already closed"
+    fi
+    exit 0
+fi
+
 if [ -n "$suffix" ]; then
     shift 2
 else
@@ -91,6 +147,7 @@ Session: $session_name
 State: $session_state_file
 
 Use: agent-browser --session "$session_name" --state "$session_state_file" open "$url"
+Cleanup: ./scripts/concurrent-browser.sh $url $suffix cleanup
 EOF
     exit 0
 fi
