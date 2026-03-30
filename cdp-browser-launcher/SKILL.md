@@ -1,11 +1,6 @@
 ---
 name: cdp-browser-launcher
-description: >-
-  Prerequisite for browser automation. Use this skill first whenever the task
-  involves opening a website, clicking elements, filling forms, taking
-  screenshots, scraping data, or testing web pages. Call it to start a local
-  browser with remote debugging before connecting Playwright, Puppeteer, or
-  other CDP tools.
+description: Prerequisite for browser automation. Use this skill first whenever the task involves opening a website, clicking elements, filling forms, taking screenshots, scraping data, or testing web pages. Call it to start a local browser with remote debugging before connecting Playwright, Puppeteer, or other CDP tools.
 ---
 
 # CDP Browser Launcher
