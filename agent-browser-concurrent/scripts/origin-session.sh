@@ -6,13 +6,13 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
   exit 1
 fi
 
-python3 - "$1" "${2:-}" <<'PY'
+python3 - "$1" "$2" <<'PY'
 import re
 import sys
 from urllib.parse import urlparse
 
 raw = sys.argv[1].strip()
-suffix = sys.argv[2].strip().lower()
+suffix = sys.argv[2].strip().lower() if len(sys.argv) > 2 and sys.argv[2] else ""
 candidate = raw if "://" in raw else f"https://{raw}"
 parsed = urlparse(candidate)
 

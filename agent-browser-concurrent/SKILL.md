@@ -1,192 +1,134 @@
 ---
 name: agent-browser-concurrent
-description: Repo-local workflow for concurrent browser automation with agent-browser. Default to isolated sessions derived from origin.
+description: Simplified concurrent browser automation workflow with unified entry point.
 ---
 
 # agent-browser-concurrent
 
-Use this skill when browser work must stay safe under concurrency.
+Concurrent browser automation with isolated sessions. Built on top of `agent-browser` CLI.
 
-This is a repo-local workflow layer on top of the upstream `agent-browser` CLI, not a replacement for the upstream generic skill docs.
-
-## Default workflow
-
-1. Use `agent-browser` directly. Do not introduce a separate CDP launcher step unless the task explicitly requires attaching to an existing browser.
-2. Derive the session from the target origin. Add a suffix when more than one agent may touch the same origin concurrently:
+## Quick Start
 
 ```bash
-SESSION="$(./scripts/origin-session.sh https://app.example.com/dashboard)"
-# Same-origin concurrency:
-# SESSION="$(./scripts/origin-session.sh https://app.example.com/dashboard reviewer-a)"
+# Interactive session
+./scripts/concurrent-browser.sh https://app.example.com/dashboard
+
+# Run command directly
+./scripts/concurrent-browser.sh https://app.example.com/dashboard snapshot -i
+
+# Concurrent sessions
+./scripts/concurrent-browser.sh https://app.example.com reviewer-a click @e2
+./scripts/concurrent-browser.sh https://app.example.com reviewer-b click @e3
 ```
 
-3. Prepare the session-specific state-file path. This skill stores one state file per session under `~/.agent-browser-concurrent/session-states/` by default:
+## Simplified Workflow
+
+1. **Start session** - Automatic session naming and state management
+2. **Execute commands** - Same session for all operations on same origin
+3. **Clean up** - Session isolation prevents cross-contamination
+
+### Session Management
+
+Sessions are automatically derived from the origin URL:
 
 ```bash
-SESSION="$(./scripts/origin-session.sh https://app.example.com/dashboard)"
-SESSION_STATE_FILE="$(./scripts/prepare-session-state.sh "${SESSION}")"
+# https://app.example.com/dashboard → https-app-example-com
+SESSION="$(./scripts/concurrent-browser.sh https://app.example.com/dashboard)"
+
+# With suffix for concurrency
+SESSION="$(./scripts/concurrent-browser.sh https://app.example.com reviewer-a)"
 ```
 
-`prepare-session-state.sh` copies the default state file from `~/.agent-browser-concurrent/agent-browser-state.json` into that per-session path the first time the session is used. After that, the session keeps writing to its own file instead of the shared seed.
+### State Files
 
-For automation, prefer passing the seed file explicitly when you have one:
+- **Shared seed**: `~/.agent-browser-concurrent/agent-browser-state.json`
+- **Per-session**: `~/.agent-browser-concurrent/session-states/<session>.json`
+- **Override**: `export AGENT_BROWSER_CONCURRENT_STATE_DIR=/custom/path`
+
+## Authentication
+
+The unified script automatically handles the proper authentication sequence:
 
 ```bash
-SESSION="$(./scripts/origin-session.sh https://app.example.com/dashboard)"
-SESSION_STATE_FILE="$(./scripts/prepare-session-state.sh "${SESSION}" "/path/to/state.json")"
+# For authenticated sites (auto-detected)
+./scripts/concurrent-browser.sh https://app.example.com/dashboard
+
+# Manual control when needed
+SESSION="$(./scripts/concurrent-browser.sh https://app.example.com)"
+agent-browser --session "$SESSION" --state "$SESSION_STATE_FILE" open about:blank
+agent-browser --session "$SESSION" state load "$SESSION_STATE_FILE"
+agent-browser --session "$SESSION" open https://app.example.com
 ```
 
-4. Start the session with a clean state loading sequence for proper authentication:
+## Advanced Usage
 
-```bash
-# For authenticated sessions (recommended):
-agent-browser --session "${SESSION}" --state "${SESSION_STATE_FILE}" open about:blank
-agent-browser --session "${SESSION}" state load "${SESSION_STATE_FILE}"
-agent-browser --session "${SESSION}" open https://app.example.com/dashboard
+### Direct Script Access
 
-# For unauthenticated sessions (simpler):
-agent-browser --session "${SESSION}" --state "${SESSION_STATE_FILE}" open https://app.example.com/dashboard
-```
-
-**Important**: Always use the `about:blank → state load → navigate` sequence for authenticated sessions to ensure login state is properly applied.
-
-5. Keep every later command on the same origin scoped to the same session:
-
-```bash
-agent-browser --session "${SESSION}" wait --load networkidle
-agent-browser --session "${SESSION}" snapshot -i
-agent-browser --session "${SESSION}" click @e2
-```
-
-6. Close the session when the task is done:
-
-```bash
-agent-browser --session "${SESSION}" close
-```
-
-7. Save the session back to its own state file:
-
-```bash
-agent-browser --session "${SESSION}" state save "${SESSION_STATE_FILE}"
-```
-
-## Why this is the default
-
-- `--session` gives each agent an isolated browser context, so concurrent agents do not fight over tabs, cookies, or storage.
-- `--state <path>` lets a new session start with saved cookies and storage, but requires proper loading sequence for authentication state to take effect.
-- Upstream state files carry cookies plus per-origin storage entries, so one seed file can initialize many private per-session copies.
-- This repo uses a fixed state file path at `~/.agent-browser-concurrent/agent-browser-state.json`; always pass it through `--state` explicitly.
-- Explicit `state save` avoids the hidden assumption that `--state` auto-persists changes. It does not.
-- Session-private files remove concurrent write races on the shared seed file.
-
-## State file storage
-
-The default shared state file is:
-
-```bash
-~/.agent-browser-concurrent/agent-browser-state.json
-```
-
-The per-session state directory is:
-
-```bash
-~/.agent-browser-concurrent/session-states/
-```
-
-That path is:
-
-- outside the repo
-- stable across reruns
-- one file per session
-- easy to inspect or delete manually
-
-Override it when needed:
-
-```bash
-export AGENT_BROWSER_CONCURRENT_STATE_DIR=/custom/path/session-states
-```
-
-## Authentication choices
-
-### Recommended workflow for authenticated sessions
-
-For sites requiring login state, use this three-step sequence:
+For fine-grained control, use the underlying scripts:
 
 ```bash
 SESSION="$(./scripts/origin-session.sh https://app.example.com)"
-SESSION_STATE_FILE="$(./scripts/prepare-session-state.sh "${SESSION}")"
+SESSION_STATE_FILE="$(./scripts/prepare-session-state.sh "$SESSION")"
 
-# 1. Start with blank page
-agent-browser --session "${SESSION}" --state "${SESSION_STATE_FILE}" open about:blank
-
-# 2. Load authentication state
-agent-browser --session "${SESSION}" state load "${SESSION_STATE_FILE}"
-
-# 3. Navigate to target page
-agent-browser --session "${SESSION}" open https://app.example.com
+agent-browser --session "$SESSION" --state "$SESSION_STATE_FILE" open https://app.example.com
 ```
 
-### Alternative authentication methods
-
-Prefer them in this order:
-
-1. `--session` plus a per-session state copy derived from `~/.agent-browser-concurrent/agent-browser-state.json` (with the three-step sequence above).
-2. `--session-name <name>` for a single long-lived workflow that wants auto-save and auto-restore.
-3. `--profile <path>` only when full browser profile persistence is required.
-
-Important:
-
-- Do not combine `--state` with `--profile`.
-- Do not share one `--session` name across different origins.
-- Do not reuse the same derived session for two concurrent agents on the same origin; add a suffix instead.
-- Reuse a session only for commands that belong to the same origin-level task.
-- Treat `~/.agent-browser-concurrent/agent-browser-state.json` as the shared seed file, not the live write target for concurrent sessions.
-- The first run of a session copies from the seed. Later runs of the same session reuse that session's own file unless you delete it manually.
-- If you refresh the shared seed and want an existing session to pick it up, delete that session's private file first or use a new suffix.
-
-## Parallel pattern
-
-Run different origins in different sessions:
+### Parallel Execution
 
 ```bash
-SESSION_A="$(./scripts/origin-session.sh https://github.com)"
-SESSION_B="$(./scripts/origin-session.sh https://vercel.com)"
-STATE_A="$(./scripts/prepare-session-state.sh "${SESSION_A}" "/path/to/state.json")"
-STATE_B="$(./scripts/prepare-session-state.sh "${SESSION_B}" "/path/to/state.json")"
+# Different origins
+./scripts/concurrent-browser.sh https://github.com snapshot -i &
+./scripts/concurrent-browser.sh https://vercel.com snapshot -i &
+wait
 
-agent-browser --session "${SESSION_A}" --state "${STATE_A}" open about:blank
-agent-browser --session "${SESSION_A}" state load "${STATE_A}"
-agent-browser --session "${SESSION_A}" open https://github.com
-
-agent-browser --session "${SESSION_B}" --state "${STATE_B}" open about:blank
-agent-browser --session "${SESSION_B}" state load "${STATE_B}"
-agent-browser --session "${SESSION_B}" open https://vercel.com
+# Same origin, different sessions
+./scripts/concurrent-browser.sh https://app.example.com reviewer-a click @e2 &
+./scripts/concurrent-browser.sh https://app.example.com reviewer-b click @e3 &
+wait
 ```
 
-Both private files can be initialized from the same shared seed file at `~/.agent-browser-concurrent/agent-browser-state.json` without colliding on writeback.
+## State Management
 
-If two agents must hit the same origin at the same time, split the sessions:
-
-```bash
-SESSION_A="$(./scripts/origin-session.sh https://app.example.com reviewer-a)"
-SESSION_B="$(./scripts/origin-session.sh https://app.example.com reviewer-b)"
-STATE_A="$(./scripts/prepare-session-state.sh "${SESSION_A}" "/path/to/state.json")"
-STATE_B="$(./scripts/prepare-session-state.sh "${SESSION_B}" "/path/to/state.json")"
-```
-
-## Bootstrapping auth
-
-Use `~/.agent-browser-concurrent/agent-browser-state.json` as the reusable artifact. To create or refresh it, either log in inside one session and run `state save`, or import from an already-authenticated Chrome session:
+### Bootstrap Authentication
 
 ```bash
+# Save current browser state
 agent-browser --auto-connect state save "$HOME/.agent-browser-concurrent/agent-browser-state.json"
+
+# Or authenticate in a session and save
+SESSION="$(./scripts/concurrent-browser.sh https://app.example.com)"
+# ... authenticate manually ...
+agent-browser --session "$SESSION" state save "$SESSION_STATE_FILE"
+cp "$SESSION_STATE_FILE" "$HOME/.agent-browser-concurrent/agent-browser-state.json"
 ```
 
-## Working style
+### Cleanup
 
-- Use `snapshot -i` and act on `@e` refs rather than brittle selectors when possible.
-- Chain commands with `&&` only when you do not need to inspect intermediate output.
-- Use `agent-browser session list` and `agent-browser close --all` for cleanup when a task leaves extra sessions behind.
-- Use `./scripts/session-state-path.sh <session>` when you need to inspect where a session's private state file lives.
-- **Critical**: Always use the `about:blank → state load → navigate` sequence for authenticated sessions. Direct navigation with `--state` may not apply login state correctly.
-- Delete existing session state files (`rm ~/.agent-browser-concurrent/session-states/<session>.json`) when you need to refresh from an updated seed file.
+```bash
+# List sessions
+agent-browser session list
+
+# Close specific session
+agent-browser --session "$SESSION" close
+
+# Close all sessions
+agent-browser close --all
+
+# Reset session state (force refresh from seed)
+rm "$HOME/.agent-browser-concurrent/session-states/<session>.json"
+```
+
+## Design Principles
+
+- **Session isolation**: Each agent gets separate browser context
+- **State separation**: Private state files prevent concurrent write races
+- **Origin-based naming**: Sessions derived from URLs for predictability
+- **Explicit state management**: No hidden auto-save assumptions
+
+## Best Practices
+
+- Use `snapshot -i` and `@e` refs over brittle selectors
+- Chain commands with `&&` when intermediate output isn't needed
+- Add suffixes for same-origin concurrency
+- Keep sessions scoped to single-origin tasks
+- Always close sessions when done
