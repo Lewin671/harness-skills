@@ -31,17 +31,16 @@ description: 使用此 Skill 启动一个开启了 CDP 的可见浏览器，使 
 agent-browser --cdp 9222 snapshot -i
 agent-browser --cdp 9222 click @e1
 ```
-
 ## 注意事项
 - **必须带上 --cdp 参数**：操作 `agent-browser` 时，必须显式指定 `--cdp 9222`。**严禁**在没有 `--cdp` 的情况下直接使用 `agent-browser open`。
-- **配置优先级**：Skill 会自动加载 `~/.config/open-browser-cdp/config.env` 中的环境变量。如果需要修改路径或端口，请运行 `./scripts/setup.sh`。
+- **环境配置**：Skill 会自动加载 `~/.config/open-browser-cdp/config.env` 中的环境变量。如果需要修改路径或端口，请手动编辑该文件。
 - **环境隔离**：不同的 CDP 端口对应不同的浏览器实例和数据目录（若已配置）。
 
 ## 常用命令汇总
 
 | 脚本 | 功能 |
 |-----------|---------|
-| `./scripts/setup.sh` | 初始化：设置数据目录和 CDP 端口 |
 | `./scripts/open.sh [url]` | 启动：打开浏览器并启用 CDP |
 | `./scripts/status.sh` | 检查：验证 CDP 端口是否可以被连接 |
 | `./scripts/close.sh` | 关闭：结束浏览器进程和相关会话 |
+

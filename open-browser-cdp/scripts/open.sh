@@ -1,44 +1,60 @@
 #!/usr/bin/env bash
-# open.sh - Launches the browser in headed mode with CDP enabled
+# open.sh - Robust browser launcher for CDP
 
-# Get current script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Load utils for config and browser path
 source "$SCRIPT_DIR/utils.sh"
 
-echo "Starting browser in HEADED mode..."
-echo "Binary: $BROWSER_BIN"
+echo "=== Browser Launch Environment ==="
+echo "Binary:   $BROWSER_BIN"
 echo "Data Dir: $BROWSER_DATA_DIR"
 echo "CDP Port: $BROWSER_PORT"
+echo "-----------------------------------"
 
-# Ensure data directory exists
-mkdir -p "$BROWSER_DATA_DIR"
+# 1. 边界处理: 自动清理浏览器残留锁文件
+# Chrome 在崩溃时可能留下 SingletonLock，导致无法二次启动
+if [ -d "$BROWSER_DATA_DIR/Default" ]; then
+    find "$BROWSER_DATA_DIR" -name "SingletonLock" -delete 2>/dev/null
+    echo "Cleaned up any residual browser locks."
+fi
 
-# Launch browser in background (Headed by default)
-# --remote-debugging-port: Enables CDP
-# --user-data-dir: Persistent profile data
-# --no-first-run & --no-default-browser-check: Better for automation
+# 2. 边界处理: 检查端口占用情况
+if curl -s "http://localhost:$BROWSER_PORT/json/version" > /dev/null 2>&1; then
+    echo "Note: Port $BROWSER_PORT is already in use by a browser."
+    echo "The browser is likely already running. Checking if it's the correct profile..."
+    # 如果已经在线，我们直接调用 status 检查，如果 ready 就直接退出（复用已有的）
+    if "$SCRIPT_DIR/status.sh" > /dev/null 2>&1; then
+        echo "CDP is already ready. No action needed."
+        exit 0
+    fi
+fi
+
+# 3. 边界处理: 确保数据目录存在且可写
+mkdir -p "$BROWSER_DATA_DIR" || { echo "Error: Could not create data directory $BROWSER_DATA_DIR"; exit 1; }
+
+# 4. 启动浏览器
+echo "Starting browser in HEADED mode..."
 "$BROWSER_BIN" \
   --remote-debugging-port="$BROWSER_PORT" \
   --user-data-dir="$BROWSER_DATA_DIR" \
   --no-first-run \
   --no-default-browser-check \
+  --no-sandbox \
   "$@" > /dev/null 2>&1 &
 
-# Store PID in a temp file for later closure if needed
-echo $! > "$HOME/.config/open-browser-cdp/browser.pid"
+PID=$!
+echo $PID > "$HOME/.config/open-browser-cdp/browser.pid"
+echo "Process started (PID: $PID). Waiting for endpoint..."
 
-echo "Browser process started (PID: $!). Waiting for CDP to be ready..."
-
-# Wait up to 5 seconds for CDP to respond
-for i in {1..10}; do
-  if "$SCRIPT_DIR/status.sh" > /dev/null 2>&1; then
-    echo "CDP is ready on port $BROWSER_PORT."
-    exit 0
-  fi
-  sleep 0.5
+# 5. 最终验证: 轮询检查 CDP 端口是否上线
+MAX_RETRIES=20
+for ((i=1; i<=MAX_RETRIES; i++)); do
+    if "$SCRIPT_DIR/status.sh" > /dev/null 2>&1; then
+        echo "Successfully launched browser on port $BROWSER_PORT."
+        exit 0
+    fi
+    sleep 0.5
 done
 
-echo "Error: CDP port $BROWSER_PORT did not become ready within timeout."
+echo "Error: Browser started but CDP port $BROWSER_PORT did not respond."
+echo "Tip: Check if another instance of the same browser is already running with this profile."
 exit 1
