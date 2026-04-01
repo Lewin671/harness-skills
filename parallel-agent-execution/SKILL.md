@@ -1,93 +1,119 @@
 ---
 name: parallel-agent-execution
-description: Use this skill when multiple coding agents may need to work in parallel and the main agent must choose between shared-tree serialization, patch-only parallelism, or isolated git worktrees. This skill defines a portable execution, ownership, environment, reconciliation, and cleanup contract that can be reused across repositories.
+description: Use this skill when multiple coding contributions may happen in parallel and the main agent must choose between shared-tree serialization, patch-only parallelism, or isolated git worktrees. This skill defines a portable decision order plus execution, ownership, environment, reconciliation, and cleanup contracts.
 ---
 
 # Parallel Agent Execution
 
-Use this skill when parallel coding is desirable but shared-worktree
-edits would create avoidable conflicts.
+Use this skill when parallel help is desirable but the main agent still
+needs one safe execution model for edits, verification, integration, and
+cleanup.
 
-The goal is not "always use `git worktree`". The goal is to choose the
-cheapest safe execution mode for the current repository and task, then
-run it with a clear integration contract.
+The goal is not "use `git worktree`". The goal is to choose the cheapest
+safe mode for the current repo and task, then write down the contract
+before delegating.
 
 ## Use It When
 
 Use it for:
 
-1. Multiple coding agents may edit files directly.
+1. Multiple coding contributions may run in parallel, whether as direct
+   edits or patch proposals.
 2. Ownership boundaries are mostly separable.
-3. Agents need a real working copy to run commands or inspect local
-   behavior.
-4. The main agent must keep branching, cleanup, and final integration
+3. Some contributors may need file context, local commands, or runnable
+   verification.
+4. The main agent must keep base state, integration, and cleanup
    predictable.
 
 Do not use it when:
 
-1. Changes heavily overlap in the same files or module.
-2. One main agent can apply patches cleanly from review or helper
-   delegates.
-3. Repo bootstrap cost is so heavy that extra worktrees would dominate
-   the task.
+1. The work heavily overlaps in the same files or module.
+2. The task is still exploratory and safe ownership boundaries are not
+   known yet.
+3. One owner can finish faster than setting up a parallel contract.
 
 ## Start Here
 
-1. Run a preflight check:
-   - current branch and exact base sha;
+1. Check for repo-local agent policy first if the repo documents one.
+2. Run preflight and record:
+   - current branch and exact `base sha`;
    - clean or dirty worktree state;
-   - whether uncommitted local changes must be committed, stashed, or
-     kept out of the isolated execution path;
-   - whether the task has safe path ownership boundaries;
-   - whether the repo has expensive local setup, generated directories,
-     submodules, or monorepo-wide global files.
-2. Check for repo-local agent policy before choosing a mode if the repo
-   documents one.
-3. Choose one mode:
-   - `shared-tree serialized`
-   - `patch-only parallel`
-   - `isolated worktree parallel`
+   - whether the task depends on uncommitted local edits that would not
+     appear in a fresh worktree;
+   - safe owner-to-path boundaries;
+   - global files such as lockfiles, root configs, CI files, or shared
+     generated outputs;
+   - setup cost, submodules, caches, or heavy generated directories.
+3. Choose the mode in this order:
+   - If helpers do not need direct edits or a runnable checkout, use
+     `patch-only parallel`.
+   - Otherwise, if ownership overlaps, the repo is dirty in a way the
+     task depends on, or the environment is too fragile or heavy for
+     isolated setup, use `shared-tree serialized`.
+   - Otherwise, if owners need direct edits and owner-local verification
+     in parallel is materially useful, use
+     `isolated worktree parallel`.
+   - If unsure, fall back to `patch-only parallel`, not worktrees.
 4. Record one execution contract before delegation:
-   - base sha;
-   - owner to path boundary;
-   - branch naming scheme;
-   - verification expectations;
+   - execution mode;
+   - branch and exact `base sha`;
+   - owner-to-path boundary;
+   - which global files stay main-agent owned;
+   - verification each owner must run;
    - reconciliation and cleanup rules.
 
 Read
 [`references/mode-and-contract.md`](./references/mode-and-contract.md)
-when the preflight result is ambiguous or the repo needs local override
-rules.
+when the mode is ambiguous or you need the contract templates.
 
-## Mode Selection
+## Mode Rules
 
-- Use `shared-tree serialized` when ownership overlaps or when the repo
-  is too heavy for parallel isolated setup.
-- Use `patch-only parallel` when helpers can work from file context or a
-  diff anchor without needing a runnable local checkout.
-- Use `isolated worktree parallel` only when direct edits plus local
-  verification are worth the setup cost and ownership boundaries are
-  concrete.
+### Shared-tree Serialized
 
-Treat `patch-only parallel` as the default fallback when worktree
-isolation is not clearly worth it.
+Use this when direct edits are needed but concurrency on one live tree
+would create churn.
 
-## Worktree Contract
+- Only one coding owner edits the shared tree at a time.
+- Other helpers may review, inspect, or prepare patches, but they do not
+  edit the same live tree concurrently.
+- Re-baseline between owners if the boundary, branch, or target files
+  change.
+- Keep global files with the main agent unless one pass is explicitly
+  assigned to own them.
 
-When using `isolated worktree parallel`, require all of the following:
+### Patch-Only Parallel
+
+Treat this as the default parallel mode.
+
+- Helpers do not edit the live worktree.
+- Give each helper a `base sha`, the exact file or diff anchor, a narrow
+  ownership boundary, the required patch format, and the verification
+  the main agent will rerun after applying.
+- The main agent applies patches one at a time, inspects scope, and
+  verifies centrally.
+- If a helper ends up needing direct local edits or runnable debugging,
+  stop and re-choose the mode instead of stretching the patch-only
+  contract.
+
+### Isolated Worktree Parallel
+
+Use this only when direct edits plus owner-local verification are worth
+the setup cost.
+
+Require all of the following:
 
 - One exact `base sha` for every coding owner. Do not rely on branch
   names alone.
-- If the original worktree is dirty, do not assume uncommitted changes
-  carry into new worktrees. Stabilize them first or keep the task on a
-  non-worktree path.
 - One short-lived branch per coding owner.
 - One explicit path ownership boundary per coding owner.
-- Global files such as lockfiles, root configs, CI definitions, and
-  shared generated artifacts default to the main agent unless explicitly
-  assigned.
-- Coding owners do not merge each other's branches. The main agent
+- Global files default to the main agent unless explicitly assigned.
+- Coding owners never merge each other's branches. The main agent
   integrates, verifies, and resolves conflicts.
+
+If the original worktree is dirty, do not assume uncommitted changes
+carry into new worktrees. Do not stash, reset, or commit user changes
+just to make worktrees convenient. Either stabilize the needed baseline
+explicitly or choose `shared-tree serialized` or `patch-only parallel`.
 
 Recommended branch naming:
 
@@ -95,81 +121,77 @@ Recommended branch naming:
 agent/<task-slug>/<owner-id>
 ```
 
-Sanitize `<repo-slug>`, `<task-slug>`, `<owner-id>`, and similar tokens
-into short, lowercase filesystem-safe and ref-safe segments before using
-them in branch or path names.
-
 Recommended worktree naming:
 
 ```text
 <worktree-root>/wt-<repo-slug>-<task-slug>-<owner-id>
 ```
 
-Choose `<worktree-root>` from a writable location approved by the repo
-or environment. A sibling directory can work, but do not assume it is
-always available.
-
-Keep names deterministic and short enough for common shell tools.
+Sanitize repo, task, and owner tokens into short, lowercase,
+filesystem-safe and ref-safe slugs before using them in branch or path
+names.
 
 ## Environment Rules
 
-The main performance risk is usually not Git object storage. It is
-duplicated local environment setup.
+The main cost is usually duplicated setup, not Git object storage.
 
-- Reuse global or external caches only when they are safe for concurrent
-  use across the chosen base state. If a cache is mutable or not keyed
-  by lockfile, toolchain, or base sha, isolate it per owner or avoid
-  parallel worktrees.
+- Reuse caches only when they are safe for concurrent use across the
+  chosen base state. If a cache is mutable or not keyed by lockfile,
+  toolchain, or `base sha`, isolate it per owner or avoid worktrees.
 - Avoid copying heavyweight generated directories into each worktree.
-- Bootstrap the minimum environment needed for that owner's boundary.
+- Bootstrap only the minimum environment needed for that owner's
+  boundary.
 - If full setup per worktree is too expensive, switch to
-  `patch-only parallel` or reduce the number of coding owners.
-- If the repo uses submodules, define whether each worktree must
-  initialize or update them, how dirty submodule state will be detected
-  during preflight, and how that cost will be controlled.
-- If local verification depends on generated outputs, decide whether they
-  are main-agent owned, rebuilt per owner, or handled by a shared
-  reproducible artifact step before delegating.
-- Any shared prepared submodule state or shared artifact step must be
-  single-writer and read-only for consumers, or versioned by base sha and
-  toolchain so owners cannot race through mutable shared state.
+  `patch-only parallel`, reduce the number of owners, or serialize the
+  risky boundary.
+- If the repo uses submodules, generated outputs, or shared prepared
+  artifacts, define whether they are rebuilt per owner, main-agent
+  owned, or exposed as single-writer read-only inputs.
 - If a repo-specific bootstrap or cache policy exists, follow it rather
   than inventing a new one.
 
-## Reconciliation Rules
+## Integration And Cleanup
 
-- Each coding owner reports:
-  - changed files;
-  - base sha used;
-  - verification run;
-  - residual risks.
-- The main agent integrates one owner at a time onto the integration
-  branch or current target branch.
-- If an owner drifted from the agreed base or touched out-of-scope
-  files, stop and re-baseline before continuing.
-- If two owners need the same file after all, serialize the remainder of
-  that boundary instead of forcing parallel merge churn.
+Every coding owner must report:
 
-## Cleanup
+- changed files;
+- `base sha` used;
+- verification run;
+- residual risks.
 
-- Remove finished temporary worktrees.
-- Delete merged short-lived branches unless the user asked to keep them.
-- Keep failed worktrees only when needed for diagnosis.
-- Record any skipped cleanup as explicit residual state in the final
-  report.
+The main agent integrates one owner at a time onto the chosen target
+branch. If an owner drifted from the agreed base or touched out-of-scope
+files, stop and re-baseline before continuing. If two owners end up
+needing the same file, serialize the rest of that boundary instead of
+forcing parallel merge churn.
+
+Before closing:
+
+1. Run the most relevant integration verification yourself.
+2. Remove finished temporary worktrees.
+3. Delete merged short-lived branches unless the user asked to keep
+   them.
+4. Record any skipped cleanup as explicit residual state.
+
+Final status should make these explicit:
+
+- chosen execution mode;
+- branch and `base sha`;
+- owner boundaries;
+- verification run by owners and rerun by the main agent;
+- cleanup completed, skipped, or intentionally retained.
 
 ## Repo Overrides
 
-This skill is portable by default. If a repository documents an agent
-execution policy, check it during preflight before final mode selection.
-Repositories may override details such as:
+This skill is portable by default. If a repository documents its own
+agent execution policy, prefer that policy over defaults from this
+skill.
 
-- preferred base branch;
-- bootstrap and verification commands;
+Look for repo-local guidance in `AGENTS.md`, `.agents/`, `docs/`, or
+another repository-specific operator guide. Useful overrides include:
+
+- canonical base branch;
+- standard bootstrap or verification commands;
 - heavy directories or caches;
 - files that must stay main-agent owned;
-- branch naming exceptions.
-
-Look for a repo-local contract in documented policy locations, for
-example `AGENTS.md`, `.agents/`, `docs/`, or another repository-specific
-operator guide.
+- branch or worktree naming exceptions.
