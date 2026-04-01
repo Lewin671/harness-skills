@@ -8,7 +8,7 @@ right loop shape.
 - [Choose The Mode](#choose-the-mode)
 - [Choose The Topology](#choose-the-topology)
 - [Map The Environment](#map-the-environment)
-- [Default Serialized Recipe](#default-serialized-recipe)
+- [Delegation Gate](#delegation-gate)
 - [Artifact-Specific Review](#artifact-specific-review)
 - [Keep Reviews Independent](#keep-reviews-independent)
 - [If The Loop Stalls](#if-the-loop-stalls)
@@ -38,8 +38,6 @@ right loop shape.
 - Large repos or mixed artifacts:
   split review coverage by subsystem or artifact slice, then add one
   cross-cutting integration review.
-- No safe concurrency:
-  use one coding owner and serialize the rest of the loop.
 
 Do not split multiple coding owners across the same module unless the
 environment can isolate and merge their work safely.
@@ -59,37 +57,21 @@ when ownership overlaps.
 - Shared worktree with weak isolation:
   avoid parallel coding in overlapping areas and re-baseline before
   applying the next patch or fix brief.
-- No subagent primitive:
-  keep the same rules, but run the loop as serialized local passes with
-  at least two fresh review phases after each coding pass.
-  Change the review lens or prompt between passes so they are not
-  effectively duplicates.
-  Treat the result as self-reviewed, not independently reviewed.
 - Weak review isolation:
   do not feed prior reviewer conclusions into the next review pass
   unless the task is to validate a specific named issue.
 
-## Default Serialized Recipe
+## Delegation Gate
 
-Use this when no safe delegation primitive exists or when isolation is
-too weak for multi-owner work:
+Use this skill only when both are true:
 
-1. Write the scope brief and record the exact boundary.
-2. Run review pass A with a `correctness` or `integration` lens.
-3. Run review pass B with a `verification` or `usability` lens.
-4. Group accepted findings into issue ids.
-5. Fix only the accepted open issues.
-6. Re-run the boundary verification.
-7. Run one fresh closeout review pass on the updated result.
-8. Update the loop ledger and decide whether another loop is required.
+1. The environment can start isolated subagents for coding and review.
+2. Review passes can stay independent enough that findings are not just
+   replayed from prior prompts.
 
-For code or mixed artifacts with real regression risk, prefer four
-passes in total:
-
-1. audit pass A;
-2. audit pass B;
-3. fix plus verification;
-4. closeout review with an `integration` or `regression` lens.
+If either condition fails, do not emulate this skill with serialized
+local review. Switch to a different workflow and report that
+`review-fix-loop` was not applicable in that environment.
 
 ## Artifact-Specific Review
 
@@ -103,7 +85,7 @@ passes in total:
   validate with the target tool when possible and check for unsafe
   defaults or missing integration updates.
 - Skills:
-  check trigger wording, decision order, fallback behavior, output
+  check trigger wording, decision order, delegation gate, output
   contracts, reference discoverability, and whether an agent could act
   without guessing.
 - Mixed code plus docs:
@@ -123,8 +105,8 @@ slice.
   review pass.
 - Ask for findings first, ordered by severity, with one evidence anchor
   and one confirming check per finding.
-- If true independence is unavailable, mark that limitation in the scope
-  brief and in the final report.
+- If true independence is unavailable, stop and switch workflows rather
+  than pretending the loop still qualifies as independent review.
 
 ## If The Loop Stalls
 
@@ -134,7 +116,7 @@ When the same accepted issue survives two loops:
 2. Shrink the ownership boundary.
 3. Rotate the coding owner, reviewer, or both.
 4. Increase verification depth.
-5. Fall back to one-owner serialized repair if parallelism is creating
-   noise.
-6. If serialized repair still cannot clear a blocking or major issue,
+5. Stop and change workflows if the delegated topology is creating
+   noise instead of convergence.
+6. If delegated repair still cannot clear a blocking or major issue,
    stop and report the work as blocked instead of looping indefinitely.

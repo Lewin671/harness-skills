@@ -104,7 +104,7 @@ For each iteration:
 8. If the same accepted issue survives two loops, treat the loop as
    stalled and change topology, ownership, or verification depth before
    continuing.
-9. If the loop used serialized self-review instead of independent
-   reviewers, record that limitation in the final status.
-10. If serialized repair still leaves a blocking or major issue open,
+9. If independent delegated review cannot be maintained, stop and
+   report that this skill is not applicable in the current environment.
+10. If delegated repair still leaves a blocking or major issue open,
     stop and report the work as blocked.

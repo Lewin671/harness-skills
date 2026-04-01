@@ -39,7 +39,7 @@ Verification plan:
 2. <test, command, render check, sample scenario, or manual check>
 
 Capabilities:
-- Delegation: <parallel delegates | serialized fallback>
+- Delegation: <subagents available | unavailable, use another workflow>
 - Edit mode: <direct edits | patch proposals | mixed>
 - Base state: <branch, ref, diff anchor, or current worktree contract>
 - Review isolation: <separate threads/prompts available or not>
@@ -114,7 +114,7 @@ Artifact type:
 - <code | docs | prompt | config | skill | mixed>
 
 Review mode:
-- <independent review | serialized self-review pass N>
+- <independent delegated review>
 
 Do not use prior reviewer conclusions or accepted issue summaries as
 evidence unless the task is explicitly to validate one named issue.
@@ -170,10 +170,10 @@ Non-blocking notes:
 - <note>
 
 Convergence action if needed:
-- <tighten brief | rotate owner | serialize boundary | no extra loop needed>
+- <tighten brief | rotate owner | stop and change workflow | no extra loop needed>
 
 Review confidence:
-- <independent review | serialized self-review with limitation noted>
+- <independent delegated review>
 
 Stop decision:
 - <another loop required | ready to close | blocked pending decision>
@@ -217,7 +217,7 @@ Accepted issue ids:
 - <IG-002> - <fixed | disproved | downgraded> - <closure evidence>
 
 Review confidence:
-- <independent review | serialized self-review>
+- <independent delegated review>
 
 Residual risks:
 - <risk or none>

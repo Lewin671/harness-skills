@@ -4,8 +4,8 @@ description: Use this skill when a code change, diff, PR-like patch,
   skill, doc, prompt, config, or runbook needs repeated review,
   triage, fix, and verification loops until only verified issues or
   explicit residual risks remain. Use it when acceptance criteria and
-  ownership boundaries are concrete, and when the work may need
-  isolated reviewers or serialized local review passes to converge.
+  ownership boundaries are concrete, and when the environment can run
+  isolated subagents for coding and review passes.
 ---
 
 # Review-Fix Loop
@@ -13,6 +13,10 @@ description: Use this skill when a code change, diff, PR-like patch,
 Use this skill when the main agent should run a repeatable
 review-triage-fix-verify loop instead of treating the task as one-pass
 implementation.
+
+This skill assumes subagent capability. If you cannot start isolated
+coding and review subagents, do not use this skill; switch to a local
+one-owner workflow instead.
 
 The goal is convergence, not comment volume: keep only
 high-confidence, anchored problems; feed only accepted issues into the
@@ -34,8 +38,7 @@ explicit.
      follow-on changes.
 3. Choose the smallest topology that can converge:
    - non-code artifacts: one coding owner plus two review passes;
-   - code or mixed artifacts: one coding owner plus three review passes;
-   - no safe delegation: one owner plus serialized fresh review passes.
+   - code or mixed artifacts: one coding owner plus three review passes.
 4. Run isolated review, accept only findings with concrete anchors, and
    group accepted findings into stable issue ids.
 5. Send narrowed fix briefs that reference issue ids, ownership
@@ -53,15 +56,17 @@ contract, not just prose quality.
 
 Use it for:
 
-1. New feature work where the user wants review-driven convergence.
-2. Bug fixes or refactors that cross modules or integration points.
-3. Existing diffs, PR-like changes, or audits that need
+1. Tasks where subagents are available for isolated coding and review.
+2. New feature work where the user wants review-driven convergence.
+3. Bug fixes or refactors that cross modules or integration points.
+4. Existing diffs, PR-like changes, or audits that need
    review-fix-review until clean.
-4. Skills, docs, prompts, configs, or runbooks where the acceptance
+5. Skills, docs, prompts, configs, or runbooks where the acceptance
    target is concrete and operator behavior matters.
 
 Do not use it when the task is exploratory, the acceptance target is
-unclear, or safe ownership boundaries cannot be identified yet.
+unclear, safe ownership boundaries cannot be identified yet, or the
+environment cannot run subagents.
 
 ## Required Inputs
 
@@ -71,11 +76,13 @@ Before starting the loop, make sure you can state:
 - the artifact type and exact review boundary;
 - the most relevant verification anchors;
 - whether owners can edit directly or only propose patches;
+- that subagent delegation is available for both coding and review;
 - whether review can be isolated from implementation;
 - the base state, branch, ref, or diff anchor to use.
 
 If one of these is missing, inspect the environment and infer it before
-delegating. Do not start multi-pass review against a vague boundary.
+delegating. Do not start multi-pass review against a vague boundary or
+without confirmed subagent capability.
 
 ## Default Operating Posture
 
@@ -86,14 +93,13 @@ Use these defaults unless the task clearly needs something else:
   of plausible comments.
 - Keep coding ownership narrow and explicit.
 - Keep review isolated: separate prompts, threads, or fresh phases.
-- If no safe subagent or parallel primitive exists, use serialized local
-  review with at least two fresh review phases and report the result as
-  self-reviewed, not independently reviewed.
+- Treat missing subagent capability as a hard stop for this skill, not
+  a cue to simulate independent review locally.
 
 Use
 [`references/topology-playbook.md`](./references/topology-playbook.md)
-when you need the topology matrix, the serialized fallback recipe,
-artifact-specific review lenses, or stalled-loop recovery.
+when you need the topology matrix, delegation gate, artifact-specific
+review lenses, or stalled-loop recovery.
 
 ## Execution Rules
 
@@ -116,8 +122,11 @@ Treat roles as capabilities, not product names:
 - A coding owner may edit files directly or return a patch for the main
   agent to apply.
 - A review owner critiques only.
+- Use this skill only when those roles can be assigned to isolated
+  subagent passes.
 - If one system alternates between coding and review, separate those
-  passes with distinct prompts, threads, or self-review phases.
+  passes with distinct prompts or threads and do not count them as
+  independent review unless they are delegated.
 - If owners do not share the same worktree state, define the base ref,
   diff anchor, or reconciliation contract before work starts.
 
@@ -141,8 +150,8 @@ Keep review passes isolated and machine-checkable:
   one confirming check the main agent can run.
 - Reject style-only comments, vague discomfort, duplicate wording
   without new evidence, and "might be wrong" speculation.
-- If you must self-review serially, keep earlier accepted summaries out
-  of the next review unless validating a named issue.
+- Do not replace an independent review pass with local self-review and
+  still claim this skill was followed.
 
 ### Acceptance And Triage
 
@@ -191,9 +200,9 @@ For each iteration:
 
 If the same accepted issue survives two loops, change the topology:
 tighten the brief, shrink the boundary, rotate the owner or reviewer,
-deepen verification, or fall back to one-owner serialized repair.
+deepen verification, or stop and choose a different workflow.
 
-If serialized repair still cannot clear a `blocking` or `major` issue,
+If delegated repair still cannot clear a `blocking` or `major` issue,
 stop looping and report the work as blocked with the latest evidence,
 verification status, and next decision needed.
 
@@ -224,8 +233,8 @@ All are true:
 
 If an automated check is infeasible, replace it with one explicit manual
 verification note for that boundary and record the limitation. If the
-loop ran without independent reviewers, say so explicitly before
-closing.
+required independent review passes could not be run, stop and report
+that this skill was not applicable.
 
 ## Final Closeout
 
@@ -242,8 +251,7 @@ Final status should always make these explicit:
 - whether the original request is satisfied;
 - which verification ran and what passed, failed, or was infeasible;
 - the final disposition of each accepted issue id;
-- whether review confidence came from independent reviewers or
-  serialized self-review;
+- whether review confidence came from isolated delegated reviewers;
 - any residual risks that still matter.
 
 ## Common Failure Modes
@@ -256,7 +264,7 @@ Avoid these:
 - widening scope mid-loop without re-briefing the boundary;
 - reopening already-disproved issues because wording changed;
 - closing after "looks good" without a concrete verification rerun;
-- presenting serialized self-review as if it were independent review;
+- claiming independent review without isolated delegated reviewers;
 - looping forever instead of reporting a real block.
 
 ## Read Next
@@ -266,7 +274,7 @@ Avoid these:
   for scope, coding, review, loop-ledger, and final-status templates.
 - Use
   [`references/topology-playbook.md`](./references/topology-playbook.md)
-  for mode selection, topology sizing, serialized fallbacks, and
+  for mode selection, topology sizing, delegation gates, and
   artifact-specific review.
 - Use
   [`references/review-triage.md`](./references/review-triage.md)
