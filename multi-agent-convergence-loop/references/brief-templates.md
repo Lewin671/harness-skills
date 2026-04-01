@@ -8,23 +8,30 @@ Use these templates when you want the loop to be more repeatable and less prompt
 Request: <what the user wants changed>
 
 Constraints:
-- <repo, environment, or deadline constraint>
+- <repo, environment, deadline, or policy constraint>
 
 Acceptance target:
 - <what must be true to finish>
+
+Artifact type:
+- <code | docs | prompt | config | mixed>
 
 Target scope:
 - Files/modules/diff: <explicit scope>
 
 Verification plan:
-1. <test, command, or manual check>
-2. <test, command, or manual check>
+1. <test, command, render check, sample scenario, or manual check>
+2. <test, command, render check, sample scenario, or manual check>
+
+Capabilities:
+- Delegation: <parallel delegates | serialized fallback>
+- Edit mode: <direct edits | patch proposals | mixed>
+- Review isolation: <separate threads/prompts available or not>
 
 Topology:
 - Mode: <implementation-first | audit-first>
-- Execution: <delegated loop | serialized fallback>
 - Coding owners: <owner -> boundary>
-- Review coverage: <whole diff, subsystem, integration, etc.>
+- Review coverage: <whole diff, subsystem, integration, artifact usability, etc.>
 ```
 
 ## Coding brief
@@ -34,6 +41,10 @@ Task: <feature, fix, or issue-group summary>
 
 Ownership:
 - Files/modules: <explicit boundary>
+- Integration surfaces not to break: <interfaces, callers, configs, docs, etc.>
+
+Change mode:
+- <edit directly | propose patch for main agent to apply>
 
 Requirements:
 1. <required behavior>
@@ -41,8 +52,13 @@ Requirements:
 
 Verification:
 1. <test or command>
-2. <manual check if needed>
+2. <manual or artifact check if needed>
 3. If a planned automated check is infeasible, replace it with one explicit manual check per changed area and note the residual risk.
+
+Context packet:
+- Relevant files/diff: <paths or diff>
+- Invariants/interfaces: <what must stay true>
+- Helpful commands: <build/test/lint/render commands>
 
 Constraints:
 - Other agents may be active; do not revert unrelated edits.
@@ -56,9 +72,12 @@ Constraints:
 Review the target scope independently.
 
 Focus on:
-1. Bugs and regressions.
-2. Missing tests or unsafe assumptions.
-3. Integration risks.
+1. Bugs, regressions, or prompt/config failures.
+2. Missing verification or unsafe assumptions.
+3. Integration or operator-usage risks.
+
+Optional lens:
+- <correctness | integration | verification | usability>
 
 Output rules:
 1. Findings first, ordered by severity.
@@ -84,6 +103,9 @@ Accepted issue groups:
 Non-blocking notes:
 - <note>
 - <note>
+
+Convergence action if needed:
+- <tighten brief | rotate owner | serialize boundary | no extra loop needed>
 ```
 
 Severity semantics:
