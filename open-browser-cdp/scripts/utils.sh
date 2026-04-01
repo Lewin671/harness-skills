@@ -45,3 +45,6 @@ if [ -z "$BROWSER_BIN" ]; then
     echo "Error: Could not find a supported browser binary. Please set BROWSER_BIN in $CONFIG_FILE" >&2
     exit 1
 fi
+
+# Shared path for the browser PID file
+export PID_FILE="$CONFIG_DIR/browser.pid"

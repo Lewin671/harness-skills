@@ -35,6 +35,7 @@ agent-browser --cdp 9222 click @e1
 - **必须带上 --cdp 参数**：操作 `agent-browser` 时，必须显式指定 `--cdp 9222`。**严禁**在没有 `--cdp` 的情况下直接使用 `agent-browser open`。
 - **环境配置**：Skill 会自动加载 `~/.config/open-browser-cdp/config.env` 中的环境变量。如果需要修改路径或端口，请手动编辑该文件。
 - **环境隔离**：不同的 CDP 端口对应不同的浏览器实例和数据目录（若已配置）。
+- **安全关闭**：`close.sh` 仅关闭当前 CDP 端口（`BROWSER_PORT`）所对应的浏览器进程，**不会**影响其他 Chrome 窗口或不同 Profile 的实例。关闭逻辑优先通过 `~/.config/open-browser-cdp/browser.pid` 定位进程；若 PID 文件不存在，则通过端口反查进程，绝不使用 `pkill` 按名称批量杀进程。
 
 ## 常用命令汇总
 
