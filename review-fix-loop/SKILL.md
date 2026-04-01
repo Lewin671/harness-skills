@@ -2,36 +2,52 @@
 name: review-fix-loop
 description: Use this skill when a code change, diff, PR-like patch,
   skill, doc, prompt, config, or runbook needs repeated review,
-  triage, and fix cycles until only verified issues remain. Use it
-  when acceptance criteria and ownership boundaries are concrete, and
-  when the work may need subagents or serialized local review passes
-  to converge.
+  triage, fix, and verification loops until only verified issues or
+  explicit residual risks remain. Use it when acceptance criteria and
+  ownership boundaries are concrete, and when the work may need
+  isolated reviewers or serialized local review passes to converge.
 ---
 
 # Review-Fix Loop
 
-Use this skill when the main agent should coordinate a repeatable
-review-fix loop instead of doing all work in one pass.
+Use this skill when the main agent should run a repeatable
+review-triage-fix-verify loop instead of treating the task as one-pass
+implementation.
 
 The goal is convergence, not comment volume: keep only
-high-confidence problems, route them to the right owner, and stop only
-when accepted issues are gone and verification has passed.
+high-confidence, anchored problems; feed only accepted issues into the
+next fix pass; and stop only when verification and closeout are
+explicit.
 
-## Default Operating Posture
+## Quick Start
 
-Use these defaults unless the task clearly needs something else:
+1. Write a short scope brief with the request, constraints, acceptance
+   target, artifact type, scope boundary, verification anchors, and
+   environment limits. Use
+   [`references/brief-templates.md`](./references/brief-templates.md).
+2. Choose the mode:
+   - `audit-first` for an existing diff, skill, doc, prompt, config,
+     runbook, or other in-flight artifact.
+   - `implementation-first` for concrete new work with no meaningful
+     existing diff.
+   - `mixed handoff` when you must audit existing work before adding
+     follow-on changes.
+3. Choose the smallest topology that can converge:
+   - non-code artifacts: one coding owner plus two review passes;
+   - code or mixed artifacts: one coding owner plus three review passes;
+   - no safe delegation: one owner plus serialized fresh review passes.
+4. Run isolated review, accept only findings with concrete anchors, and
+   group accepted findings into stable issue ids.
+5. Send narrowed fix briefs that reference issue ids, ownership
+   boundary, evidence, base state, and verification to rerun.
+6. Re-run boundary-specific verification, then re-run review, update the
+   loop ledger, and close only when no accepted `blocking` or `major`
+   issues remain.
 
-- Prefer `audit-first` when improving an existing diff, skill, prompt,
-  doc, config, runbook, or other in-flight artifact.
-- Default topology for docs, prompts, configs, and runbooks:
-  one coding owner plus two review passes.
-- Default topology for code or mixed artifacts:
-  one coding owner plus three review passes.
-- If no safe subagent or parallel primitive exists, run serialized local
-  passes: one coding pass followed by at least two fresh review passes.
-  Treat the result as self-reviewed, not independently reviewed.
-- Prefer fewer accepted findings with stronger anchors over long lists
-  of speculative comments.
+If you are improving a skill itself, default to `audit-first` and treat
+the artifact as a mixed doc-plus-prompt surface: review the trigger
+wording, decision order, defaults, reference map, and closeout
+contract, not just prose quality.
 
 ## Use It When
 
@@ -39,57 +55,71 @@ Use it for:
 
 1. New feature work where the user wants review-driven convergence.
 2. Bug fixes or refactors that cross modules or integration points.
-3. Existing diffs, PR-like changes, or audits that need review-fix-review
-   until clean.
-4. Non-code artifacts such as docs, prompts, configs, or runbooks when
-   the acceptance target is concrete.
+3. Existing diffs, PR-like changes, or audits that need
+   review-fix-review until clean.
+4. Skills, docs, prompts, configs, or runbooks where the acceptance
+   target is concrete and operator behavior matters.
 
 Do not use it when the task is exploratory, the acceptance target is
 unclear, or safe ownership boundaries cannot be identified yet.
 
-## Start Here
+## Required Inputs
 
-1. Restate the request, constraints, acceptance target, artifact type,
-   and verification anchors in one short scope brief. Use
-   [`references/brief-templates.md`](./references/brief-templates.md)
-   for the canonical scope and fix-brief format.
-2. Choose the execution shape:
-   - `implementation-first` for concrete new work with no meaningful
-     existing diff.
-   - `audit-first` for an existing diff, a PR-like change, or a broad
-     area where defects must be discovered before ownership can be
-     assigned cleanly.
-   - `mixed handoff` for in-flight work: audit the existing diff first,
-     then implement accepted follow-on changes inside the chosen
-     boundary.
-3. Map the environment before delegating:
-   - can delegates edit directly or only propose patches;
-   - what base state, diff anchor, or branch each delegate must use;
-   - can you run them in parallel;
-   - can you isolate review from implementation;
-   - can delegates inspect diffs and line numbers or only named files.
-4. Pick the smallest topology that can converge reliably. If the choice
-   is obvious, use the defaults above instead of designing a custom
-   topology.
-5. Give each owner the smallest context packet that still lets it
-   succeed.
+Before starting the loop, make sure you can state:
+
+- the request and acceptance target;
+- the artifact type and exact review boundary;
+- the most relevant verification anchors;
+- whether owners can edit directly or only propose patches;
+- whether review can be isolated from implementation;
+- the base state, branch, ref, or diff anchor to use.
+
+If one of these is missing, inspect the environment and infer it before
+delegating. Do not start multi-pass review against a vague boundary.
+
+## Default Operating Posture
+
+Use these defaults unless the task clearly needs something else:
+
+- Prefer `audit-first` for any in-flight artifact.
+- Prefer fewer accepted findings with stronger anchors over long lists
+  of plausible comments.
+- Keep coding ownership narrow and explicit.
+- Keep review isolated: separate prompts, threads, or fresh phases.
+- If no safe subagent or parallel primitive exists, use serialized local
+  review with at least two fresh review phases and report the result as
+  self-reviewed, not independently reviewed.
 
 Use
 [`references/topology-playbook.md`](./references/topology-playbook.md)
-when you need the decision matrix for topology, environment limits,
-artifact-specific review, or stalled-loop recovery.
+when you need the topology matrix, the serialized fallback recipe,
+artifact-specific review lenses, or stalled-loop recovery.
 
-## Capability Rules
+## Execution Rules
+
+### Mode Behavior
+
+Execute the chosen mode literally:
+
+- `implementation-first`: assign the coding owner first, let the change
+  exist, then review the resulting diff or boundary.
+- `audit-first`: review the target scope first, normalize accepted
+  findings into issue ids, then send fix briefs.
+- `mixed handoff`: audit the in-flight artifact first, then switch to
+  `implementation-first` only for accepted follow-on work inside the
+  chosen boundary.
+
+### Capability Rules
 
 Treat roles as capabilities, not product names:
 
 - A coding owner may edit files directly or return a patch for the main
   agent to apply.
 - A review owner critiques only.
-- If one system must alternate between coding and review roles, separate
-  those passes with distinct prompts, threads, or self-review phases.
-- If delegates do not share the same worktree state, define the base
-  ref, diff anchor, or reconciliation contract before work starts.
+- If one system alternates between coding and review, separate those
+  passes with distinct prompts, threads, or self-review phases.
+- If owners do not share the same worktree state, define the base ref,
+  diff anchor, or reconciliation contract before work starts.
 
 Keep handoffs tight:
 
@@ -97,9 +127,9 @@ Keep handoffs tight:
   pasting long transcripts;
 - do not dump raw reviewer output into coding briefs;
 - tell each coding owner what is in scope, what is out of scope, and
-  what verification it must run.
+  what verification must rerun.
 
-## Review Hygiene
+### Review Rules
 
 Keep review passes isolated and machine-checkable:
 
@@ -109,34 +139,23 @@ Keep review passes isolated and machine-checkable:
   useful, and the exact output contract.
 - A valid finding includes a severity, one concrete evidence anchor, and
   one confirming check the main agent can run.
-- Reject style-only comments, vague discomfort, and duplicate wording
-  without new evidence.
-- If you must self-review serially, use fresh prompts or phases and keep
-  earlier accepted summaries out of the next review unless validating a
-  named issue.
+- Reject style-only comments, vague discomfort, duplicate wording
+  without new evidence, and "might be wrong" speculation.
+- If you must self-review serially, keep earlier accepted summaries out
+  of the next review unless validating a named issue.
 
-## Core Loop
-
-### Implementation-first
-
-1. Assign the coding owners.
-2. Wait for code or artifact changes to exist.
-3. Run isolated review passes on the resulting diff or target scope.
-
-### Audit-first
-
-1. Run isolated review passes on the target scope first.
-2. Normalize confirmed findings into issue groups.
-3. Assign each accepted issue group to one coding owner.
-
-## Acceptance Rules
+### Acceptance And Triage
 
 Feed only accepted findings back into the next coding pass.
 
-Accept a finding only when it has a concrete anchor such as a spec
-mismatch, failing command, reproducible manual behavior, direct
-code-path evidence, a broken rendered artifact, or a prompt/config
-failure the main agent can verify.
+Accept a finding only when it has a concrete anchor such as:
+
+- a spec mismatch;
+- a failing command or check;
+- reproducible manual behavior;
+- direct code-path evidence;
+- a broken rendered artifact;
+- a prompt, config, or skill failure the main agent can verify.
 
 Do not accept a finding just because:
 
@@ -148,13 +167,13 @@ Do not accept a finding just because:
 
 Use
 [`references/review-triage.md`](./references/review-triage.md)
-to merge overlap, assign severity, and decide whether another loop is
-required.
+to merge overlap, assign severity, decide dispositions, and determine
+whether another loop is required.
 
 Rewrite accepted findings into a clean fix brief instead of forwarding
 raw reviewer output.
 
-## Fix Loop
+### Fix Loop
 
 For each iteration:
 
@@ -162,27 +181,36 @@ For each iteration:
 2. Carry forward each issue id with a disposition of `open`, `fixed`,
    `disproved`, or `downgraded`.
 3. Map each accepted open issue group to one coding owner.
-4. Send narrowed fix briefs with the exact issue id, evidence, ownership
-   boundary, base state, and verification to rerun.
+4. Send narrowed fix briefs with the exact issue id, evidence, boundary,
+   base state, and verification to rerun.
 5. Re-run boundary-specific verification.
 6. Re-run isolated review on the updated result.
-7. Write a short loop ledger that records each issue id, its current
+7. Write a short loop ledger that records each issue id, its
    disposition, what verification ran, and whether another loop is
    required.
 
-If the same accepted issue survives two loops, do not keep the topology
-unchanged. Tighten the brief, shrink the boundary, rotate the owner or
-reviewer, deepen verification, or fall back to one-owner serialized
-repair.
+If the same accepted issue survives two loops, change the topology:
+tighten the brief, shrink the boundary, rotate the owner or reviewer,
+deepen verification, or fall back to one-owner serialized repair.
 
-If one-owner serialized repair still cannot clear a blocking or major
-issue, stop looping and report the work as blocked with the last
-evidence, verification status, and the next decision the user must make.
+If serialized repair still cannot clear a `blocking` or `major` issue,
+stop looping and report the work as blocked with the latest evidence,
+verification status, and next decision needed.
 
-If independent reviewers are unavailable and the loop is running as
-serialized self-review, say that explicitly in the final status and
-carry it as a residual risk rather than presenting the result as fully
-independently reviewed.
+## Output Contracts
+
+Make these artifacts explicit during the run:
+
+- scope brief before substantive work;
+- review brief for each review pass;
+- accepted issue-group summary after triage;
+- loop ledger after each fix iteration;
+- final status before closing.
+
+Use
+[`references/brief-templates.md`](./references/brief-templates.md)
+for the canonical shapes. If the task is small, shorten the wording, but
+do not drop the fields that make the loop auditable.
 
 ## Stop Only When
 
@@ -194,12 +222,12 @@ All are true:
 3. No singleton finding is severe enough to promote.
 4. Required verification passed for each changed boundary.
 
-If a planned automated check is infeasible, replace it with one explicit
-manual verification note for that boundary and record the limitation.
-If the loop ran without independent reviewers, include an explicit
-single-agent review limitation before closing.
+If an automated check is infeasible, replace it with one explicit manual
+verification note for that boundary and record the limitation. If the
+loop ran without independent reviewers, say so explicitly before
+closing.
 
-## Final Verification
+## Final Closeout
 
 Before closing:
 
@@ -218,15 +246,29 @@ Final status should always make these explicit:
   serialized self-review;
 - any residual risks that still matter.
 
+## Common Failure Modes
+
+Avoid these:
+
+- mixing implementation and review in the same pass when isolation is
+  possible;
+- handing raw reviewer transcripts to the coding owner;
+- widening scope mid-loop without re-briefing the boundary;
+- reopening already-disproved issues because wording changed;
+- closing after "looks good" without a concrete verification rerun;
+- presenting serialized self-review as if it were independent review;
+- looping forever instead of reporting a real block.
+
 ## Read Next
 
 - Use
   [`references/brief-templates.md`](./references/brief-templates.md)
-  for scope, coding, review, and issue-group briefs.
+  for scope, coding, review, loop-ledger, and final-status templates.
 - Use
   [`references/topology-playbook.md`](./references/topology-playbook.md)
-  for mode selection, topology sizing, environment-specific fallbacks,
-  and artifact-specific review.
+  for mode selection, topology sizing, serialized fallbacks, and
+  artifact-specific review.
 - Use
   [`references/review-triage.md`](./references/review-triage.md)
-  for overlap handling, severity rules, and loop decisions.
+  for overlap handling, severity rules, dispositions, and loop
+  decisions.

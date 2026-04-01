@@ -1,7 +1,7 @@
 # Brief Templates
 
-Use these templates when you want the loop to be more repeatable
-and less prompt-by-prompt improvised.
+Use these templates when you want the loop to stay repeatable instead
+of prompt-by-prompt improvised.
 
 ## Contents
 
@@ -9,6 +9,8 @@ and less prompt-by-prompt improvised.
 - [Coding or fix brief](#coding-or-fix-brief)
 - [Review brief](#review-brief)
 - [Accepted issue-group summary](#accepted-issue-group-summary)
+- [Loop ledger](#loop-ledger)
+- [Final status](#final-status)
 
 ## Scope brief
 
@@ -22,7 +24,7 @@ Acceptance target:
 - <what must be true to finish>
 
 Artifact type:
-- <code | docs | prompt | config | mixed>
+- <code | docs | prompt | config | skill | mixed>
 
 Target scope:
 - Files/modules/diff: <explicit scope>
@@ -109,7 +111,7 @@ Target scope:
 - <files, modules, or diff>
 
 Artifact type:
-- <code | docs | prompt | config | mixed>
+- <code | docs | prompt | config | skill | mixed>
 
 Review mode:
 - <independent review | serialized self-review pass N>
@@ -118,12 +120,12 @@ Do not use prior reviewer conclusions or accepted issue summaries as
 evidence unless the task is explicitly to validate one named issue.
 
 Focus on:
-1. Bugs, regressions, or prompt/config failures.
+1. Bugs, regressions, instruction conflicts, or prompt/config failures.
 2. Missing verification or unsafe assumptions.
-3. Integration or operator-usage risks.
+3. Integration, operator-usage, or AI-execution risks.
 
 Optional lens:
-- <correctness | integration | verification | usability>
+- <correctness | integration | verification | usability | trigger quality>
 
 Output rules:
 1. Findings first, ordered by severity.
@@ -175,6 +177,53 @@ Review confidence:
 
 Stop decision:
 - <another loop required | ready to close | blocked pending decision>
+```
+
+## Loop ledger
+
+```text
+Loop ledger: <number>
+
+Work completed:
+- <what changed this loop>
+
+Issue status:
+- <IG-001> - <open | fixed | disproved | downgraded> - <one-line reason>
+- <IG-002> - <open | fixed | disproved | downgraded> - <one-line reason>
+
+Verification rerun:
+1. <command or manual check> - <pass | fail | infeasible>
+2. <command or manual check> - <pass | fail | infeasible>
+
+Review result:
+- <no new meaningful findings | new issue ids created | follow-up needed>
+
+Next action:
+- <another fix loop | close | blocked pending decision>
+```
+
+## Final status
+
+```text
+Request satisfied:
+- <yes | no | partially>
+
+Verification:
+1. <command or manual check> - <pass | fail | infeasible>
+2. <command or manual check> - <pass | fail | infeasible>
+
+Accepted issue ids:
+- <IG-001> - <fixed | disproved | downgraded> - <closure evidence>
+- <IG-002> - <fixed | disproved | downgraded> - <closure evidence>
+
+Review confidence:
+- <independent review | serialized self-review>
+
+Residual risks:
+- <risk or none>
+
+Close decision:
+- <ready to close | blocked | needs user decision>
 ```
 
 Severity semantics:

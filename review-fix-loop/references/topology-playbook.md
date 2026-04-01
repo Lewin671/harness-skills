@@ -8,14 +8,15 @@ right loop shape.
 - [Choose The Mode](#choose-the-mode)
 - [Choose The Topology](#choose-the-topology)
 - [Map The Environment](#map-the-environment)
+- [Default Serialized Recipe](#default-serialized-recipe)
 - [Artifact-Specific Review](#artifact-specific-review)
 - [Keep Reviews Independent](#keep-reviews-independent)
 - [If The Loop Stalls](#if-the-loop-stalls)
 
 ## Choose The Mode
 
-- Use `implementation-first` when the request is concrete and there is no
-  meaningful existing diff.
+- Use `implementation-first` when the request is concrete and there is
+  no meaningful existing diff.
 - Use `audit-first` when you are reviewing an existing diff, a PR-like
   change, or a broad subsystem where defects must be found before safe
   ownership can be assigned.
@@ -27,7 +28,7 @@ right loop shape.
 
 ## Choose The Topology
 
-- Single-file or low-risk docs, prompts, configs, or runbooks:
+- Single-file or low-risk docs, prompts, configs, runbooks, or skills:
   one coding owner plus two review passes.
 - Medium- or high-risk code changes:
   one coding owner plus three review passes.
@@ -68,6 +69,28 @@ when ownership overlaps.
   do not feed prior reviewer conclusions into the next review pass
   unless the task is to validate a specific named issue.
 
+## Default Serialized Recipe
+
+Use this when no safe delegation primitive exists or when isolation is
+too weak for multi-owner work:
+
+1. Write the scope brief and record the exact boundary.
+2. Run review pass A with a `correctness` or `integration` lens.
+3. Run review pass B with a `verification` or `usability` lens.
+4. Group accepted findings into issue ids.
+5. Fix only the accepted open issues.
+6. Re-run the boundary verification.
+7. Run one fresh closeout review pass on the updated result.
+8. Update the loop ledger and decide whether another loop is required.
+
+For code or mixed artifacts with real regression risk, prefer four
+passes in total:
+
+1. audit pass A;
+2. audit pass B;
+3. fix plus verification;
+4. closeout review with an `integration` or `regression` lens.
+
 ## Artifact-Specific Review
 
 - Docs and runbooks:
@@ -79,6 +102,10 @@ when ownership overlaps.
 - Configs:
   validate with the target tool when possible and check for unsafe
   defaults or missing integration updates.
+- Skills:
+  check trigger wording, decision order, fallback behavior, output
+  contracts, reference discoverability, and whether an agent could act
+  without guessing.
 - Mixed code plus docs:
   assign at least one review pass to cross-check that the docs and the
   implemented behavior still match, and list which adjacent artifacts
@@ -92,8 +119,8 @@ slice.
 
 - Give reviewers the target scope and a lens, not the conclusions of
   other reviewers.
-- Prefer separate threads, clean prompts, or fresh agents for each review
-  pass.
+- Prefer separate threads, clean prompts, or fresh phases for each
+  review pass.
 - Ask for findings first, ordered by severity, with one evidence anchor
   and one confirming check per finding.
 - If true independence is unavailable, mark that limitation in the scope

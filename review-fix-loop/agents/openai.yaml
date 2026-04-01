@@ -1,4 +1,4 @@
 interface:
   display_name: "Review-Fix Loop"
-  short_description: "Repeated review, triage, and fix until verified clean"
-  default_prompt: "Use $review-fix-loop when a diff, patch, skill, doc, prompt, config, runbook, or other in-flight artifact needs repeated review, triage, and fix passes until no accepted blocking or major issues remain."
+  short_description: "Review, triage, fix, and verify until converged"
+  default_prompt: "Use $review-fix-loop when a diff, patch, skill, doc, prompt, config, runbook, or other in-flight artifact needs repeated review, triage, fix, and verification passes until no accepted blocking or major issues remain and any residual risks are explicit."
