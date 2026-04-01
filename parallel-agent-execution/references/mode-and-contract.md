@@ -1,10 +1,33 @@
 # Mode And Contract
 
-Use this reference when the main `SKILL.md` is not enough to decide
-between serialization, patch-only parallelism, and isolated worktrees,
-or when you need a reusable contract template.
+Use this reference when the main `SKILL.md` is not enough to choose a
+mode quickly, when you need a reusable contract template, or when an
+integration failure needs an explicit recovery path.
 
-## Preflight
+## Fast Mode Check
+
+Use this decision order:
+
+1. If helpers can work from files or diffs and do not need direct edits
+   or a runnable checkout, choose `patch-only parallel`.
+2. Otherwise, if direct edits or a runnable checkout are needed but one
+   live tree is safer because ownership overlaps, dirty local state
+   matters, or setup is fragile or heavy, choose
+   `shared-tree serialized`.
+3. Otherwise, if each coding owner needs direct edits, each owner has a
+   clear path boundary, each owner branch/worktree can be created from
+   the exact same `base sha`, and owner-local verification in parallel
+   is materially useful, choose `isolated worktree parallel`.
+4. If you are unsure whether isolated setup is safe or worth the setup
+   cost, fall back to `shared-tree serialized`.
+5. If you are unsure whether parallel help is worth the coordination
+   cost at all, reduce the owner count or switch to one-owner execution.
+
+Do not choose `isolated worktree parallel` just because it is
+available. Choose it only when it reduces total risk or total cycle
+time.
+
+## Preflight Checklist
 
 Before delegation, confirm:
 
@@ -17,32 +40,14 @@ Before delegation, confirm:
 6. Which files stay main-agent owned, especially lockfiles, root build
    configs, CI workflows, or shared generated outputs.
 7. Whether local setup is lightweight, moderate, or heavy.
-8. Whether the repo defines an agent policy under a documented location
+8. Whether submodules, generated outputs, shared prepared artifacts, or
+   mutable caches need an explicit single-writer or read-only policy.
+9. Whether the repo defines an agent policy under a documented location
    such as `AGENTS.md`, `.agents/`, or `docs/`.
-9. Whether submodules, generated outputs, or mutable caches need an
-   explicit per-owner policy before parallel setup.
 
-If base state, ownership, or dirty-state dependency is ambiguous, do not
-open worktrees yet. Tighten the boundary first.
-
-## Ordered Mode Choice
-
-Use this decision order:
-
-1. If helpers can work from files or diffs and do not need direct local
-   edits, choose `patch-only parallel`.
-2. Otherwise, if the task depends on dirty local state, ownership still
-   overlaps, or the environment is too heavy or fragile for isolated
-   setup, choose `shared-tree serialized`.
-3. Otherwise, if each owner needs direct edits, each owner has a clear
-   path boundary, and owner-local verification in parallel is materially
-   useful, choose `isolated worktree parallel`.
-4. If the answer is still ambiguous, fall back to
-   `patch-only parallel`.
-
-Do not choose `isolated worktree parallel` just because it is
-available. Choose it only when it reduces total risk or total cycle
-time.
+If base state, ownership, dirty-state dependency, or shared-artifact
+policy is ambiguous, do not open worktrees yet. Tighten the boundary
+first.
 
 ## Contract Templates
 
@@ -113,14 +118,21 @@ Ownership:
 Branching:
 - Naming: agent/<task-slug>/<owner-id>
 - Worktree path: <worktree-root>/wt-<repo-slug>-<task-slug>-<owner-id>
+- Collision policy: <remove stale state first | add recorded suffix>
+- Create each owner branch/worktree from: <exact base sha>
 
 Environment:
 - Bootstrap level: <minimal | partial | full>
-- Shared caches: <policy>
+- Shared caches: <read-only shared | isolated per owner | avoid>
 - Heavy directories to avoid duplicating: <paths or none>
-- Submodule policy: <none | init per owner | shared prepared state>
+- Submodule policy: <none | init per owner | single-writer read-only prepared state>
 - Generated output policy:
-  <main-agent owned | rebuild per owner | shared artifact step>
+  <main-agent owned | rebuild per owner | single-writer artifact step with read-only consumers>
+
+Owner handoff:
+- owner-a -> <branch name + tip commit sha | patch artifact>
+- owner-b -> <branch name + tip commit sha | patch artifact>
+- Cleanup readiness: <must leave clean worktree | retention rule if not clean>
 
 Verification:
 1. <owner-local check>
@@ -131,9 +143,16 @@ Reconciliation:
 - Main agent integrates in sequence.
 - Conflict or drift: stop and re-baseline.
 
+Failure recovery:
+- If post-integration verification fails, stop integrating more owners.
+- Retain the failing branch, worktree, or patch artifact for diagnosis.
+- Undo the attempted integration on the target branch if that is safe.
+- Re-brief the boundary, switch mode, or report the task as blocked.
+
 Cleanup:
-- Remove worktrees after integration.
-- Delete short-lived branches after merge unless retained for diagnosis.
+- Remove worktrees after integration unless intentionally retained.
+- Delete isolated caches after success unless intentionally retained.
+- Delete merged short-lived branches after merge unless retained for diagnosis.
 ```
 
 ## Minimal Worktree Runbook
@@ -143,16 +162,23 @@ Use this when `isolated worktree parallel` is chosen:
 1. Freeze the exact `base sha`.
 2. Confirm the task does not depend on dirty local edits that are absent
    from a fresh worktree.
-3. Create one short-lived branch and one worktree per coding owner.
-4. Bootstrap only the minimum environment each owner needs.
-5. Delegate with explicit path ownership plus local verification.
-6. Integrate one owner at a time, re-running verification after each
+3. Resolve branch or worktree naming collisions before creation. Remove
+   stale state first or choose a recorded suffix.
+4. Create each owner branch and worktree from that exact `base sha`.
+5. Bootstrap only the minimum environment each owner needs.
+6. Delegate with explicit path ownership, handoff artifact, and local
+   verification.
+7. Integrate one owner at a time, re-running verification after each
    integration.
-7. Remove finished worktrees and delete merged short-lived branches
-   unless intentionally retained.
+8. If integration verification fails, retain the failing owner state for
+   diagnosis, undo the attempted integration if safe, and stop before
+   the next owner.
+9. Remove finished worktrees and isolated caches after success unless
+   intentionally retained.
+10. Delete merged short-lived branches unless intentionally retained.
 
-If you cannot satisfy step 2 safely, do not force worktrees. Use
-`shared-tree serialized` or `patch-only parallel`.
+If you cannot satisfy step 2, 3, or 4 safely, do not force worktrees.
+Use `shared-tree serialized` or `patch-only parallel`.
 
 ## Repo Override Guidance
 
@@ -166,5 +192,5 @@ defaults from this skill. A useful override can define:
 - files that always require main-agent ownership.
 
 Good overrides tighten defaults. They do not replace the need to record
-an exact `base sha`, explicit ownership boundaries, and reconciliation
-rules.
+an exact `base sha`, explicit ownership boundaries, a deterministic
+handoff artifact, and recovery rules when integration fails.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Parallel Agent Execution"
+  short_description: "Choose safe parallel delegation in one repo"
+  default_prompt: "Use $parallel-agent-execution to choose the safest way to delegate parallel repo work across patch proposals, a serialized live tree, or isolated worktrees, then write the execution contract before starting."
