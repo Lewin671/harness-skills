@@ -12,6 +12,7 @@ Typical matches:
 2. One reviewer flags missing cleanup and another flags the resulting leak or duplicate listener.
 3. Two reviewers identify the same missing test coverage for the same failure mode.
 
+Merge duplicate missing-test comments into the underlying behavior defect when they cover the same failure mode.
 Do not merge findings only because they touch the same file. Distinct defects in one file stay separate.
 
 ## Severity heuristic
