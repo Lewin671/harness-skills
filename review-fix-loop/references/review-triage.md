@@ -1,24 +1,19 @@
 # Review Triage
 
-Use this reference when review outputs overlap, conflict, or keep
-generating noise across loops.
+Use this reference when review outputs overlap, conflict, or generate
+too much noise.
 
-## Shared-Problem Heuristic
+## Accept Only Anchored Findings
 
-Count findings as the same issue when they describe the same underlying
-defect, even if the wording or cited lines differ.
+Accept a finding only when the main agent can verify one concrete
+anchor, such as:
 
-Do not accept a finding on overlap alone. Shared reviewer agreement
-raises confidence, but at least one concrete anchor is still required,
-such as:
-
-- a spec mismatch;
-- a failing command or check;
+- spec mismatch;
+- failing command or check;
 - reproducible manual behavior;
-- direct code-path evidence the main agent can confirm;
-- a broken rendered artifact;
-- a prompt, config, or skill behavior failure the main agent can
-  reproduce.
+- direct code-path evidence;
+- broken rendered or produced artifact;
+- prompt, config, or skill behavior failure.
 
 For docs, prompts, configs, and skills, treat these as concrete anchors
 too:
@@ -26,85 +21,90 @@ too:
 - contradictory instructions;
 - a missing decision rule that forces guessing;
 - an impossible or unverifiable step;
-- a closing condition that cannot actually be checked.
+- a stop condition that cannot actually be checked.
 
-Merge duplicate missing-test comments into the underlying behavior
-defect when they cover the same failure mode.
+Do not accept a finding because it sounds plausible or because multiple
+reviewers repeated it without an anchor.
+
+## Merge By Underlying Defect
+
+Count findings as one issue when they describe the same underlying
+defect, even if they cite different lines or use different wording.
 
 Do not merge findings only because they touch the same file. Distinct
-defects in one file stay separate.
+defects stay separate.
 
-## Severity Heuristic
+Merge missing-test comments into the underlying behavior defect when
+they describe the same failure mode.
 
-Escalate even a single-reviewer finding when it is concrete and high
-impact:
+## Severity Rules
+
+Promote even a singleton finding when it is concrete and high impact:
 
 1. Broken main-flow behavior.
-2. Incorrect persistence, export, or destructive behavior.
+2. Data loss, destructive behavior, or persistence mistakes.
 3. Security, permission, or privacy mistakes.
 4. Failing checks tied to the change.
-5. Incorrect docs, prompts, configs, or skills that would mislead the
-   operator or break expected usage.
+5. Docs, prompts, configs, or skills that would mislead the operator or
+   break expected use.
 
 Use severity labels this way:
 
-1. `blocking`: must be fixed, disproven, or downgraded before the loop
-   can stop.
-2. `major`: should enter the next fix loop unless the main agent
-   explicitly downgrades it with rationale.
-3. `minor`: keep as a non-blocking note unless it is nearly free and
-   clearly safe to fold into another fix.
+- `blocking`: must be fixed, disproved, or downgraded before closing.
+- `major`: should enter the next fix loop unless explicitly downgraded.
+- `minor`: keep as a note unless it is nearly free and clearly safe.
 
 ## Disposition Rules
 
-Use dispositions this way:
+Use these dispositions:
 
-1. `open`: accepted and still needs work.
-2. `fixed`: closure evidence and rerun verification support the fix.
-3. `disproved`: the claim was investigated and the evidence does not
-   hold.
-4. `downgraded`: the issue is real but no longer blocks completion; keep
-   the rationale and residual risk explicit.
+- `open`: accepted and still needs work.
+- `fixed`: closure evidence plus rerun verification support the fix.
+- `disproved`: the claim was investigated and the evidence does not
+  hold.
+- `downgraded`: the issue is real but no longer blocks completion; keep
+  the rationale and residual risk explicit.
 
-Do not mark an issue `fixed` based only on a patch existing. Require
-closure evidence plus the relevant verification rerun.
-
+Do not mark an issue `fixed` just because a patch exists.
 Do not mark an issue `disproved` just because a reviewer stopped
-mentioning it. The main agent still needs a concrete reason.
+mentioning it.
 
-## Aggregation Output
+## Output Shape
 
-Summarize reviewer feedback in three buckets:
+Summarize review output in three buckets:
 
 1. Accepted blocking issues.
 2. Accepted major issues.
 3. Non-blocking notes.
 
-For each accepted issue group, record a stable issue id, owner,
-secondary affected boundaries when relevant, disposition, severity,
-evidence, closure evidence when applicable, and required verification.
-Reuse the same issue id across loops unless the main agent decides it is
-a genuinely different defect. Feed only accepted open issues back into
-the next coding pass.
+For each accepted issue group, record:
+
+- stable issue id such as `IG-001`;
+- owner or primary boundary;
+- severity;
+- disposition;
+- evidence;
+- closure evidence when applicable;
+- required verification.
+
+Reuse the same issue id across loops unless it is genuinely a different
+defect.
 
 ## Loop Checklist
 
 For each iteration:
 
 1. Freeze the accepted issue list for that loop.
-2. Send narrowed fix briefs rather than raw reviewer output.
-3. Re-run the verification tied to the changed boundary.
+2. Send narrowed fix briefs instead of raw reviewer output.
+3. Re-run verification for the changed boundary.
 4. Refresh independent review on the updated result.
-5. Re-baseline the issue list by disposition before deciding on another
+5. Re-baseline issue ids by disposition before deciding on another
    loop.
-6. Carry accepted issue ids forward so stalled-loop detection survives
-   wording changes.
-7. If verification reports conflict, rerun the main-agent check or treat
-   the disagreement as blocking until resolved.
-8. If the same accepted issue survives two loops, treat the loop as
-   stalled and change topology, ownership, or verification depth before
-   continuing.
-9. If independent delegated review cannot be maintained, stop and
-   report that this skill is not applicable in the current environment.
-10. If delegated repair still leaves a blocking or major issue open,
-    stop and report the work as blocked.
+6. Treat the loop as stalled when the same accepted issue survives two
+   loops.
+7. If verification reports conflict, rerun the main-agent check or keep
+   the issue open until resolved.
+8. If independent delegated review cannot be maintained, stop and
+   report that this skill is not applicable.
+9. If delegated repair still leaves a `blocking` or `major` issue open,
+   stop and report the work as blocked.
