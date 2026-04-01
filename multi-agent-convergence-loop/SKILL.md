@@ -35,9 +35,19 @@ Before spawning agents:
 3. Resolve material ambiguity before delegating if the result would otherwise be hard to review.
 4. Decide whether the work is `implementation-first` or `audit-first`.
 5. Pick the subagent or delegation tools that exist in the current environment. Keep the workflow portable; do not assume one specific tool name.
-6. If the environment has no usable delegation or subagent primitive, do not use this skill as-is. Fall back to a simpler single-agent flow and tell the user about the limitation.
+6. If the environment has no usable delegation or subagent primitive, switch to the serialized fallback in this skill and tell the user that the loop will run locally rather than through subagents.
 
 Use `implementation-first` when there is no meaningful existing diff and the acceptance target is concrete. Use `audit-first` when you are reviewing an existing change, a PR-like diff, or a broad subsystem where defects must be discovered before ownership can be assigned cleanly.
+
+### Serialized fallback
+
+When no delegation primitive exists, keep the same convergence rules but run them serially:
+
+1. Write the same scope brief and ownership boundaries you would have sent to subagents.
+2. Do one coding pass at a time inside one explicit boundary.
+3. Run fresh review passes after each coding pass. Use separate prompts, threads, or clearly separated self-review phases so each pass is as independent as the environment allows.
+4. Aggregate only findings that clear the normal evidence bar.
+5. Keep the same stop condition and final verification requirements before closing.
 
 ## Default topology
 
@@ -109,15 +119,17 @@ Do not let every reviewer inspect every file if the repository is large and the 
 
 Only feed accepted findings back into coding loops.
 
-Accept a finding when at least one of these is true:
+Accept a finding only when it has a concrete anchor such as a spec mismatch, failing command, reproducible manual failure, direct code-path evidence confirmed by the main agent, or local reproduction by the main agent. Reviewer overlap is useful, but consensus alone is not enough.
 
-1. Two or more reviewers independently identify the same underlying defect.
-2. One reviewer reports a clearly severe issue such as broken core behavior, a reproducible crash, data loss or corruption, a security or privacy exposure, or failing tests tied to the change.
-3. The finding is directly supported by a spec mismatch, failing command, or local reproduction by the main agent.
+Treat a finding as accepted when one of these is true:
+
+1. Two or more reviewers independently identify the same underlying defect and at least one concrete anchor exists.
+2. One reviewer reports a clearly severe issue such as broken core behavior, a reproducible crash, data loss or corruption, a security or privacy exposure, or failing tests tied to the change, and the main agent can confirm the anchor.
+3. The main agent can directly verify the finding from the spec, code, or verification results even without reviewer overlap.
 
 Reject or defer findings that are only style preferences, speculative refactors, duplicate wording for the same issue, or unsupported hypotheses.
 
-Group findings by underlying defect, not by wording or exact line number. Record the owner, severity, evidence, and required verification for each accepted issue group. Use [`references/review-triage.md`](./references/review-triage.md) when overlap is not obvious or when another loop is being considered.
+Group findings by underlying defect, not by wording or exact line number. Record the owner, severity, evidence, and required verification for each accepted issue group. Use `blocking` for issues that must be resolved before completion, `major` for issues that should enter the next fix loop unless the main agent explicitly downgrades them with rationale, and `minor` for non-blocking notes that stay out of the loop by default. Use [`references/review-triage.md`](./references/review-triage.md) when overlap is not obvious or when another loop is being considered.
 Rewrite accepted findings into a clean fix brief instead of dumping raw reviewer output back onto coding agents.
 
 ## Fix loop
@@ -140,9 +152,10 @@ Refresh review agents as needed to preserve independence. A fresh review pass is
 
 Stop only when all are true:
 
-1. No accepted issue groups remain.
-2. No singleton finding is severe enough to block completion.
-3. Relevant tests or checks have passed, or any unrun verification is explicitly called out.
+1. No accepted `blocking` issue groups remain.
+2. No accepted `major` issue groups remain unless the main agent explicitly downgrades them to non-blocking notes with rationale.
+3. No singleton finding is severe enough to promote into a blocking or major issue group.
+4. Required verification for each changed boundary has passed. If a planned automated check is infeasible, replace it with one explicit manual verification note for that boundary and record the limitation.
 
 If reviewers still produce comments but none clear the acceptance bar, treat them as non-blocking notes rather than another forced loop.
 
@@ -155,7 +168,7 @@ Before closing:
 3. Confirm the original request is satisfied.
 4. Report residual risks, especially around untested integrations or manual-only flows.
 
-If no reliable automated check exists, record one explicit manual verification note per changed area. If coding agents report conflicting verification results, rerun the main-agent check or treat the disagreement as blocking until resolved.
+If a planned automated check is infeasible, replace it with one explicit manual verification note per changed area and record the limitation. If a required check was feasible but was not run, treat that as blocking until it is resolved. If coding agents report conflicting verification results, rerun the main-agent check or treat the disagreement as blocking until resolved.
 
 ## Response rhythm
 

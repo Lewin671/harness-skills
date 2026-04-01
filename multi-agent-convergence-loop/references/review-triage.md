@@ -6,6 +6,8 @@ Use this reference to merge independent review outputs into issue groups.
 
 Count findings as the same underlying problem when they overlap on the defect, not necessarily on the wording.
 
+Do not accept a finding on overlap alone. Shared reviewer agreement raises confidence, but at least one concrete anchor is still required, such as a spec mismatch, failing verification, reproducible manual behavior, or direct code-path evidence confirmed by the main agent.
+
 Typical matches:
 
 1. Two reviewers say the same branch can throw or return the wrong value.
@@ -26,13 +28,19 @@ Escalate even a single-reviewer finding when it is concrete and high impact:
 
 Leave low-confidence speculation out of the next iteration unless another reviewer independently reinforces it.
 
+Use severity labels this way:
+
+1. `blocking`: must be fixed, disproven, or downgraded before the loop can stop.
+2. `major`: should enter the next fix loop unless the main agent explicitly downgrades it with rationale.
+3. `minor`: keep as a non-blocking note unless it is nearly free and clearly safe to fold into another fix.
+
 ## Aggregation output
 
 Summarize reviewer feedback in three buckets:
 
-1. Accepted shared issues.
-2. Accepted severe singleton issues.
-3. Non-blocking singleton notes.
+1. Accepted blocking issues.
+2. Accepted major issues.
+3. Non-blocking notes.
 
 Feed only the accepted issues back into the next coding pass.
 
@@ -54,4 +62,4 @@ For each iteration:
 5. Re-baseline the issue list before deciding on another loop.
 6. If verification reports conflict, rerun the main-agent check or treat the disagreement as blocking until resolved.
 
-Stop when no accepted issue groups remain, no singleton finding is severe enough to block completion, and relevant verification has passed or any unrun checks are called out explicitly.
+Stop when no accepted `blocking` issue groups remain, no accepted `major` issue groups remain unless explicitly downgraded with rationale, no singleton finding is severe enough to promote, and required verification has passed for each changed boundary. If a planned automated check is infeasible, replace it with an explicit manual verification note for that boundary and record the limitation.
