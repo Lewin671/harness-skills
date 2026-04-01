@@ -1,293 +1,178 @@
 ---
 name: multi-agent-convergence-loop
-description: Use this skill when the main agent should run a managed implementation-review-fix loop across one or more coding and review agents, accepting only high-confidence findings and repeating until the result converges.
+description: Use this skill when the main agent should run a managed
+  implementation-review-fix loop across one or more coding and review
+  agents or isolated local passes for new features, cross-module fixes,
+  PR-like diffs, audits, or concrete non-code artifacts, accepting only
+  high-confidence findings and repeating until the result converges,
+  when the acceptance target and ownership boundaries are concrete.
 ---
 
 # Multi-Agent Convergence Loop
 
-Use this skill when the main agent should orchestrate a repeatable convergence
-loop instead of doing all coding directly in one pass.
+Use this skill when the main agent should coordinate a repeatable
+review-fix loop instead of doing all work in one pass.
 
-The goal is convergence, not comment volume: keep only high-confidence problems,
-route them to the right owner, re-review the updated result, and stop only when
-no accepted issues remain.
+The goal is convergence, not comment volume: keep only
+high-confidence problems, route them to the right owner, and stop only
+when accepted issues are gone and verification has passed.
 
-## Main-agent role
-
-The main agent owns scope, topology, capability mapping, review triage, stop/go
-decisions, and final verification.
-
-Treat roles as capabilities, not product names:
-
-- A coding owner may edit files directly or return a patch for the main agent to
-  apply.
-- A review owner critiques only. Do not mix review and implementation in the
-  same pass unless a tiny local fix is clearly safer than another handoff.
-- If one system must alternate between coding and review roles, separate those
-  passes with distinct prompts, threads, or self-review phases.
-
-## When to use this
+## Use It When
 
 Use it for:
 
 1. New feature work where the user wants review-driven convergence.
-2. Bug fixes or refactors that span modules or integration points.
-3. Existing diffs or PR-like changes that should be reviewed, fixed, and
-   re-reviewed until clean.
-4. Full-project or subsystem audits followed by targeted repairs.
-5. Non-code artifacts such as docs, prompts, configs, or runbooks when the
-   acceptance target is concrete.
+2. Bug fixes or refactors that cross modules or integration points.
+3. Existing diffs, PR-like changes, or audits that need review-fix-review
+   until clean.
+4. Non-code artifacts such as docs, prompts, configs, or runbooks when
+   the acceptance target is concrete.
 
-Do not use it when the task is still exploratory, the acceptance target is
-unclear, or the codebase is too unknown to assign safe ownership.
+Do not use it when the task is exploratory, the acceptance target is
+unclear, or safe ownership boundaries cannot be identified yet.
 
-## Preconditions
+## Start Here
 
-Before delegating:
-
-1. Restate the request, constraints, and acceptance target in one compact brief.
-2. Inspect the codebase or artifact enough to identify likely files, risky
-   integrations, and the verification anchors that matter.
-3. Classify the task shape:
-   - `implementation-first` for concrete new work with no meaningful existing
-     diff.
-   - `audit-first` for an existing diff, a PR-like change, or a broad area where
-     defects must be discovered before ownership can be assigned cleanly.
-4. Map the environment:
+1. Restate the request, constraints, acceptance target, artifact type,
+   and verification anchors in one scope brief. Use
+   [`references/brief-templates.md`](./references/brief-templates.md)
+   for the canonical scope and fix-brief format.
+2. Choose the execution shape:
+   - `implementation-first` for concrete new work with no meaningful
+     existing diff.
+   - `audit-first` for an existing diff, a PR-like change, or a broad
+     area where defects must be discovered before ownership can be
+     assigned cleanly.
+   - `mixed handoff` for in-flight work: audit the existing diff first,
+     then implement accepted follow-on changes inside the chosen
+     boundary.
+3. Map the environment before delegating:
    - can delegates edit directly or only propose patches;
+   - what base state, diff anchor, or branch each delegate must use;
    - can you run them in parallel;
-   - can you keep review passes isolated;
+   - can you isolate review from implementation;
    - can delegates inspect diffs and line numbers or only named files.
-5. Choose the execution mode that fits those capabilities. Keep the workflow
-   portable; do not assume one specific tool or thread model.
-6. If the environment has no usable delegation primitive, switch to the
-   serialized fallback and tell the user that the loop will run locally rather
-   than through subagents.
+4. Pick the smallest topology that can converge reliably.
+5. Give each owner the smallest context packet that still lets it
+   succeed.
 
-### Context hygiene
+Use
+[`references/topology-playbook.md`](./references/topology-playbook.md)
+when you need the decision matrix for topology, environment limits,
+artifact-specific review, or stalled-loop recovery.
 
-Give each owner the smallest context packet that still lets it succeed:
+## Capability Rules
 
-- point to files, diffs, commands, and invariants instead of pasting large
-  transcripts;
-- include only the interfaces and neighboring files that matter to that owner;
-- keep raw reviewer output out of coding briefs unless the quote itself is the
-  evidence.
+Treat roles as capabilities, not product names:
 
-Smaller briefs usually improve both independence and fix quality.
+- A coding owner may edit files directly or return a patch for the main
+  agent to apply.
+- A review owner critiques only.
+- If one system must alternate between coding and review roles, separate
+  those passes with distinct prompts, threads, or self-review phases.
+- If delegates do not share the same worktree state, define the base
+  ref, diff anchor, or reconciliation contract before work starts.
 
-### Serialized fallback
+Keep handoffs tight:
 
-When no delegation primitive exists, keep the same convergence rules but run
-them serially:
+- point to files, diffs, commands, interfaces, and invariants instead of
+  pasting long transcripts;
+- do not dump raw reviewer output into coding briefs;
+- tell each coding owner what is in scope, what is out of scope, and
+  what verification it must run.
 
-1. Write the same scope brief and ownership boundaries you would have sent to
-   delegates.
-2. Do one coding pass at a time inside one explicit boundary.
-3. Run at least two clearly separated review passes after each coding pass.
-4. Aggregate only findings that clear the normal evidence bar.
-5. Keep the same stop condition and final verification requirements before
-   closing.
-
-## Topology selection
-
-Start from the smallest topology that can still converge reliably.
-
-- Default to one coding owner plus three independent reviewers for medium- or
-  high-risk code changes.
-- Use one coding owner plus two reviewers for single-file work or lower-risk
-  docs, prompts, configs, or runbooks.
-- Add more coding owners only when ownership boundaries are explicit and their
-  write sets stay disjoint.
-- For large repos, split review coverage by subsystem or artifact slice and add
-  one integration review on the combined impact.
-- If the environment lacks parallel edits, file isolation, or stable thread
-  separation, prefer one coding owner and serialize the rest of the loop.
-
-Good multi-coder splits:
-
-1. Frontend vs backend.
-2. API layer vs persistence layer.
-3. Independent packages or services.
-
-Bad multi-coder splits:
-
-1. Several coders editing the same module without explicit ownership.
-2. Artificial parallelism where the next step depends on one shared blocking
-   change.
-3. Parallel edits in a shared worktree when the environment cannot isolate or
-   merge them safely.
-
-## Ownership briefs
-
-Start each loop with a scope brief that records the request, constraints,
-acceptance target, target files or modules, and the verification plan.
-
-For each coding owner, include:
-
-1. The exact behavior to implement or defect to fix.
-2. File or module ownership, plus any integration surfaces it must not break.
-3. Change mode: direct edit or patch proposal.
-4. Required tests, checks, or manual verification.
-5. A small context packet: request summary, relevant files or diff, invariants,
-   and useful commands.
-6. An output contract: changed files, verification result, and remaining risks.
-
-For each review owner, ask for:
-
-1. Findings first, ordered by severity.
-2. Concrete bugs, regressions, missing tests, unsafe assumptions, prompt
-   failures, or integration risks.
-3. File and line references where possible.
-4. No deference to other reviewers.
-5. One evidence anchor and one confirming check for each finding.
-
-Optionally give reviewers different lenses such as correctness, integration
-risk, or verification gaps, but do not preload them with each other's
-conclusions.
-
-Use [`references/brief-templates.md`](./references/brief-templates.md) when you
-want ready-to-send scope, coding, review, or issue-group formats.
-
-## First pass
+## Core Loop
 
 ### Implementation-first
 
-1. Spawn the needed coding owners.
+1. Assign the coding owners.
 2. Wait for code or artifact changes to exist.
-3. Run independent review owners on the resulting diff or target scope.
+3. Run isolated review passes on the resulting diff or target scope.
 
 ### Audit-first
 
-1. Run independent review owners on the target scope first.
-2. Normalize the accepted findings into issue groups.
+1. Run isolated review passes on the target scope first.
+2. Normalize confirmed findings into issue groups.
 3. Assign each accepted issue group to one coding owner.
 
-For full-project audits, prefer whole-project reviewers plus one cross-cutting
-integration review, or per-slice reviewers plus one reviewer on the combined
-impact.
+## Acceptance Rules
 
-For docs, configs, prompts, or runbooks, review for correctness, operator
-usability, and downstream failure modes rather than inventing synthetic test
-gaps.
+Feed only accepted findings back into the next coding pass.
 
-## Review aggregation
+Accept a finding only when it has a concrete anchor such as a spec
+mismatch, failing command, reproducible manual behavior, direct
+code-path evidence, a broken rendered artifact, or a prompt/config
+failure the main agent can verify.
 
-Only feed accepted findings back into coding loops.
+Use
+[`references/review-triage.md`](./references/review-triage.md)
+to merge overlap, assign severity, and decide whether another loop is
+required.
 
-Accept a finding only when it has a concrete anchor such as a spec mismatch,
-failing command, reproducible manual failure, direct code-path evidence
-confirmed by the main agent, a broken rendered artifact, or a prompt/config
-behavior the main agent can verify.
+Rewrite accepted findings into a clean fix brief instead of forwarding
+raw reviewer output.
 
-Treat a finding as accepted when one of these is true:
-
-1. Two or more reviewers independently identify the same underlying defect and
-   at least one concrete anchor exists.
-2. One reviewer reports a clearly severe issue and the main agent can confirm
-   the anchor.
-3. The main agent can directly verify the finding from the spec, code, artifact,
-   or verification results even without reviewer overlap.
-
-Reject or defer style preferences, speculative refactors, duplicates, and
-unsupported hypotheses.
-
-Group findings by underlying defect, not by wording or exact line number. Record
-the owner, severity, evidence, and required verification for each accepted issue
-group. Use `blocking` for issues that must be resolved before completion,
-`major` for issues that should enter the next fix loop unless explicitly
-downgraded with rationale, and `minor` for non-blocking notes.
-
-Rewrite accepted findings into a clean fix brief instead of dumping raw reviewer
-output back onto coding owners.
-
-If the same accepted issue survives two loops, do not keep the loop unchanged.
-Tighten the brief, rotate the owner or reviewer, shrink the boundary, or fall
-back to one-owner serialized repair.
-
-Use [`references/review-triage.md`](./references/review-triage.md) when overlap
-is not obvious or when another loop is being considered.
-
-## Fix loop
+## Fix Loop
 
 For each iteration:
 
-1. Keep only the accepted issue groups.
-2. Map each group to one coding owner.
-3. Send each coding owner a narrowed fix brief containing only the accepted
-   issues in its boundary.
-4. Re-run the verification tied to the changed boundary.
-5. Re-run independent review on the updated result.
+1. Freeze the accepted issue list for that loop.
+2. Carry forward each issue id with a disposition of `open`, `fixed`,
+   `disproved`, or `downgraded`.
+3. Map each accepted open issue group to one coding owner.
+4. Send narrowed fix briefs with the exact issue id, evidence, ownership
+   boundary, base state, and verification to rerun.
+5. Re-run boundary-specific verification.
+6. Re-run isolated review on the updated result.
 
-If multiple coding owners are active, prefer parallel fixes only when their
-write sets stay disjoint. If accepted issues cross ownership boundaries, handle
-them in sequence and re-baseline before the next split.
+If the same accepted issue survives two loops, do not keep the topology
+unchanged. Tighten the brief, shrink the boundary, rotate the owner or
+reviewer, deepen verification, or fall back to one-owner serialized
+repair.
 
-Prefer reusing the same coding-owner thread when the context still helps. Start
-a fresh thread when the context has drifted, the ownership boundary changes, or
-the owner repeatedly misses the same accepted issue.
+If one-owner serialized repair still cannot clear a blocking or major
+issue, stop looping and report the work as blocked with the last
+evidence, verification status, and the next decision the user must make.
 
-Refresh review owners as needed to preserve independence. A fresh review pass is
-usually better than teaching an old reviewer what to think.
+If independent reviewers are unavailable and the loop is running as
+serialized self-review, say that explicitly in the final status and
+carry it as a residual risk rather than presenting the result as fully
+independently reviewed.
 
-After any overlapping or integration-sensitive changes, create one integration
-checkpoint before the next review pass.
+## Stop Only When
 
-## Stop condition
-
-Stop only when all are true:
+All are true:
 
 1. No accepted `blocking` issue groups remain.
-2. No accepted `major` issue groups remain unless the main agent explicitly
-   downgrades them to non-blocking notes with rationale.
-3. No singleton finding is severe enough to promote into a blocking or major
-   issue group.
-4. Required verification for each changed boundary has passed. If a planned
-   automated check is infeasible, replace it with one explicit manual
-   verification note for that boundary and record the limitation.
+2. No accepted `major` issue groups remain unless they were explicitly
+   downgraded with rationale.
+3. No singleton finding is severe enough to promote.
+4. Required verification passed for each changed boundary.
 
-If reviewers still produce comments but none clear the acceptance bar, treat
-them as non-blocking notes rather than another forced loop.
+If a planned automated check is infeasible, replace it with one explicit
+manual verification note for that boundary and record the limitation.
+If the loop ran without independent reviewers, include an explicit
+single-agent review limitation before closing.
 
-## Final verification
+## Final Verification
 
 Before closing:
 
 1. Inspect the final diff or changed files yourself.
 2. Run the most relevant verification yourself when feasible.
 3. Confirm the original request is satisfied.
-4. Report residual risks, especially around untested integrations, manual-only
+4. Report residual risks, especially around integrations, manual-only
    flows, or artifact checks that could not be automated.
 
-For non-code artifacts, use explicit sample scenarios rather than vague
-reassurance. For example: render the doc, run the prompt against a sample input,
-or validate the config in the target tool.
+## Read Next
 
-If a planned automated check is infeasible, replace it with one explicit manual
-verification note per changed area and record the limitation. If a required
-check was feasible but was not run, treat that as blocking until it is resolved.
-If coding owners report conflicting verification results, rerun the main-agent
-check or treat the disagreement as blocking until resolved.
-
-## Response rhythm
-
-Use a compact orchestration pattern in the main thread:
-
-1. Confirm scope, acceptance target, and chosen topology.
-2. Announce ownership assignments and execution mode.
-3. Announce review pass.
-4. Summarize accepted issue groups and whether another fix loop is required.
-5. Finish with verification status and any non-blocking residual notes.
-
-## Example triggers
-
-1. "Use subagents to implement this across multiple modules, then keep reviewing
-   and fixing until there are no real issues left."
-2. "Do a whole-project audit with review agents, fix only high-confidence
-   findings, and repeat until clean."
-3. "I want multiple coding agents, but only accepted review findings should go
-   back into the next round."
-4. "Run a review-fix-review convergence loop for this feature instead of a
-   single implementation pass."
-5. "Review this PR, group only the confirmed problems, assign fixes by area, and
-   keep looping until the accepted issues are gone."
+- Use
+  [`references/brief-templates.md`](./references/brief-templates.md)
+  for scope, coding, review, and issue-group briefs.
+- Use
+  [`references/topology-playbook.md`](./references/topology-playbook.md)
+  for mode selection, topology sizing, environment-specific fallbacks,
+  and artifact-specific review.
+- Use
+  [`references/review-triage.md`](./references/review-triage.md)
+  for overlap handling, severity rules, and loop decisions.

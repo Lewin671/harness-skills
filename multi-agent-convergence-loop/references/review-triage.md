@@ -51,8 +51,12 @@ Summarize reviewer feedback in three buckets:
 2. Accepted major issues.
 3. Non-blocking notes.
 
-For each accepted issue group, record the owner, severity, evidence, and
-required verification. Feed only accepted issues back into the next coding pass.
+For each accepted issue group, record a stable issue id, owner,
+secondary affected boundaries when relevant, disposition, severity,
+evidence, closure evidence when applicable, and required verification.
+Reuse the same issue id across loops unless the main agent decides it is
+a genuinely different defect. Feed only accepted open issues back into
+the next coding pass.
 
 ## Loop checklist
 
@@ -62,8 +66,15 @@ For each iteration:
 2. Send narrowed fix briefs rather than raw reviewer output.
 3. Re-run the verification tied to the changed boundary.
 4. Refresh independent review on the updated result.
-5. Re-baseline the issue list before deciding on another loop.
-6. If verification reports conflict, rerun the main-agent check or treat the
+5. Re-baseline the issue list by disposition before deciding on another
+   loop.
+6. Carry accepted issue ids forward so stalled-loop detection survives
+   wording changes.
+7. If verification reports conflict, rerun the main-agent check or treat the
    disagreement as blocking until resolved.
-7. If the same accepted issue survives two loops, treat the loop as stalled and
+8. If the same accepted issue survives two loops, treat the loop as stalled and
    change topology, ownership, or verification depth before continuing.
+9. If the loop used serialized self-review instead of independent
+   reviewers, record that limitation in the final status.
+10. If serialized repair still leaves a blocking or major issue open,
+    stop and report the work as blocked.
