@@ -1,9 +1,9 @@
 ---
-name: worktree-parallel-execution
-description: Use this skill when multiple coding agents may need to edit files in parallel and the main agent must decide whether to isolate them with git worktrees, fall back to patch-only parallelism, or serialize the work. This skill defines a portable branch, ownership, environment, reconciliation, and cleanup contract that can be reused across repositories.
+name: parallel-agent-execution
+description: Use this skill when multiple coding agents may need to work in parallel and the main agent must choose between shared-tree serialization, patch-only parallelism, or isolated git worktrees. This skill defines a portable execution, ownership, environment, reconciliation, and cleanup contract that can be reused across repositories.
 ---
 
-# Worktree Parallel Execution
+# Parallel Agent Execution
 
 Use this skill when parallel coding is desirable but shared-worktree
 edits would create avoidable conflicts.
