@@ -9,7 +9,7 @@ description: 使用此 Skill 启动一个开启了 CDP 的可见浏览器，使 
 
 ## 核心流程
 
-1. **启动浏览器**：必须先运行 `./scripts/open.sh`。这会启动一个可见窗口的浏览器（Headed Mode）。
+1. **启动浏览器**：必须先运行 `./scripts/open.sh`。这会启动一个可见窗口的浏览器（Headed Mode）。启动成功后会输出浏览器进程的 PID，可用于后续查看进程状态。
 2. **确认状态**：运行 `./scripts/status.sh` 确保 CDP 端口（默认 9222）已就绪。
 3. **连接控制**：使用 `agent-browser --cdp 9222 <command>` 进行网页操作。
 
@@ -21,7 +21,7 @@ description: 使用此 Skill 启动一个开启了 CDP 的可见浏览器，使 
 ## 与 agent-browser 配合使用示例
 
 ```bash
-# 启动浏览器并访问指定网页
+# 启动浏览器并访问指定网页（成功后会输出 Browser PID）
 ./scripts/open.sh https://github.com
 
 # 检查就绪状态
@@ -30,6 +30,9 @@ description: 使用此 Skill 启动一个开启了 CDP 的可见浏览器，使 
 # 通过 CDP 操作已打开的网页 (注意：必须加 --cdp 参数)
 agent-browser --cdp 9222 snapshot -i
 agent-browser --cdp 9222 click @e1
+
+# 查看浏览器进程状态（使用 open.sh 输出的 PID）
+ps -p <PID>
 ```
 ## 注意事项
 - **必须带上 --cdp 参数**：操作 `agent-browser` 时，必须显式指定 `--cdp 9222`。**严禁**在没有 `--cdp` 的情况下直接使用 `agent-browser open`。
@@ -40,7 +43,6 @@ agent-browser --cdp 9222 click @e1
 
 | 脚本 | 功能 |
 |-----------|---------|
-| `./scripts/open.sh [url]` | 启动：打开浏览器并启用 CDP |
+| `./scripts/open.sh [url]` | 启动：打开浏览器并启用 CDP，成功后输出浏览器进程 PID |
 | `./scripts/status.sh` | 检查：验证 CDP 端口是否可以被连接 |
-| `./scripts/close.sh` | 关闭：结束浏览器进程和相关会话 |
 
