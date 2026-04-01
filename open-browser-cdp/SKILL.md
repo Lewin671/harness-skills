@@ -42,5 +42,4 @@ agent-browser --cdp 9222 click @e1
 |-----------|---------|
 | `./scripts/open.sh [url]` | 启动：打开浏览器并启用 CDP |
 | `./scripts/status.sh` | 检查：验证 CDP 端口是否可以被连接 |
-| `./scripts/close.sh` | 关闭：结束浏览器进程和相关会话 |
 

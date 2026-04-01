@@ -55,6 +55,15 @@ echo "Waiting for CDP to respond on port $BROWSER_PORT..."
 MAX_RETRIES=30
 for ((i=1; i<=MAX_RETRIES; i++)); do
     if "$SCRIPT_DIR/status.sh" > /dev/null 2>&1; then
+        # 5. 记录精确 PID（仅通过 CDP 端口定位监听进程，避免影响其他浏览器实例）
+        CDP_PID=$(lsof -n -i "tcp:$BROWSER_PORT" -s TCP:LISTEN 2>/dev/null | awk 'NR==2 {print $2}')
+        if [ -n "$CDP_PID" ]; then
+            echo "$CDP_PID" > "$PID_FILE"
+            echo "Browser PID $CDP_PID saved to $PID_FILE"
+        else
+            echo "Warning: CDP is responding but could not determine browser PID via lsof." \
+                 "close.sh will fall back to port-based lookup." >&2
+        fi
         echo "Successfully launched browser."
         exit 0
     fi

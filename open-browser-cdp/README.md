@@ -60,3 +60,4 @@ agent-browser --cdp 9222 click @e1
 1. **避免冲突**：请确保在运行 `open.sh` 之前，没有其他浏览器实例正在使用同一个 `BROWSER_DATA_DIR`。
 2. **强制 CDP**：在使用 `agent-browser` 时，必须显式添加 `--cdp <port>` 参数。如果直接运行 `agent-browser open`，它会尝试启动内置浏览器，可能会因为 Profile 锁定而报错。
 3. **环境同步**：如果手动修改了配置文件中的端口，请确保在调用 `agent-browser` 时也使用相同的端口。
+4. **安全关闭**：`close.sh` 只关闭 `BROWSER_PORT` 对应的那个浏览器进程，不会波及其他窗口或不同 Profile 的 Chrome 实例。它先读取 `~/.config/open-browser-cdp/browser.pid`；若文件不存在，则通过端口反查进程，绝不使用按名称批量杀进程的方式。
