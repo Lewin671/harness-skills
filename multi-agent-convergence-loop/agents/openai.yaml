@@ -1,4 +1,0 @@
-interface:
-  display_name: "Multi-Agent Convergence Loop"
-  short_description: "Review-fix loops for delegated or local work"
-  default_prompt: "Use $multi-agent-convergence-loop to choose the smallest reliable topology, accept only concrete verifiable findings, and iterate delegated or serialized local review-fix loops until no accepted blocking or major issues remain."

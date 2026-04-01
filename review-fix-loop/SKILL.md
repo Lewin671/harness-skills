@@ -1,14 +1,14 @@
 ---
-name: multi-agent-convergence-loop
-description: Use this skill when the main agent should run a managed
-  implementation-review-fix loop across one or more coding and review
-  agents or isolated local passes for new features, cross-module fixes,
-  PR-like diffs, audits, or concrete non-code artifacts, accepting only
-  high-confidence findings and repeating until the result converges,
-  when the acceptance target and ownership boundaries are concrete.
+name: review-fix-loop
+description: Use this skill when a code change, diff, PR-like patch,
+  skill, doc, prompt, config, or runbook needs repeated review,
+  triage, and fix cycles until only verified issues remain. Use it
+  when acceptance criteria and ownership boundaries are concrete, and
+  when the work may need subagents or serialized local review passes
+  to converge.
 ---
 
-# Multi-Agent Convergence Loop
+# Review-Fix Loop
 
 Use this skill when the main agent should coordinate a repeatable
 review-fix loop instead of doing all work in one pass.
