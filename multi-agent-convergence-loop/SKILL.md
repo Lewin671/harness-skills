@@ -5,21 +5,15 @@ description: Use this skill when the user wants a managed subagent loop that can
 
 # Multi-Agent Convergence Loop
 
-Use this skill when the main agent should orchestrate a repeatable loop instead of doing the coding directly.
+Use this skill when the main agent should orchestrate a repeatable multi-agent loop instead of doing all coding directly.
 
-The goal is not "collect lots of comments." The goal is convergence: keep only high-confidence problems, route them to the right coding agent, re-review the updated result, and stop only when no accepted issues remain.
+The goal is convergence, not comment volume: keep only high-confidence problems, route them to the right coding owner, re-review the updated result, and stop only when no accepted issues remain.
 
 ## Main-agent role
 
-The main agent owns:
+The main agent owns scope control, file ownership, review triage, stop/go decisions, and final verification.
 
-1. Scope control.
-2. File and module ownership.
-3. Review triage.
-4. Stop/go decisions for another loop.
-5. Final verification and user-facing summary.
-
-Coding agents own implementation inside their assigned boundaries. Review agents own independent critique. Do not blur those roles unless a tiny local patch is faster and clearly safer than another handoff.
+Coding agents own implementation inside assigned boundaries. Review agents own independent critique. Keep those roles separate unless a tiny local patch is clearly safer than another handoff.
 
 ## When to use this
 
@@ -32,18 +26,23 @@ Use it for:
 
 Do not use it when the task is still exploratory, the acceptance target is unclear, or the codebase is too unknown to assign safe ownership.
 
-## Phase 1: Scope and topology
+## Preconditions
 
 Before spawning agents:
 
-1. Restate the request, constraints, and acceptance target in a compact brief.
+1. Restate the request, constraints, and acceptance target in one compact brief.
 2. Inspect the codebase enough to identify likely files, tests, risky integrations, and natural ownership boundaries.
-3. Decide whether the work is:
-   - `implementation-first`: code must be written before review.
-   - `audit-first`: review existing code or the whole project before assigning fixes.
-4. Choose the agent topology.
+3. Resolve material ambiguity before delegating if the result would otherwise be hard to review.
+4. Decide whether the work is `implementation-first` or `audit-first`.
+5. Pick the subagent or delegation tools that exist in the current environment. Keep the workflow portable; do not assume one specific tool name.
 
-Use one coding agent for narrow work. Use multiple coding agents only when the write sets are disjoint or can be cleanly sequenced.
+## Default topology
+
+Start from the smallest topology that can still converge reliably.
+
+- Default to one coding agent plus three independent review agents.
+- Add more coding agents only when ownership boundaries are explicit and their write sets stay disjoint.
+- Keep reviewers independent; light review bias is useful, but do not preload one reviewer with another reviewer's conclusions.
 
 Good multi-coder splits:
 
@@ -58,11 +57,13 @@ Bad multi-coder splits:
 2. Artificial parallelism where the next step depends on one shared blocking change.
 3. Splits based on reviewer opinion instead of code boundaries.
 
-## Phase 2: Create ownership briefs
+## Ownership briefs
 
-For each coding agent, write a concrete brief that includes:
+Start each loop with a scope brief that records the request, constraints, acceptance target, target files or modules, and the verification plan.
 
-1. Exact behavior to implement or defect to fix.
+For each coding agent, include:
+
+1. The exact behavior to implement or defect to fix.
 2. File or module ownership.
 3. Required tests, checks, or manual verification.
 4. Constraints:
@@ -71,8 +72,6 @@ For each coding agent, write a concrete brief that includes:
    - adapt to changes made by other agents;
    - report changed files, test results, and remaining risks.
 
-If using multiple coding agents, make ownership explicit enough that each file has one clear owner for the current loop.
-
 For each review agent, ask for:
 
 1. Findings first, ordered by severity.
@@ -80,21 +79,21 @@ For each review agent, ask for:
 3. File and line references where possible.
 4. No deference to other reviewers.
 
-Keep reviewers independent. Do not preload them with the conclusions of other reviewers.
+Use [`references/brief-templates.md`](./references/brief-templates.md) when you want a ready-to-send scope brief, coding brief, reviewer brief, or issue-group summary format.
 
-## Phase 3: Run the first pass
+## First pass
 
-### Implementation-first mode
+### Implementation-first
 
 1. Spawn the needed coding agents.
 2. Wait for code to exist.
 3. Run independent review agents on the resulting diff or target scope.
 
-### Audit-first mode
+### Audit-first
 
 1. Spawn independent review agents on the target scope first.
-2. Aggregate accepted findings into fix clusters.
-3. Assign those clusters to one or more coding agents.
+2. Normalize the accepted findings into issue groups.
+3. Assign each accepted issue group to one coding owner.
 
 For full-project audits, prefer one of these review patterns:
 
@@ -103,32 +102,22 @@ For full-project audits, prefer one of these review patterns:
 
 Do not let every reviewer inspect every file if the repository is large and the result will be shallow noise.
 
-## High-confidence acceptance bar
+## Review aggregation
 
 Only feed accepted findings back into coding loops.
 
 Accept a finding when at least one of these is true:
 
 1. Two or more reviewers independently identify the same underlying defect.
-2. One reviewer reports a clearly severe issue:
-   - broken core behavior;
-   - reproducible crash;
-   - data loss or corruption;
-   - security or privacy exposure;
-   - failing tests or obviously missing required coverage.
+2. One reviewer reports a clearly severe issue such as broken core behavior, a reproducible crash, data loss or corruption, a security or privacy exposure, or failing tests tied to the change.
 3. The finding is directly supported by a spec mismatch, failing command, or local reproduction by the main agent.
 
-Reject or defer findings that are only:
+Reject or defer findings that are only style preferences, speculative refactors, duplicate wording for the same issue, or unsupported hypotheses.
 
-1. Style preferences.
-2. Speculative refactors without a concrete defect.
-3. "Could be cleaner" comments.
-4. Duplicate wording for the same issue.
-5. Hypotheses that nobody can support with code, behavior, or tests.
+Group findings by underlying defect, not by wording or exact line number. Record the owner, severity, evidence, and required verification for each accepted issue group. Use [`references/review-triage.md`](./references/review-triage.md) when overlap is not obvious or when another loop is being considered.
+Rewrite accepted findings into a clean fix brief instead of dumping raw reviewer output back onto coding agents.
 
-Normalize reviewer output into issue groups. Group by underlying defect, not by wording or exact line number.
-
-## Phase 4: Fix loop
+## Fix loop
 
 For each iteration:
 
@@ -140,11 +129,7 @@ For each iteration:
 
 If multiple coding agents are active, prefer parallel fixes only when their write sets stay disjoint. If accepted issues cross ownership boundaries, handle them in sequence and re-baseline before the next split.
 
-Reuse the same coding agent thread when the context still helps. Spawn a fresh coding agent when:
-
-1. the thread has drifted;
-2. the ownership boundary changes;
-3. the agent repeatedly misses the same accepted issue.
+Prefer reusing the same coding agent thread when the context still helps. Spawn a fresh coding agent when the thread has drifted, the ownership boundary changes, or the agent repeatedly misses the same accepted issue.
 
 Refresh review agents as needed to preserve independence. A fresh review pass is usually better than teaching an old reviewer what to think.
 
@@ -166,17 +151,6 @@ Before closing:
 2. Run the most relevant tests or verification commands yourself when feasible.
 3. Confirm the original request is satisfied.
 4. Report residual risks, especially around untested integrations or manual-only flows.
-
-## Operating rules
-
-1. The main agent stays decisive. Do not dump raw reviewer output back onto coding agents.
-2. Accepted issues must be rewritten as a clean, deduplicated fix brief.
-3. Multiple coding agents are a scaling tool, not a default.
-4. Independence matters more than reviewer specialization, but light reviewer bias is fine:
-   - reviewer A: correctness and regressions;
-   - reviewer B: edge cases and tests;
-   - reviewer C: integration and maintainability risks.
-5. Convergence beats churn. Another loop is justified only by accepted findings.
 
 ## Response rhythm
 
