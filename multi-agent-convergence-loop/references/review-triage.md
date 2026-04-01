@@ -52,5 +52,6 @@ For each iteration:
 3. Re-run the verification tied to the changed boundary.
 4. Refresh independent review on the updated result.
 5. Re-baseline the issue list before deciding on another loop.
+6. If verification reports conflict, rerun the main-agent check or treat the disagreement as blocking until resolved.
 
 Stop when no accepted issue groups remain, no singleton finding is severe enough to block completion, and relevant verification has passed or any unrun checks are called out explicitly.

@@ -41,6 +41,7 @@ Requirements:
 Verification:
 1. <test or command>
 2. <manual check if needed>
+3. If no reliable automated check exists, use one explicit manual check per changed area and note the residual risk.
 
 Constraints:
 - Other agents may be active; do not revert unrelated edits.

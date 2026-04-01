@@ -35,6 +35,7 @@ Before spawning agents:
 3. Resolve material ambiguity before delegating if the result would otherwise be hard to review.
 4. Decide whether the work is `implementation-first` or `audit-first`.
 5. Pick the subagent or delegation tools that exist in the current environment. Keep the workflow portable; do not assume one specific tool name.
+6. If the environment has no usable delegation or subagent primitive, do not use this skill as-is. Fall back to a simpler single-agent flow and tell the user about the limitation.
 
 Use `implementation-first` when there is no meaningful existing diff and the acceptance target is concrete. Use `audit-first` when you are reviewing an existing change, a PR-like diff, or a broad subsystem where defects must be discovered before ownership can be assigned cleanly.
 
