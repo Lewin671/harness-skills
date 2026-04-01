@@ -31,7 +31,7 @@ export BROWSER_BIN="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 ./scripts/open.sh https://www.google.com
 ```
 
-脚本会自动检测系统中的 Google Chrome, Brave 或 Edge 浏览器。启动后，它会等待 CDP 端口就绪。
+脚本会自动检测系统中的 Google Chrome, Brave 或 Edge 浏览器。启动后，它会等待 CDP 端口就绪，成功后输出浏览器进程的 PID。
 
 ### 3. 使用 agent-browser 控制
 
@@ -45,14 +45,14 @@ agent-browser --cdp 9222 snapshot -i
 agent-browser --cdp 9222 click @e1
 ```
 
-### 4. 检查与关闭
+### 4. 检查状态
 
 ```bash
 # 检查 CDP 端口是否在线
 ./scripts/status.sh
 
-# 关闭浏览器进程及关联会话
-./scripts/close.sh
+# 查看浏览器进程状态（使用 open.sh 输出的 PID）
+ps -p <PID>
 ```
 
 ## 注意事项

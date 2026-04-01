@@ -19,13 +19,16 @@ fi
 if curl -s "http://localhost:$BROWSER_PORT/json/version" > /dev/null 2>&1; then
     echo "Port $BROWSER_PORT is already active."
     if "$SCRIPT_DIR/status.sh" > /dev/null 2>&1; then
+        BROWSER_PID=$(lsof -ti tcp:"$BROWSER_PORT" | head -1)
         echo "CDP is ready. No action needed."
+        echo "Browser PID: $BROWSER_PID"
         exit 0
     fi
 fi
 
 # 3. 启动浏览器
 echo "Launching browser..."
+BROWSER_PID=""
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
     # 在 macOS 上，使用 'open -n -a' 启动可以确保进程脱离当前 shell 进程组，不会被清理
@@ -47,6 +50,7 @@ else
       --no-default-browser-check \
       --no-sandbox \
       "$@" > /tmp/browser_cdp.log 2>&1 &
+    BROWSER_PID=$!
     disown
 fi
 
@@ -55,7 +59,12 @@ echo "Waiting for CDP to respond on port $BROWSER_PORT..."
 MAX_RETRIES=30
 for ((i=1; i<=MAX_RETRIES; i++)); do
     if "$SCRIPT_DIR/status.sh" > /dev/null 2>&1; then
+        # 若 PID 尚未获取（macOS 路径），通过监听端口的进程来查找
+        if [ -z "$BROWSER_PID" ]; then
+            BROWSER_PID=$(lsof -ti tcp:"$BROWSER_PORT" | head -1)
+        fi
         echo "Successfully launched browser."
+        echo "Browser PID: $BROWSER_PID"
         exit 0
     fi
     sleep 1
