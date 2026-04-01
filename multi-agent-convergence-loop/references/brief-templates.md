@@ -1,6 +1,7 @@
 # Brief Templates
 
-Use these templates when you want the loop to be more repeatable and less prompt-by-prompt improvised.
+Use these templates when you want the loop to be more repeatable
+and less prompt-by-prompt improvised.
 
 ## Scope brief
 
@@ -41,7 +42,8 @@ Task: <feature, fix, or issue-group summary>
 
 Ownership:
 - Files/modules: <explicit boundary>
-- Integration surfaces not to break: <interfaces, callers, configs, docs, etc.>
+- Integration surfaces not to break:
+  <interfaces, callers, configs, docs, etc.>
 
 Change mode:
 - <edit directly | propose patch for main agent to apply>
@@ -53,7 +55,9 @@ Requirements:
 Verification:
 1. <test or command>
 2. <manual or artifact check if needed>
-3. If a planned automated check is infeasible, replace it with one explicit manual check per changed area and note the residual risk.
+3. If a planned automated check is infeasible, replace it
+   with one explicit manual check per changed area and note
+   the residual risk.
 
 Context packet:
 - Relevant files/diff: <paths or diff>
@@ -91,7 +95,8 @@ Output rules:
 3. Ignore style-only comments.
 4. Do not defer to what other reviewers might think.
 5. Say explicitly if no meaningful findings were found.
-6. For each finding, include one evidence anchor and one confirming check the main agent can run.
+6. For each finding, include one evidence anchor and one
+   confirming check the main agent can run.
 ```
 
 ## Accepted issue-group summary
@@ -100,11 +105,13 @@ Output rules:
 Accepted issue groups:
 1. <issue> - owner: <agent or module>
    Severity: <blocking | major>
-   Evidence: <concrete anchor plus shared review overlap, severe singleton, or main-agent confirmation>
+   Evidence: <concrete anchor plus shared review overlap,
+   severe singleton, or main-agent confirmation>
    Verification: <tests/checks to rerun>
 2. <issue> - owner: <agent or module>
    Severity: <blocking | major>
-   Evidence: <concrete anchor plus shared review overlap, severe singleton, or main-agent confirmation>
+   Evidence: <concrete anchor plus shared review overlap,
+   severe singleton, or main-agent confirmation>
    Verification: <tests/checks to rerun>
 
 Non-blocking notes:
@@ -116,6 +123,10 @@ Convergence action if needed:
 ```
 
 Severity semantics:
+
 - `blocking`: must be fixed, disproven, or downgraded before completion.
-- `major`: send into the next fix loop unless the main agent explicitly downgrades it with rationale.
-- `minor`: keep as a non-blocking note rather than an accepted issue group unless it is nearly free and clearly safe to fold into another fix.
+- `major`: send into the next fix loop unless the main
+  agent explicitly downgrades it with rationale.
+- `minor`: keep as a non-blocking note rather than an
+  accepted issue group unless it is nearly free and clearly
+  safe to fold into another fix.
