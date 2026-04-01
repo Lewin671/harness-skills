@@ -129,7 +129,7 @@ Treat a finding as accepted when one of these is true:
 
 Reject or defer findings that are only style preferences, speculative refactors, duplicate wording for the same issue, or unsupported hypotheses.
 
-Group findings by underlying defect, not by wording or exact line number. Record the owner, severity, evidence, and required verification for each accepted issue group. Use `blocking` for issues that must be resolved before completion, `major` for issues that should enter the next fix loop unless the main agent explicitly downgrades them with rationale, and `minor` for non-blocking notes that stay out of the loop by default. Use [`references/review-triage.md`](./references/review-triage.md) when overlap is not obvious or when another loop is being considered.
+Group findings by underlying defect, not by wording or exact line number. Record the owner, severity, evidence, and required verification for each accepted issue group. Use `blocking` for issues that must be resolved before completion, and `major` for issues that should enter the next fix loop unless the main agent explicitly downgrades them with rationale. Keep `minor` findings as non-blocking notes rather than accepted issue groups unless they are nearly free and clearly safe to fold into another fix. Use [`references/review-triage.md`](./references/review-triage.md) when overlap is not obvious or when another loop is being considered.
 Rewrite accepted findings into a clean fix brief instead of dumping raw reviewer output back onto coding agents.
 
 ## Fix loop
