@@ -28,9 +28,9 @@ right loop shape.
 ## Choose The Topology
 
 - Single-file or low-risk docs, prompts, configs, or runbooks:
-  one coding owner plus two reviewers.
+  one coding owner plus two review passes.
 - Medium- or high-risk code changes:
-  one coding owner plus three reviewers.
+  one coding owner plus three review passes.
 - Several disjoint boundaries:
   one coding owner per boundary plus one integration review on the
   combined result.
@@ -60,8 +60,13 @@ when ownership overlaps.
   applying the next patch or fix brief.
 - No subagent primitive:
   keep the same rules, but run the loop as serialized local passes with
-  at least two clearly separated review phases after each coding pass.
+  at least two fresh review phases after each coding pass.
+  Change the review lens or prompt between passes so they are not
+  effectively duplicates.
   Treat the result as self-reviewed, not independently reviewed.
+- Weak review isolation:
+  do not feed prior reviewer conclusions into the next review pass
+  unless the task is to validate a specific named issue.
 
 ## Artifact-Specific Review
 

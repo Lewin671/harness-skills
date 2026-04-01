@@ -6,7 +6,7 @@ and less prompt-by-prompt improvised.
 ## Contents
 
 - [Scope brief](#scope-brief)
-- [Coding Or Fix Brief](#coding-or-fix-brief)
+- [Coding or fix brief](#coding-or-fix-brief)
 - [Review brief](#review-brief)
 - [Accepted issue-group summary](#accepted-issue-group-summary)
 
@@ -46,12 +46,17 @@ Topology:
 - Mode: <implementation-first | audit-first | mixed handoff>
 - Coding owners: <owner -> boundary>
 - Review coverage: <whole diff, subsystem, integration, artifact usability, etc.>
+- Review passes: <usually 2 for non-code, 3 for code or mixed>
 ```
 
-## Coding Or Fix Brief
+## Coding or fix brief
 
 ```text
 Task: <feature, fix, or issue-group summary>
+
+Issue ids addressed:
+- <IG-001>
+- <IG-002>
 
 Ownership:
 - Files/modules: <explicit boundary>
@@ -89,6 +94,7 @@ Constraints:
 
 Output:
 - Changed files or patch ids: <list>
+- Issue ids closed or updated: <list>
 - Base state used: <branch, ref, diff anchor, or worktree contract>
 - Verification: <ran | skipped | blocked> with result
 - Residual risks: <brief note>
@@ -98,6 +104,15 @@ Output:
 
 ```text
 Review the target scope independently.
+
+Target scope:
+- <files, modules, or diff>
+
+Artifact type:
+- <code | docs | prompt | config | mixed>
+
+Review mode:
+- <independent review | serialized self-review pass N>
 
 Do not use prior reviewer conclusions or accepted issue summaries as
 evidence unless the task is explicitly to validate one named issue.
@@ -118,11 +133,18 @@ Output rules:
 5. Say explicitly if no meaningful findings were found.
 6. For each finding, include one evidence anchor and one
    confirming check the main agent can run.
+7. Use this finding shape:
+   - Severity: <blocking | major | minor>
+   - Title: <short defect summary>
+   - Evidence: <concrete anchor>
+   - Confirming check: <command, scenario, or manual check>
 ```
 
 ## Accepted issue-group summary
 
 ```text
+Loop: <number>
+
 Accepted issue groups:
 1. <issue> - id: <IG-001> - owner: <agent or module>
    Disposition: <open | fixed | disproved | downgraded>
@@ -150,6 +172,9 @@ Convergence action if needed:
 
 Review confidence:
 - <independent review | serialized self-review with limitation noted>
+
+Stop decision:
+- <another loop required | ready to close | blocked pending decision>
 ```
 
 Severity semantics:

@@ -17,6 +17,22 @@ The goal is convergence, not comment volume: keep only
 high-confidence problems, route them to the right owner, and stop only
 when accepted issues are gone and verification has passed.
 
+## Default Operating Posture
+
+Use these defaults unless the task clearly needs something else:
+
+- Prefer `audit-first` when improving an existing diff, skill, prompt,
+  doc, config, runbook, or other in-flight artifact.
+- Default topology for docs, prompts, configs, and runbooks:
+  one coding owner plus two review passes.
+- Default topology for code or mixed artifacts:
+  one coding owner plus three review passes.
+- If no safe subagent or parallel primitive exists, run serialized local
+  passes: one coding pass followed by at least two fresh review passes.
+  Treat the result as self-reviewed, not independently reviewed.
+- Prefer fewer accepted findings with stronger anchors over long lists
+  of speculative comments.
+
 ## Use It When
 
 Use it for:
@@ -34,7 +50,7 @@ unclear, or safe ownership boundaries cannot be identified yet.
 ## Start Here
 
 1. Restate the request, constraints, acceptance target, artifact type,
-   and verification anchors in one scope brief. Use
+   and verification anchors in one short scope brief. Use
    [`references/brief-templates.md`](./references/brief-templates.md)
    for the canonical scope and fix-brief format.
 2. Choose the execution shape:
@@ -52,7 +68,9 @@ unclear, or safe ownership boundaries cannot be identified yet.
    - can you run them in parallel;
    - can you isolate review from implementation;
    - can delegates inspect diffs and line numbers or only named files.
-4. Pick the smallest topology that can converge reliably.
+4. Pick the smallest topology that can converge reliably. If the choice
+   is obvious, use the defaults above instead of designing a custom
+   topology.
 5. Give each owner the smallest context packet that still lets it
    succeed.
 
@@ -81,6 +99,22 @@ Keep handoffs tight:
 - tell each coding owner what is in scope, what is out of scope, and
   what verification it must run.
 
+## Review Hygiene
+
+Keep review passes isolated and machine-checkable:
+
+- Do not give one reviewer another reviewer's conclusions unless the
+  task is explicitly to validate one named issue.
+- Give each reviewer the target scope, artifact type, one review lens if
+  useful, and the exact output contract.
+- A valid finding includes a severity, one concrete evidence anchor, and
+  one confirming check the main agent can run.
+- Reject style-only comments, vague discomfort, and duplicate wording
+  without new evidence.
+- If you must self-review serially, use fresh prompts or phases and keep
+  earlier accepted summaries out of the next review unless validating a
+  named issue.
+
 ## Core Loop
 
 ### Implementation-first
@@ -104,6 +138,14 @@ mismatch, failing command, reproducible manual behavior, direct
 code-path evidence, a broken rendered artifact, or a prompt/config
 failure the main agent can verify.
 
+Do not accept a finding just because:
+
+- two reviewers said similar things without a concrete anchor;
+- it sounds plausible but cannot be verified from the artifact or
+  environment;
+- it is a style preference with no correctness, usability, or
+  integration consequence.
+
 Use
 [`references/review-triage.md`](./references/review-triage.md)
 to merge overlap, assign severity, and decide whether another loop is
@@ -124,6 +166,9 @@ For each iteration:
    boundary, base state, and verification to rerun.
 5. Re-run boundary-specific verification.
 6. Re-run isolated review on the updated result.
+7. Write a short loop ledger that records each issue id, its current
+   disposition, what verification ran, and whether another loop is
+   required.
 
 If the same accepted issue survives two loops, do not keep the topology
 unchanged. Tighten the brief, shrink the boundary, rotate the owner or
@@ -163,6 +208,15 @@ Before closing:
 3. Confirm the original request is satisfied.
 4. Report residual risks, especially around integrations, manual-only
    flows, or artifact checks that could not be automated.
+
+Final status should always make these explicit:
+
+- whether the original request is satisfied;
+- which verification ran and what passed, failed, or was infeasible;
+- the final disposition of each accepted issue id;
+- whether review confidence came from independent reviewers or
+  serialized self-review;
+- any residual risks that still matter.
 
 ## Read Next
 
