@@ -1,34 +1,32 @@
 # Review Triage
 
-Use this reference to merge independent review outputs into issue groups.
+Use this reference when independent review outputs overlap, conflict, or keep generating noise across loops.
 
 ## Shared-problem heuristic
 
-Count findings as the same underlying problem when they overlap on the defect, not necessarily on the wording.
+Count findings as the same issue when they describe the same underlying defect, even if the wording or cited lines differ.
 
-Do not accept a finding on overlap alone. Shared reviewer agreement raises confidence, but at least one concrete anchor is still required, such as a spec mismatch, failing verification, reproducible manual behavior, direct code-path evidence confirmed by the main agent, a broken rendered artifact, or a prompt/config behavior the main agent can verify.
+Do not accept a finding on overlap alone. Shared reviewer agreement raises confidence, but at least one concrete anchor is still required, such as:
 
-Typical matches:
-
-1. Two reviewers say the same branch can throw or return the wrong value.
-2. One reviewer flags missing cleanup and another flags the resulting leak or duplicate listener.
-3. Two reviewers identify the same missing test coverage for the same failure mode.
-4. Two reviewers describe the same prompt or config failure with different sample inputs.
+- a spec mismatch;
+- a failing command or check;
+- reproducible manual behavior;
+- direct code-path evidence the main agent can confirm;
+- a broken rendered artifact or prompt/config behavior the main agent can reproduce.
 
 Merge duplicate missing-test comments into the underlying behavior defect when they cover the same failure mode.
+
 Do not merge findings only because they touch the same file. Distinct defects in one file stay separate.
 
 ## Severity heuristic
 
 Escalate even a single-reviewer finding when it is concrete and high impact:
 
-1. User-visible breakage in the main flow.
-2. Incorrect persistence, export, destructive behavior, or invalid config.
+1. Broken main-flow behavior.
+2. Incorrect persistence, export, or destructive behavior.
 3. Security, permission, or privacy mistakes.
 4. Failing checks tied to the change.
-5. Prompt or operator flows that clearly fail the stated acceptance target.
-
-Leave low-confidence speculation out of the next iteration unless another reviewer independently reinforces it.
+5. Incorrect docs, prompts, or configs that would mislead the operator or break expected usage.
 
 Use severity labels this way:
 
@@ -44,25 +42,7 @@ Summarize reviewer feedback in three buckets:
 2. Accepted major issues.
 3. Non-blocking notes.
 
-Feed only the accepted issues back into the next coding pass.
-
-For each accepted issue group, record:
-
-1. Owner.
-2. Severity.
-3. Evidence.
-4. Required verification.
-
-## Non-convergence signs
-
-Treat the loop as drifting if any of these happen:
-
-1. The same accepted issue survives two iterations.
-2. Reviewers keep raising new concerns because the ownership boundary is too large.
-3. Verification results conflict across owners.
-4. Review output becomes broad and speculative instead of anchored.
-
-When that happens, tighten the brief, shrink the boundary, rotate the owner or reviewer, or fall back to a serialized single-owner repair for that area.
+For each accepted issue group, record the owner, severity, evidence, and required verification. Feed only accepted issues back into the next coding pass.
 
 ## Loop checklist
 
@@ -74,5 +54,4 @@ For each iteration:
 4. Refresh independent review on the updated result.
 5. Re-baseline the issue list before deciding on another loop.
 6. If verification reports conflict, rerun the main-agent check or treat the disagreement as blocking until resolved.
-
-Stop when no accepted `blocking` issue groups remain, no accepted `major` issue groups remain unless explicitly downgraded with rationale, no singleton finding is severe enough to promote, and required verification has passed for each changed boundary. If a planned automated check is infeasible, replace it with an explicit manual verification note for that boundary and record the limitation.
+7. If the same accepted issue survives two loops, treat the loop as stalled and change topology, ownership, or verification depth before continuing.

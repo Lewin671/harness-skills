@@ -59,11 +59,17 @@ Context packet:
 - Relevant files/diff: <paths or diff>
 - Invariants/interfaces: <what must stay true>
 - Helpful commands: <build/test/lint/render commands>
+- Out of scope: <areas this owner should not change>
 
 Constraints:
 - Other agents may be active; do not revert unrelated edits.
 - Preserve existing patterns unless the task requires a deliberate change.
 - Report changed files, verification results, and remaining risks.
+
+Output:
+- Changed files or patch ids: <list>
+- Verification: <ran | skipped | blocked> with result
+- Residual risks: <brief note>
 ```
 
 ## Review brief
@@ -85,6 +91,7 @@ Output rules:
 3. Ignore style-only comments.
 4. Do not defer to what other reviewers might think.
 5. Say explicitly if no meaningful findings were found.
+6. For each finding, include one evidence anchor and one confirming check the main agent can run.
 ```
 
 ## Accepted issue-group summary
