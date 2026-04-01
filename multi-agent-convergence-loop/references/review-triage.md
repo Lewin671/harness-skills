@@ -1,22 +1,28 @@
 # Review Triage
 
-Use this reference when independent review outputs overlap, conflict, or keep generating noise across loops.
+Use this reference when independent review outputs overlap, conflict, or keep
+generating noise across loops.
 
 ## Shared-problem heuristic
 
-Count findings as the same issue when they describe the same underlying defect, even if the wording or cited lines differ.
+Count findings as the same issue when they describe the same underlying defect,
+even if the wording or cited lines differ.
 
-Do not accept a finding on overlap alone. Shared reviewer agreement raises confidence, but at least one concrete anchor is still required, such as:
+Do not accept a finding on overlap alone. Shared reviewer agreement raises
+confidence, but at least one concrete anchor is still required, such as:
 
 - a spec mismatch;
 - a failing command or check;
 - reproducible manual behavior;
 - direct code-path evidence the main agent can confirm;
-- a broken rendered artifact or prompt/config behavior the main agent can reproduce.
+- a broken rendered artifact or prompt/config behavior the main agent can
+  reproduce.
 
-Merge duplicate missing-test comments into the underlying behavior defect when they cover the same failure mode.
+Merge duplicate missing-test comments into the underlying behavior defect when
+they cover the same failure mode.
 
-Do not merge findings only because they touch the same file. Distinct defects in one file stay separate.
+Do not merge findings only because they touch the same file. Distinct defects in
+one file stay separate.
 
 ## Severity heuristic
 
@@ -26,13 +32,16 @@ Escalate even a single-reviewer finding when it is concrete and high impact:
 2. Incorrect persistence, export, or destructive behavior.
 3. Security, permission, or privacy mistakes.
 4. Failing checks tied to the change.
-5. Incorrect docs, prompts, or configs that would mislead the operator or break expected usage.
+5. Incorrect docs, prompts, or configs that would mislead the operator or break
+   expected usage.
 
 Use severity labels this way:
 
 1. `blocking`: must be fixed, disproven, or downgraded before the loop can stop.
-2. `major`: should enter the next fix loop unless the main agent explicitly downgrades it with rationale.
-3. `minor`: keep as a non-blocking note unless it is nearly free and clearly safe to fold into another fix.
+2. `major`: should enter the next fix loop unless the main agent explicitly
+   downgrades it with rationale.
+3. `minor`: keep as a non-blocking note unless it is nearly free and clearly
+   safe to fold into another fix.
 
 ## Aggregation output
 
@@ -42,7 +51,8 @@ Summarize reviewer feedback in three buckets:
 2. Accepted major issues.
 3. Non-blocking notes.
 
-For each accepted issue group, record the owner, severity, evidence, and required verification. Feed only accepted issues back into the next coding pass.
+For each accepted issue group, record the owner, severity, evidence, and
+required verification. Feed only accepted issues back into the next coding pass.
 
 ## Loop checklist
 
@@ -53,5 +63,7 @@ For each iteration:
 3. Re-run the verification tied to the changed boundary.
 4. Refresh independent review on the updated result.
 5. Re-baseline the issue list before deciding on another loop.
-6. If verification reports conflict, rerun the main-agent check or treat the disagreement as blocking until resolved.
-7. If the same accepted issue survives two loops, treat the loop as stalled and change topology, ownership, or verification depth before continuing.
+6. If verification reports conflict, rerun the main-agent check or treat the
+   disagreement as blocking until resolved.
+7. If the same accepted issue survives two loops, treat the loop as stalled and
+   change topology, ownership, or verification depth before continuing.
