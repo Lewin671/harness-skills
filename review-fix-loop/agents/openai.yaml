@@ -1,4 +1,4 @@
 interface:
   display_name: "Review-Fix Loop"
   short_description: "Anchored review-fix loops with isolated reviewers"
-  default_prompt: "Use $review-fix-loop when a diff, patch, skill, doc, prompt, config, runbook, or other artifact needs an explicit review -> triage -> fix -> verify loop with isolated coding and review subagents, stable issue ids, concrete verification reruns, and a hard stop once no accepted blocking or major issues remain."
+  default_prompt: "Use $review-fix-loop only when the environment can run isolated coding and review subagents for an explicit review -> triage -> fix -> verify loop. Require stable issue ids, concrete verification reruns, delegated-pass completion with full-scope confirmation, and close only after no accepted blocking or major issues remain, the updated result gets independent delegated review, the request is confirmed satisfied, and residual risks are recorded."

@@ -88,6 +88,9 @@ Pick one lens per review pass when useful:
   passes.
 - Require findings-first output with one evidence anchor and one
   confirming check per finding.
+- Require each delegated review pass to end with an explicit
+  full-scope-completion statement. Missing or partial coverage means the
+  pass is incomplete and cannot count toward closure.
 - If true independence is unavailable, stop and choose another
   workflow.
 

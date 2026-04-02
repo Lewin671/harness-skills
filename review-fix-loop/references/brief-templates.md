@@ -42,6 +42,8 @@ Rules:
 2. Ignore style-only comments.
 3. Do not rely on prior reviewer conclusions.
 4. Say explicitly if no meaningful findings were found.
+5. End with `Review completion: all declared scope reviewed` or
+   `Review completion: partial scope only - <what remains>`.
 
 Finding shape:
 - Severity: <blocking | major | minor>
@@ -71,6 +73,7 @@ Follow-up review:
 Out of scope: <explicit exclusions>
 
 Output:
+- Completion: <complete | partial | blocked>
 - Changed files: <list>
 - Issue ids updated: <list>
 - Verification: <ran/skipped/blocked> with result
@@ -97,7 +100,7 @@ Accepted major issues:
 Non-blocking notes:
 - <note>
 
-Review confidence: <independent delegated review>
+Review confidence: <independent delegated review with complete coverage confirmation>
 Stop decision: <another loop required | ready to close | blocked>
 ```
 
@@ -115,7 +118,10 @@ Issue status:
 - <IG-001> - <open | fixed | disproved | downgraded> - <one-line reason>
 - <IG-002> - <open | fixed | disproved | downgraded> - <one-line reason>
 
-Review result: <no new meaningful findings | new issue ids | follow-up needed>
+Review result:
+- Pass status: <complete | incomplete>
+- Scope coverage: <all declared scope reviewed | partial>
+- Findings summary: <no new meaningful findings | new issue ids | follow-up needed>
 Next action: <another fix loop | ready to close | blocked>
 ```
 
@@ -132,7 +138,7 @@ Accepted issue ids:
 - <IG-001> - <fixed | disproved | downgraded> - <closure evidence>
 - <IG-002> - <fixed | disproved | downgraded> - <closure evidence>
 
-Review confidence: <independent delegated review>
+Review confidence: <independent delegated review with complete coverage confirmation>
 Residual risks: <risk or none>
 Close decision: <ready to close | blocked | needs decision>
 ```

@@ -54,6 +54,17 @@ Use severity labels this way:
 - `major`: should enter the next fix loop unless explicitly downgraded.
 - `minor`: keep as a note unless it is nearly free and clearly safe.
 
+## Singleton Promotion Rule
+
+A singleton candidate is a concrete finding reported by only one
+reviewer.
+
+Promote it into an accepted `blocking` or `major` issue group when the
+severity rules above apply. Before closeout, every concrete singleton
+`blocking` or `major` candidate must be accepted, disproved, or
+downgraded; it cannot disappear just because no second reviewer repeated
+it.
+
 ## Disposition Rules
 
 Use these dispositions:
@@ -96,15 +107,22 @@ For each iteration:
 
 1. Freeze the accepted issue list for that loop.
 2. Send narrowed fix briefs instead of raw reviewer output.
-3. Re-run verification for the changed boundary.
-4. Refresh independent review on the updated result.
-5. Re-baseline issue ids by disposition before deciding on another
+3. Confirm the delegated fix or review pass satisfied its required
+   output contract before counting it as complete.
+4. Re-run verification for the changed boundary.
+5. Refresh independent review on the updated result.
+6. Apply the triage rules above to any new findings before re-baselining
+   issue ids.
+7. Re-baseline issue ids by disposition before deciding on another
    loop.
-6. Treat the loop as stalled when the same accepted issue survives two
+8. If a delegated pass exits early, times out, or omits an explicit
+   completion statement for the declared scope, mark it incomplete and
+   do not count it toward closure.
+9. Treat the loop as stalled when the same accepted issue survives two
    loops.
-7. If verification reports conflict, rerun the main-agent check or keep
+10. If verification reports conflict, rerun the main-agent check or keep
    the issue open until resolved.
-8. If independent delegated review cannot be maintained, stop and
+11. If independent delegated review cannot be maintained, stop and
    report that this skill is not applicable.
-9. If delegated repair still leaves a `blocking` or `major` issue open,
+12. If delegated repair still leaves a `blocking` or `major` issue open,
    stop and report the work as blocked.
