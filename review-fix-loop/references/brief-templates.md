@@ -14,11 +14,14 @@ Target scope: <files/modules/diff boundary>
 Verification anchors:
 1. <test/command/render/manual check>
 2. <test/command/render/manual check>
+Closeout fallback for infeasible automation:
+- <explicit manual verification note per affected boundary, or none>
 Capabilities:
 - Delegation: <available | unavailable>
 - Edit mode: <direct edits | patch proposal | mixed>
 - Base state: <branch/ref/diff anchor/worktree contract>
 - Review isolation: <independent enough | not enough>
+- Validation exception: <none | one named accepted issue to validate after triage>
 Topology:
 - Mode: <audit-first | implementation-first | mixed handoff>
 - Coding owner(s): <owner -> boundary>
@@ -62,6 +65,9 @@ Do not break: <interfaces/callers/configs/docs>
 Verification:
 1. <test/command>
 2. <manual or artifact check if needed>
+Follow-up review:
+- Required independent re-review for closure: <yes | no, explain why topology does not require it>
+- Optional named-issue validation pass after triage: <none | issue id and purpose>
 Out of scope: <explicit exclusions>
 
 Output:
@@ -101,16 +107,16 @@ Stop decision: <another loop required | ready to close | blocked>
 Loop ledger: <number>
 Work completed: <what changed>
 
+Verification rerun:
+1. <exact command/check> - <pass | fail | infeasible>
+2. <exact command/check> - <pass | fail | infeasible>
+
 Issue status:
 - <IG-001> - <open | fixed | disproved | downgraded> - <one-line reason>
 - <IG-002> - <open | fixed | disproved | downgraded> - <one-line reason>
 
-Verification rerun:
-1. <command/check> - <pass | fail | infeasible>
-2. <command/check> - <pass | fail | infeasible>
-
 Review result: <no new meaningful findings | new issue ids | follow-up needed>
-Next action: <another fix loop | close | blocked>
+Next action: <another fix loop | ready to close | blocked>
 ```
 
 ## Final Status
@@ -119,8 +125,8 @@ Next action: <another fix loop | close | blocked>
 Request satisfied: <yes | no | partially>
 
 Verification:
-1. <command/check> - <pass | fail | infeasible>
-2. <command/check> - <pass | fail | infeasible>
+1. <exact command/check> - <pass | fail | infeasible>
+2. <exact command/check> - <pass | fail | infeasible>
 
 Accepted issue ids:
 - <IG-001> - <fixed | disproved | downgraded> - <closure evidence>

@@ -8,20 +8,20 @@ integration failure needs an explicit recovery path.
 
 Use this decision order:
 
-1. If helpers can work from files or diffs and do not need direct edits
+1. If one owner can finish faster than parallel setup and integration,
+   switch to one-owner execution instead of forcing a parallel mode.
+2. If helpers can work from files or diffs and do not need direct edits
    or a runnable checkout, choose `patch-only parallel`.
-2. Otherwise, if direct edits or a runnable checkout are needed but one
+3. Otherwise, if direct edits or a runnable checkout are needed but one
    live tree is safer because ownership overlaps, dirty local state
    matters, or setup is fragile or heavy, choose
    `shared-tree serialized`.
-3. Otherwise, if each coding owner needs direct edits, each owner has a
+4. Otherwise, if each coding owner needs direct edits, each owner has a
    clear path boundary, each owner branch/worktree can be created from
    the exact same `base sha`, and owner-local verification in parallel
    is materially useful, choose `isolated worktree parallel`.
-4. If you are unsure whether isolated setup is safe or worth the setup
+5. If you are unsure whether isolated setup is safe or worth the setup
    cost, fall back to `shared-tree serialized`.
-5. If you are unsure whether parallel help is worth the coordination
-   cost at all, reduce the owner count or switch to one-owner execution.
 
 Do not choose `isolated worktree parallel` just because it is
 available. Choose it only when it reduces total risk or total cycle
@@ -133,6 +133,7 @@ Owner handoff:
 - owner-a -> <branch name + tip commit sha | patch artifact>
 - owner-b -> <branch name + tip commit sha | patch artifact>
 - Cleanup readiness: <must leave clean worktree | retention rule if not clean>
+- Pre-integration check artifact: <diff | changed-file list | patch scope record>
 
 Verification:
 1. <owner-local check>
@@ -141,13 +142,28 @@ Verification:
 Reconciliation:
 - Owners do not merge each other.
 - Main agent integrates in sequence.
+- Before each integration, compare the owner-reported `base sha` and
+  changed-file scope against the contract using a concrete diff,
+  changed-file list, or patch artifact. If base or scope drifted, stop
+  before integrating and re-brief or re-baseline first. Record the
+  artifact used for that check in the integration handoff notes.
 - Conflict or drift: stop and re-baseline.
 
 Failure recovery:
 - If post-integration verification fails, stop integrating more owners.
 - Retain the failing branch, worktree, or patch artifact for diagnosis.
 - Undo the attempted integration on the target branch if that is safe.
+- Treat undo as safe only when it will not discard unrelated user
+  changes or already-accepted owner results. If that is unclear, retain
+  the failing state and report `blocked` instead of guessing.
+- If you undo attempted changes on the target branch, rerun
+  target-branch verification immediately and record whether the rollback
+  restored a stable target state.
+- Post-rollback verification record: <command/check and result, or not applicable>
 - Re-brief the boundary, switch mode, or report the task as blocked.
+- If reporting `blocked`, record whether previously integrated owner
+  results remain on the target branch, were rolled back, or were kept
+  only as retained artifacts outside the target branch.
 
 Cleanup:
 - Remove worktrees after integration unless intentionally retained.

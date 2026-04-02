@@ -45,26 +45,32 @@ and stop conditions, not just writing quality.
    - one coding owner can fix;
    - two or three review owners can critique only;
    - review passes can stay isolated enough to count as independent.
-2. Write a short scope brief before substantive work. Include the
+2. Decide the verification anchors and whether each changed boundary has
+   a feasible rerun before choosing a topology. If automated reruns are
+   infeasible, define the explicit manual verification note that will
+   replace them at closeout.
+3. Write a short scope brief before substantive work. Include the
    request, constraints, acceptance target, artifact type, exact review
-   boundary, verification anchors, edit mode, and base state. Use
+   boundary, verification anchors, edit mode, base state, and review
+   isolation model. Use
    [`references/brief-templates.md`](./references/brief-templates.md).
-3. Choose the mode in this order:
+4. Choose the mode in this order:
    - `audit-first` when there is already a meaningful diff or artifact
      to inspect;
    - `implementation-first` when the request is concrete and there is no
      meaningful existing diff;
    - `mixed handoff` when you must audit the current state before adding
      follow-on work.
-4. Choose the cheapest topology that can still catch real defects:
+5. Choose the cheapest topology that can still catch real defects:
    - non-code artifacts: one coding owner plus two review passes;
    - code or mixed artifacts: one coding owner plus three review passes;
    - disjoint boundaries: split coding ownership by boundary, then add
      one integration review on the combined result.
-5. Freeze the base state, diff anchor, or worktree contract before
+6. Freeze the base state, diff anchor, or worktree contract before
    delegation.
-6. Decide the verification anchors before review starts. A review loop
-   without concrete reruns is only commentary.
+7. Do not start review until the verification plan, closeout fallback,
+   and review-isolation contract are concrete. A review loop without
+   concrete reruns is only commentary.
 
 ## Default Posture
 
@@ -97,7 +103,8 @@ The scope brief is the source of truth for the loop. It should name:
 - verification anchors for each changed boundary;
 - edit mode: direct edits or patch proposal;
 - base state: branch, ref, diff anchor, or worktree contract;
-- topology: mode, coding owner, and review coverage.
+- topology: mode, coding owner, review coverage, and review isolation
+  model.
 
 If any of these are missing, inspect the environment and infer them
 before delegation. Do not start a multi-pass loop against a vague
@@ -106,8 +113,11 @@ boundary.
 ### 2. Review Passes
 
 Reviewers critique only. They do not fix and they do not see other
-reviewer conclusions unless the task is explicitly to validate one named
-issue.
+reviewer conclusions.
+
+Only use a non-independent validation pass after triage to confirm one
+named accepted issue or one proposed fix. Do not count that validation
+pass toward the required independent review topology for closure.
 
 Each review brief should stay short:
 
@@ -174,6 +184,8 @@ Every fix brief should name:
 - base state or diff anchor;
 - invariants and integration surfaces not to break;
 - exact verification to rerun;
+- whether closure needs an independent re-review or a named-issue
+  validation pass after the fix;
 - what is out of scope.
 
 Keep one coding owner per issue group or boundary unless the environment
@@ -184,14 +196,16 @@ can isolate and merge multiple owners safely.
 After each fix iteration, record:
 
 - what changed;
+- the exact verification rerun for each changed boundary and whether it
+  passed, failed, or was infeasible;
 - each issue id with disposition: `open`, `fixed`, `disproved`, or
   `downgraded`;
-- what verification reran and whether it passed, failed, or was
-  infeasible;
 - whether another loop is required.
 
 The ledger is what prevents the loop from reopening already-disproved
 issues under new wording.
+Do not record `close` as the next action until that loop's verification
+reruns and independent review result are both fully recorded.
 
 ## Loop
 
@@ -201,13 +215,26 @@ For each iteration:
 2. Assign each accepted open issue group to one coding owner.
 3. Send narrowed fix briefs, not reviewer transcripts.
 4. Re-run verification tied to the changed boundary.
-5. Re-run isolated review on the updated result.
+5. Re-run isolated review on the updated result. Do not start this step
+   until step 4 completed and that loop's verification result is
+   recorded.
 6. Update issue dispositions and write the loop ledger.
-7. Stop, continue, or change topology based on the accepted issue set.
+7. Check the stop decision in this order:
+   - mark the loop `ready to close` only if this loop already recorded
+     the required verification
+     reruns, this loop already recorded the required independent
+     delegated review result for the updated artifact, and the fast path
+     or stop conditions below are satisfied;
+   - continue if accepted `blocking` or `major` issues remain;
+   - otherwise change topology or workflow and record why.
 
 Fast path:
-if review finds no accepted `blocking` or `major` issues and required
-verification already passes, close instead of inventing another loop.
+if this loop reran the required verification for each changed boundary
+before closure, this same loop reran the required independent delegated
+review on the updated result after the last fix affecting that boundary,
+that review result is recorded in the loop ledger, and that review finds
+no accepted `blocking` or `major` issues,
+ mark the loop `ready to close` instead of inventing another loop.
 
 Stalled loop rule:
 if the same accepted issue survives two loops, tighten the brief, shrink
@@ -216,8 +243,10 @@ stop and switch workflows.
 
 Blocked rule:
 if delegated repair still cannot clear a `blocking` or `major` issue,
-stop looping and report the current evidence, verification status, and
-decision needed.
+stop looping and report the current evidence, verification status,
+whether the target artifact remains partially updated or was rolled
+back, and the decision needed next, such as re-briefing, changing
+topology, explicit operator direction, or stopping the workflow.
 
 ## Stop Only When
 
@@ -229,18 +258,25 @@ Close the loop only when all are true:
 3. No severe singleton finding still needs promotion.
 4. Required verification passed for each changed boundary.
 5. Independent delegated review actually ran for the chosen topology.
+   That required review must have rerun in the closing loop on the
+   updated result after the last relevant fix, not only in an earlier
+   loop.
 
 If an automated check is infeasible, replace it with one explicit manual
 verification note for that boundary and record the limitation. If
 independent delegated review could not be run, stop and report that this
 skill was not applicable in the environment.
+If required verification status or independent review status is missing,
+skipped, or negative, do not close the loop.
 
 ## Final Closeout
 
-Before closing:
+Before final closeout after a loop is marked `ready to close`:
 
 1. Inspect the final diff or changed files yourself.
-2. Re-run the most relevant verification yourself when feasible.
+2. Re-run the most relevant verification yourself when feasible, or
+   confirm the explicit manual verification note used for any boundary
+   where automated reruns were infeasible.
 3. Confirm the original request is satisfied.
 4. Record residual risks, especially around integrations, manual-only
    checks, or behavior that remained unverified.

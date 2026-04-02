@@ -37,7 +37,11 @@ Do not use it when:
 ## Start Here
 
 1. Check for repo-local agent policy first if the repo documents one.
-2. Run preflight and record:
+2. Decide whether parallel help is worth the coordination cost at all.
+   If one owner can finish faster or the remaining owners are only
+   review or patch-prep support, use a one-owner workflow instead of
+   forcing a parallel contract.
+3. Run preflight and record:
    - current branch and exact `base sha`;
    - clean or dirty worktree state;
    - whether the task depends on uncommitted local edits that would not
@@ -46,7 +50,7 @@ Do not use it when:
    - global files such as lockfiles, root configs, CI files, or shared
      generated outputs;
    - setup cost, submodules, caches, or heavy generated directories.
-3. Choose the mode in this order:
+4. Choose the mode in this order:
    - If helpers can work from files or diffs and do not need direct
      edits or a runnable checkout, use `patch-only parallel`.
    - Otherwise, if helpers need direct edits or a runnable checkout but
@@ -57,10 +61,7 @@ Do not use it when:
      isolated setup cost is worth it, use `isolated worktree parallel`.
    - If the uncertainty is about worktree safety, cache policy, or setup
      weight, fall back to `shared-tree serialized`.
-   - If the uncertainty is about whether parallel help is worth the
-     coordination cost at all, reduce the number of owners or use a
-     one-owner workflow instead.
-4. Record one execution contract before delegation:
+5. Record one execution contract before delegation:
    - execution mode;
    - branch and exact `base sha`;
    - owner-to-path boundary;
@@ -193,12 +194,30 @@ branch. If an owner drifted from the agreed base or touched out-of-scope
 files, stop and re-baseline before continuing. If two owners end up
 needing the same file, serialize the rest of that boundary instead of
 forcing parallel merge churn.
+Before each integration, verify the owner's reported `base sha` matches
+the agreed base or a recorded re-baseline, and inspect the owner diff or
+changed-files list against the ownership boundary. Use a concrete
+checkable artifact such as an explicit diff, changed-file list, or patch
+scope record, not memory alone. If either check fails, stop before
+integrating and re-brief or re-baseline before any further integration.
 
 If post-integration verification fails, do not keep integrating. Keep
 the failing owner result quarantined for diagnosis as a retained branch,
 worktree, or patch artifact, undo the attempted integration on the
-target branch if that is safe, then tighten the boundary, switch modes,
-or report the task as blocked.
+target branch if that is safe, rerun target-branch verification
+immediately after any undo, record whether rollback restored a stable
+target state, then tighten the boundary, switch modes, or report the
+task as blocked.
+
+Treat undo as safe only when it can be done without discarding unrelated
+user changes or already-accepted owner results. If that is unclear, do
+not guess: retain the failing state for diagnosis and report the task as
+blocked.
+
+When reporting `blocked`, say explicitly whether earlier owner results
+remain integrated on the target branch, were rolled back, or are being
+retained outside the target branch for diagnosis. Do not leave the
+target state ambiguous.
 
 Before closing:
 
@@ -215,6 +234,8 @@ Final status should make these explicit:
 - branch and `base sha`;
 - owner boundaries;
 - owner handoff artifacts;
+- which owner results are integrated on the target branch and which are
+  retained only as external branches, worktrees, or patch artifacts;
 - verification run by owners and rerun by the main agent;
 - cleanup completed, skipped, or intentionally retained.
 
