@@ -86,6 +86,11 @@ Pick one lens per review pass when useful:
 - Give reviewers the scope and lens, not other reviewers' conclusions.
 - Use separate threads, fresh prompts, or otherwise isolated review
   passes.
+- When multiple models are available, assign different model families to
+  different review passes. Process isolation alone does not eliminate
+  correlated blind spots shared by the same model; model diversity is a
+  required second layer of independence when multiple models are
+  available.
 - Require findings-first output with one evidence anchor and one
   confirming check per finding.
 - Require each delegated review pass to end with an explicit

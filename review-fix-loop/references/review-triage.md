@@ -116,8 +116,10 @@ For each iteration:
 7. Re-baseline issue ids by disposition before deciding on another
    loop.
 8. If a delegated pass exits early, times out, or omits an explicit
-   completion statement for the declared scope, mark it incomplete and
-   do not count it toward closure.
+   completion statement for the declared scope, mark it incomplete,
+   retry up to two more times (three total attempts), then replace
+   with a fresh subagent (prefer a different model). Do not count
+   any attempt toward closure until a complete pass is recorded.
 9. Treat the loop as stalled when the same accepted issue survives two
    loops.
 10. If verification reports conflict, rerun the main-agent check or keep

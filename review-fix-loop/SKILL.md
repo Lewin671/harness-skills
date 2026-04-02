@@ -79,6 +79,9 @@ Use these defaults unless the task clearly needs otherwise:
   transcripts.
 - Give each reviewer one useful lens at most. Extra framing usually
   lowers independence.
+- When multiple models are available, assign different models to each
+  review pass; process isolation alone does not prevent correlated
+  blind spots from the same model.
 - Do not add extra review passes once the default topology is satisfied
   and no accepted `blocking` or `major` issues remain.
 - Treat missing delegation or weak review isolation as a hard stop for
@@ -131,6 +134,10 @@ Count a delegated review pass only when it ends with findings or an
 explicit `no meaningful findings` statement plus a declared-scope
 completion statement. If the agent exits early, times out, or omits that
 signal, mark the pass incomplete and rerun or replace that reviewer.
+
+Partial findings from an incomplete pass are usable in triage but do
+not count toward topology. A complete replacement pass is still
+required.
 
 Reject:
 
@@ -254,9 +261,12 @@ stop and switch workflows.
 Incomplete delegated pass rule:
 if a delegated coding or review pass exits early, times out, or returns
 without the brief's required output, record an incomplete pass, do not
-count it toward topology, and rerun or replace that owner or reviewer.
-If repeated incomplete passes prevent the required repair or review,
-stop and report the workflow as blocked.
+count it toward topology, and retry with the same brief up to two more
+times (three total attempts per slot). If all three attempts fail,
+replace that slot with a fresh subagent using the same brief; prefer a
+different model to avoid repeating the same failure mode. If the
+replacement also fails, mark the workflow blocked and report which slot
+is stuck and how many attempts were made.
 
 Blocked rule:
 if delegated repair still cannot clear a `blocking` or `major` issue,
