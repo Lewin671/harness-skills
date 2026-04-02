@@ -118,8 +118,9 @@ For each iteration:
 8. If a delegated pass exits early, times out, or omits an explicit
    completion statement for the declared scope, mark it incomplete,
    retry up to two more times (three total attempts), then replace
-   with a fresh subagent (prefer a different model). Do not count
-   any attempt toward closure until a complete pass is recorded.
+   with a fresh subagent (prefer a different model when available).
+   If the replacement also fails, mark the workflow blocked. Do not
+   count any attempt toward closure until a complete pass is recorded.
 9. Treat the loop as stalled when the same accepted issue survives two
    loops.
 10. If verification reports conflict, rerun the main-agent check or keep

@@ -264,7 +264,7 @@ without the brief's required output, record an incomplete pass, do not
 count it toward topology, and retry with the same brief up to two more
 times (three total attempts per slot). If all three attempts fail,
 replace that slot with a fresh subagent using the same brief; prefer a
-different model to avoid repeating the same failure mode. If the
+different model when available to avoid repeating the same failure mode. If the
 replacement also fails, mark the workflow blocked and report which slot
 is stuck and how many attempts were made.
 
