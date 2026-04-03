@@ -5,6 +5,7 @@ src_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 default_dest_roots=(
   "${HOME}/.agents/skills"
+  "${HOME}/.claude/skills"
   "${HOME}/.codex/skills"
   "${HOME}/.kiro/skills"
 )
