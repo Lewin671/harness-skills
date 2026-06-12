@@ -1,6 +1,12 @@
 ---
 name: codex-model-routing
-description: Codex ONLY - use when delegating to Codex subagents and a model override may be useful. This skill helps choose whether to omit `model` and inherit the parent model, or explicitly set an available Codex subagent model such as `gpt-5.3-codex-spark`, `gpt-5.4-mini`, `gpt-5.4`, or `gpt-5.5`. Scope is subagents only: never use it to change, judge, or comment on the main-loop model.
+description: >-
+  Codex ONLY - use when delegating to Codex subagents and a model
+  override may be useful. This skill helps choose whether to omit
+  `model` and inherit the parent model, or explicitly set an available
+  Codex subagent model such as `gpt-5.3-codex-spark`,
+  `gpt-5.4-mini`, `gpt-5.4`, or `gpt-5.5`. Scope is subagents only:
+  never use it to change, judge, or comment on the main-loop model.
 ---
 
 # Codex Model Routing
