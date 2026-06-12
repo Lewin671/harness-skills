@@ -1,6 +1,6 @@
 ---
 name: codex-model-routing
-description: Codex ONLY - use when delegating to Codex subagents and a model override may be useful. This skill helps choose whether to omit `model` and inherit the parent model, or explicitly set `gpt-5.3-codex-spark`, `gpt-5.4-mini`, `gpt-5.4`, or `gpt-5.5` for a spawned subagent. Scope is subagents only: never use it to change, judge, or comment on the main-loop model.
+description: Codex ONLY - use when delegating to Codex subagents and a model override may be useful. This skill helps choose whether to omit `model` and inherit the parent model, or explicitly set an available Codex subagent model such as `gpt-5.3-codex-spark`, `gpt-5.4-mini`, `gpt-5.4`, or `gpt-5.5`. Scope is subagents only: never use it to change, judge, or comment on the main-loop model.
 ---
 
 # Codex Model Routing
@@ -28,6 +28,9 @@ stronger than the parent default.
 Resolution order, before the table:
 
 - An explicit user model choice wins.
+- Only set a model name that the current `spawn_agent` tool declares as
+  available. If a listed model is no longer available, omit `model` or
+  map the task to the nearest currently available tier.
 - If there is no clear reason to override, omit `model`.
 - If the subtask fits multiple rows, either split it or choose the
   strongest row that matches the risky part.
