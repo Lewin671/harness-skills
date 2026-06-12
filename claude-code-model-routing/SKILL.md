@@ -1,19 +1,21 @@
 ---
-name: subagent-model-routing
-description: Use this skill in Claude Code whenever spawning subagents via the Agent tool or Workflow agent() calls, especially fan-outs of 3+ agents, or when the user asks about the cost or speed of delegated work. It picks the right model tier (haiku/sonnet/opus) per subtask so mechanical work runs cheap and hard reasoning runs strong. Can also be invoked directly to plan tiering before a delegation. Scope is subagents only — never use it to change or comment on the main-loop model.
+name: claude-code-model-routing
+description: Claude Code ONLY — never apply in Codex or any other harness; each harness gets its own routing skill. Use this skill in Claude Code whenever spawning subagents via the Agent tool or Workflow agent() calls, especially fan-outs of 3+ agents, or when the user asks about the cost or speed of delegated work. It picks the right model tier (haiku/sonnet/opus) per subtask so mechanical work runs cheap and hard reasoning runs strong. Can also be invoked directly to plan tiering before a delegation. Scope is subagents only — never use it to change or comment on the main-loop model.
 ---
 
-# Subagent Model Routing
+# Claude Code Model Routing
 
 When delegating work to subagents in Claude Code, set the `model`
 option per agent based on the subtask, not on habit. The goal: never
 pay opus prices for grep work, never trust haiku with architecture.
 
-This skill governs only the `model` parameter of `Agent` tool calls
-and Workflow `agent()` calls in Claude Code. If the current harness
-does not expose a per-agent model override, this skill does not
-apply — skip it. The main-loop model is the user's choice; do not
-suggest changing it or comment on it.
+This skill is the Claude Code variant of model routing. It governs
+only the `model` parameter of `Agent` tool calls and Workflow
+`agent()` calls. In any other harness (Codex, Kiro, etc.) skip it
+entirely and use that harness's own routing skill if one exists —
+the tier names and delegation tools here are Claude Code specific.
+The main-loop model is the user's choice; do not suggest changing
+it or comment on it.
 
 ## Routing Table
 
