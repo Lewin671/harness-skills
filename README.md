@@ -10,6 +10,7 @@ Each skill should include its own `SKILL.md`, scripts, and any agent-facing meta
 ## What Is Here
 
 - `link-skills-to-agents`: symlinks every local skill into one or more external skill directories and cleans stale repo-managed links.
+- `validate-skills`: checks every top-level `SKILL.md` frontmatter block for parseable YAML and required metadata.
 
 ## How To Use
 
@@ -36,3 +37,4 @@ Or choose one or more custom destinations:
 - One top-level directory = one skill.
 - A directory is treated as a skill only if it contains `SKILL.md`.
 - Skill-specific usage belongs inside that skill directory, not in this root README.
+- Run `./validate-skills` after adding or editing skills.

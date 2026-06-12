@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+ruby - "${repo_root}" <<'RUBY'
+require "yaml"
+
+repo_root = ARGV.fetch(0)
+skill_files = Dir.glob(File.join(repo_root, "*", "SKILL.md")).sort
+errors = []
+
+skill_files.each do |path|
+  relative = path.delete_prefix("#{repo_root}/")
+  content = File.read(path)
+  lines = content.lines
+
+  unless lines.first&.match?(/\A---\s*\z/)
+    errors << "#{relative}: missing opening frontmatter delimiter"
+    next
+  end
+
+  closing_index = lines[1..]&.find_index { |line| line.match?(/\A---\s*\z/) }
+  unless closing_index
+    errors << "#{relative}: missing closing frontmatter delimiter"
+    next
+  end
+
+  yaml_text = lines[1, closing_index + 1].join
+  metadata = YAML.safe_load(yaml_text, permitted_classes: [], aliases: false)
+
+  unless metadata.is_a?(Hash)
+    errors << "#{relative}: frontmatter must be a YAML mapping"
+    next
+  end
+
+  name = metadata["name"]
+  description = metadata["description"]
+  skill_dir = File.basename(File.dirname(path))
+
+  unless name.is_a?(String) && !name.strip.empty?
+    errors << "#{relative}: frontmatter name must be a non-empty string"
+  end
+
+  unless description.is_a?(String) && !description.strip.empty?
+    errors << "#{relative}: frontmatter description must be a non-empty string"
+  end
+
+  if name.is_a?(String) && name != skill_dir
+    errors << "#{relative}: frontmatter name #{name.inspect} must match directory #{skill_dir.inspect}"
+  end
+rescue Psych::SyntaxError => e
+  errors << "#{relative}: invalid YAML: #{e.problem} at line #{e.line} column #{e.column}"
+rescue Psych::Exception => e
+  errors << "#{relative}: invalid YAML: #{e.message}"
+end
+
+if errors.empty?
+  puts "ok #{skill_files.length} skills"
+else
+  warn errors.join("\n")
+  exit 1
+end
+RUBY

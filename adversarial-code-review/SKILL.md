@@ -1,6 +1,18 @@
 ---
 name: adversarial-code-review
-description: Claude Code ONLY — requires the Workflow and Agent tools; do not use in Codex or any other harness. Use this skill when the user asks for a thorough, adversarial, or verified code review of a diff, branch, PR, or working-tree change — especially when they want low-noise findings backed by evidence, or hard proof such as a failing test that reproduces a bug. It orchestrates finder, skeptic, and red-team subagents: finders fan out per review lens, skeptics try to refute every finding (kills false positives), and red-team agents attack high-risk code directly (catches what finders miss). Pure review — it outputs a findings report and never modifies the working tree. Do not use for quick one-pass reviews (a single agent is cheaper) or when the user wants fixes applied.
+description: >-
+  Claude Code ONLY — requires the Workflow and Agent tools; do not use
+  in Codex or any other harness. Use this skill when the user asks for
+  a thorough, adversarial, or verified code review of a diff, branch,
+  PR, or working-tree change — especially when they want low-noise
+  findings backed by evidence, or hard proof such as a failing test
+  that reproduces a bug. It orchestrates finder, skeptic, and red-team
+  subagents: finders fan out per review lens, skeptics try to refute
+  every finding (kills false positives), and red-team agents attack
+  high-risk code directly (catches what finders miss). Pure review —
+  it outputs a findings report and never modifies the working tree. Do
+  not use for quick one-pass reviews (a single agent is cheaper) or
+  when the user wants fixes applied.
 ---
 
 # Adversarial Code Review

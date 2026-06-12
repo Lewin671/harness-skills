@@ -11,7 +11,7 @@
 
 ## Default Flow
 
-- After changing a skill, run the relevant validation and a brief self-review.
+- After changing a skill, run `./validate-skills` and a brief self-review.
 - If the result looks correct, commit and push directly without waiting for confirmation.
 
 ## Concurrent Work
