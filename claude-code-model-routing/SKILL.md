@@ -26,7 +26,7 @@ Match the subtask against the first tier that fits, top to bottom:
 | `haiku` | Mechanical, fully specified work | Bulk file search and inventory, Explore fan-outs, format/rename sweeps, extracting facts from known locations, applying an edit that is spelled out exactly |
 | `sonnet` | Standard, well-scoped engineering | Implementing a defined function or fix, writing tests for known behavior, routine refactors, drafting docs, single-dimension review passes |
 | `opus` | Judgment-heavy or high-stakes work | Architecture and design tradeoffs, debugging with unknown root cause, ambiguous multi-step planning, adversarial verification of findings, final synthesis across many agents' results |
-| omit | Unsure, or the task mixes tiers | Inheriting the main-loop model is the safe default; omission is never wrong, only sometimes wasteful |
+| omit | Unsure, or tiers mix and can't be split (see rule 5) | Inheriting the main-loop model is the safe default; omission is never wrong, only sometimes wasteful |
 
 If the session exposes a stronger override than `opus` (e.g.
 `fable`), treat it as the top tier with the same criteria.
@@ -36,7 +36,7 @@ If the session exposes a stronger override than `opus` (e.g.
 1. **Decide the tier when you write the prompt.** A vague prompt needs
    a stronger model; a precise prompt makes a cheaper tier safe. If
    you can tighten the prompt enough to drop a tier, do it.
-2. **Fan-out multiplies the choice.** With 5+ parallel agents, tier
+2. **Fan-out multiplies the choice.** With 3+ parallel agents, tier
    selection dominates cost. Push the repetitive stage down to
    `haiku`/`sonnet` and reserve `opus` for the one synthesis or
    verification agent that reads everything.
@@ -48,10 +48,13 @@ If the session exposes a stronger override than `opus` (e.g.
    Do not retry at the same tier and do not silently accept it.
 5. **Mixed task, split it.** If one subtask has both a mechanical
    part and a judgment part, split into two agents at two tiers
-   rather than sending the whole thing to the high tier.
+   rather than sending the whole thing to the high tier. If the
+   parts can't be separated cleanly, omit `model` instead.
 
 ## When Invoked Directly
 
 If the user invokes this skill by name, list the subtasks you are
 about to delegate, the tier assigned to each, and a one-line reason
-per assignment — then proceed with the delegation.
+per assignment. Then proceed with the delegation only if the user
+asked for the work itself; if they asked only for the tiering plan,
+stop there.
