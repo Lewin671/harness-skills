@@ -1,6 +1,7 @@
 ---
 name: claude-code-model-routing
 description: Claude Code ONLY — never apply in Codex or any other harness; each harness gets its own routing skill. Use this skill in Claude Code whenever spawning subagents via the Agent tool or Workflow agent() calls, especially fan-outs of 3+ agents, or when the user asks which model tier delegated work should use for cost or speed reasons. It picks the right tier (haiku/sonnet/opus, plus fable when warranted) per subtask so mechanical work runs cheap and hard reasoning runs strong. Can also be invoked directly to plan tiering before a delegation. Scope is subagents only — never use it to change or comment on the main-loop model.
+harnesses: [claude-code]
 ---
 
 # Claude Code Model Routing

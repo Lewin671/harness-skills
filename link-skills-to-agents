@@ -16,6 +16,50 @@ else
   dest_roots=("${default_dest_roots[@]}")
 fi
 
+# Harness id for a destination root, inferred from its path.
+# Unknown/shared destinations (e.g. ~/.agents/skills) get an empty id
+# and receive only unrestricted skills.
+dest_root_harness() {
+  case "$(casefold_path "$1")" in
+    *"/.claude/"*) echo "claude-code" ;;
+    *"/.codex/"*)  echo "codex" ;;
+    *"/.kiro/"*)   echo "kiro" ;;
+    *)             echo "" ;;
+  esac
+}
+
+# Print the skill's `harnesses:` frontmatter list (space-separated),
+# or nothing when the skill is unrestricted.
+skill_harnesses() {
+  ruby -ryaml -e '
+    begin
+      content = File.read(ARGV[0])
+      if content =~ /\A---\s*\n(.*?)\n---\s*(\n|\z)/m
+        meta = YAML.safe_load(Regexp.last_match(1))
+        harnesses = meta.is_a?(Hash) ? meta["harnesses"] : nil
+        puts harnesses.join(" ") if harnesses.is_a?(Array)
+      end
+    rescue StandardError
+    end
+  ' "$1" 2>/dev/null || true
+}
+
+skill_allowed_in_dest() {
+  local skill_dir="$1"
+  local dest_harness="$2"
+  local harnesses harness
+
+  harnesses="$(skill_harnesses "${skill_dir}/SKILL.md")"
+  [ -n "${harnesses}" ] || return 0
+
+  for harness in ${harnesses}; do
+    if [ "${harness}" = "${dest_harness}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 is_repo_managed_link() {
   local path="$1"
   local target
@@ -62,7 +106,10 @@ normalized_link_target() {
 
 cleanup_invalid_links() {
   local dest_root="$1"
+  local dest_harness
   local dest_path skill_name expected_target target
+
+  dest_harness="$(dest_root_harness "${dest_root}")"
 
   for dest_path in "${dest_root}"/*; do
     [ -L "${dest_path}" ] || continue
@@ -87,17 +134,26 @@ cleanup_invalid_links() {
       rm "${dest_path}"
       echo "clean ${skill_name} (stale link)"
       removed=$((removed + 1))
+      continue
+    fi
+
+    if ! skill_allowed_in_dest "${expected_target}" "${dest_harness}"; then
+      rm "${dest_path}"
+      echo "clean ${skill_name} (harness mismatch: not for ${dest_harness:-shared} dest)"
+      removed=$((removed + 1))
     fi
   done
 }
 
 sync_dest_root() {
   local dest_root="$1"
+  local dest_harness
   local linked=0
   local skipped=0
   local removed=0
   local skill_dir skill_name dest_path target
 
+  dest_harness="$(dest_root_harness "${dest_root}")"
   mkdir -p "${dest_root}"
 
   cleanup_invalid_links "${dest_root}"
@@ -108,6 +164,12 @@ sync_dest_root() {
 
     skill_name="$(basename "${skill_dir}")"
     dest_path="${dest_root}/${skill_name}"
+
+    if ! skill_allowed_in_dest "${skill_dir}" "${dest_harness}"; then
+      echo "skip  ${skill_name} (harness-restricted: not for ${dest_harness:-shared} dest)"
+      skipped=$((skipped + 1))
+      continue
+    fi
 
     if [ -L "${dest_path}" ]; then
       target="$(normalized_link_target "${dest_path}" 2>/dev/null || true)"

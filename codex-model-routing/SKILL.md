@@ -7,6 +7,7 @@ description: >-
   Codex subagent model such as `gpt-5.3-codex-spark`,
   `gpt-5.4-mini`, `gpt-5.4`, or `gpt-5.5`. Scope is subagents only:
   never use it to change, judge, or comment on the main-loop model.
+harnesses: [codex]
 ---
 
 # Codex Model Routing

@@ -10,6 +10,13 @@ repo_root = ARGV.fetch(0)
 skill_files = Dir.glob(File.join(repo_root, "*", "SKILL.md")).sort
 errors = []
 
+KNOWN_HARNESSES = %w[claude-code codex kiro].freeze
+ONLY_DESCRIPTION_HARNESS = {
+  /claude\s+code\s+only/i => "claude-code",
+  /codex\s+only/i => "codex",
+  /kiro\s+only/i => "kiro",
+}.freeze
+
 skill_files.each do |path|
   relative = path.delete_prefix("#{repo_root}/")
   content = File.read(path)
@@ -48,6 +55,23 @@ skill_files.each do |path|
 
   if name.is_a?(String) && name != skill_dir
     errors << "#{relative}: frontmatter name #{name.inspect} must match directory #{skill_dir.inspect}"
+  end
+
+  harnesses = metadata["harnesses"]
+  if metadata.key?("harnesses")
+    if !harnesses.is_a?(Array) || harnesses.empty? || harnesses.any? { |h| !KNOWN_HARNESSES.include?(h) }
+      errors << "#{relative}: frontmatter harnesses must be a non-empty array drawn from #{KNOWN_HARNESSES.inspect}, got #{harnesses.inspect}"
+    end
+  end
+
+  if description.is_a?(String)
+    ONLY_DESCRIPTION_HARNESS.each do |pattern, harness|
+      next unless description.match?(pattern)
+
+      unless harnesses.is_a?(Array) && harnesses == [harness]
+        errors << "#{relative}: description declares #{harness.inspect} ONLY, so frontmatter must set harnesses: [#{harness}] (got #{harnesses.inspect}) — the linker only enforces the gate via this key"
+      end
+    end
   end
 rescue Psych::SyntaxError => e
   errors << "#{relative}: invalid YAML: #{e.problem} at line #{e.line} column #{e.column}"

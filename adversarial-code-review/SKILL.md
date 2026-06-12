@@ -13,9 +13,17 @@ description: >-
   it outputs a findings report and never modifies the working tree. Do
   not use for quick one-pass reviews (a single agent is cheaper) or
   when the user wants fixes applied.
+harnesses: [claude-code]
 ---
 
 # Adversarial Code Review
+
+**Harness gate — read first.** This skill runs ONLY in Claude Code
+with the Workflow and Agent tools available. If you are any other
+agent, or those tools are missing, abort now: tell the user this
+skill cannot run in this harness, and stop. Do not substitute a
+degraded single-agent review, do not execute any phase below, and do
+not run or modify anything in the user's working tree as a fallback.
 
 Review a code change with two opposing adversarial mechanisms layered
 on top of a multi-lens finder pass:
@@ -32,9 +40,10 @@ must request afterwards.
 
 ## Hard Requirements
 
-- Claude Code with the Workflow and Agent tools available. This skill
-  explicitly instructs you to call Workflow — the user invoking this
-  skill is the multi-agent opt-in.
+- Claude Code with the Workflow and Agent tools available — otherwise
+  abort per the harness gate above. This skill explicitly instructs
+  you to call Workflow — the user invoking this skill is the
+  multi-agent opt-in.
 - Never modify the user's working tree or index. Red-team tests run
   only in throwaway git worktrees (Workflow `isolation: 'worktree'`),
   discarded after the run.
@@ -58,9 +67,9 @@ Size the diff and pick an effort tier. An explicit user request
 
 | Tier | Trigger | Pipeline | Rough cost |
 |------|---------|----------|------------|
-| small | < ~50 changed lines | No workflow. One sonnet reviewer via the Agent tool, then one sonnet skeptic over its findings. | < $1 |
-| medium | default | Full pipeline; red team attacks only surviving critical/major findings. | ~$5 |
-| large | > ~800 lines, or user asked for thoroughness | Full pipeline; red team also attacks every triage-flagged high-risk region. | $10+ |
+| small | < ~50 changed lines | No workflow. One sonnet reviewer via the Agent tool, then one sonnet skeptic over its findings. | under 1 USD |
+| medium | default | Full pipeline; red team attacks only surviving critical/major findings. | ~5 USD |
+| large | > ~800 lines, or user asked for thoroughness | Full pipeline; red team also attacks every triage-flagged high-risk region. | 10+ USD |
 
 For medium and large, orchestrate phases 1–3 as a single Workflow
 invocation (`meta.phases`: Triage, Find, Refute, Attack). Triage is a

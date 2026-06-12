@@ -36,5 +36,6 @@ Or choose one or more custom destinations:
 
 - One top-level directory = one skill.
 - A directory is treated as a skill only if it contains `SKILL.md`.
+- A skill restricted to one harness declares `harnesses: [claude-code]` (or `codex` / `kiro`) in its frontmatter; the linker then links it only into that harness's skill directory and cleans it out of the others.
 - Skill-specific usage belongs inside that skill directory, not in this root README.
 - Run `./validate-skills` after adding or editing skills.
