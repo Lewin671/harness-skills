@@ -67,15 +67,19 @@ Size the diff and pick an effort tier. An explicit user request
 
 | Tier | Trigger | Pipeline | Rough cost |
 |------|---------|----------|------------|
-| small | < ~50 changed lines | No workflow. One sonnet reviewer via the Agent tool, then one sonnet skeptic over its findings. | under 1 USD |
-| medium | default | Full pipeline; red team attacks only surviving critical/major findings. | ~5 USD |
-| large | > ~800 lines, or user asked for thoroughness | Full pipeline; red team also attacks every triage-flagged high-risk region. | 10+ USD |
+| small | < ~200 changed lines | No workflow. One sonnet reviewer via the Agent tool, then one sonnet skeptic over its findings. If the reviewer flags the change as high-risk (auth, concurrency, money, data loss), recommend the full pipeline to the user in the report — never silently escalate. | under 1 USD |
+| medium | default | Full pipeline; red team attacks only surviving critical findings. | ~3 USD |
+| large | > ~800 lines, or user asked for thoroughness | Full pipeline; red team also attacks surviving major findings and every triage-flagged high-risk region. | 10+ USD |
 
 For medium and large, orchestrate phases 1–3 as a single Workflow
 invocation (`meta.phases`: Triage, Find, Refute, Attack). Triage is a
 barrier (it selects the lenses); finders run parallel; the cross-lens
-dedup before refutation is a justified barrier; skeptics and red-team
-agents fan out per item.
+dedup before refutation is a justified barrier. There is NO barrier
+between refutation and attack: each finding's red-team agent launches
+as soon as that finding survives its skeptics (pipeline per finding).
+On the large tier, high-risk-region red-team agents depend only on
+triage — launch them immediately after triage, in parallel with the
+finders.
 
 ## Phase 1 — Triage (one haiku agent)
 
@@ -131,7 +135,13 @@ Tiered by severity:
 
 - **minor** — batch all minor findings to one sonnet skeptic, which
   returns a per-finding verdict list.
-- **major / critical** — three sonnet skeptics per finding, each with
+- **major** — one sonnet skeptic per finding. If its verdict is
+  uncertain or weakly grounded in cited code, escalate that one
+  finding to one opus skeptic (escalate once, per
+  `claude-code-model-routing`); if the opus verdict is still weak,
+  surface the uncertainty. On the large tier, majors go straight to
+  the critical panel below.
+- **critical** — three sonnet skeptics per finding, each with
   a distinct lens: *code semantics* (does the implementation actually
   behave as claimed), *reachability* (can this path trigger under
   real conditions), *author intent* (do diff context and tests show
@@ -143,9 +153,10 @@ residual-risks section as one-liners.
 
 ## Phase 3b — Red Team
 
-Targets: (a) every surviving critical/major finding — all tiers that
-run the workflow; (b) on the large tier only, additionally every
-triage `high_risk_region` — **even regions with zero findings**.
+Targets: (a) every surviving critical finding on the medium tier;
+surviving critical and major findings on the large tier; (b) on the
+large tier only, additionally every triage `high_risk_region` —
+**even regions with zero findings**.
 Channel (b) is what catches bugs no finder saw; it is the reason the
 large tier costs more. One agent per target, model omitted so it
 inherits the main loop (these verdicts are final — verification
@@ -175,7 +186,8 @@ Write the report as terminal markdown in your final message. Order:
 - severity, `file:line`, title, one-paragraph explanation;
 - verification status — *reproduced by failing test* (include the
   test code), *survived 3-skeptic panel (N refute votes)*, or
-  *survived single-skeptic check*;
+  *survived single-skeptic check*; include *escalated to opus,
+  unresolved* when an escalated major remains uncertain;
 - a suggested direction for the fix (one sentence, not a patch).
 
 End with a mandatory **Residual Risks** section: lenses not run;
@@ -189,8 +201,10 @@ report's snippets.
 
 ## Cost Levers
 
-The red team dominates cost (each target is an agentic loop that may
-build and run a test). Keep it pointed only at the targets defined
-above. Triage on haiku and skeptics on sonnet are deliberate — do not
-silently upgrade them; escalate a single weak verdict one tier up per
-`claude-code-model-routing` rule 4 instead.
+The red team dominates both cost and wall-clock (each target is an
+agentic loop that may build and run a test). Keep it pointed only at
+the targets defined above, and never put a barrier in front of it
+that the data flow doesn't require. Triage on haiku and skeptics on
+sonnet are deliberate — do not silently upgrade them; escalate a
+single weak verdict one tier up per `claude-code-model-routing` rule
+4 instead.
