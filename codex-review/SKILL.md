@@ -37,8 +37,11 @@ output placement, empty-scope detection, mutually exclusive flags.
 If that path does not exist, locate the script beside this file rather
 than reconstructing the command by hand.
 
-Set the Bash tool `timeout` to at least `600000`. Reviews routinely
-run for minutes; the 120s default kills them mid-run.
+**Set the Bash tool `timeout` to `600000`.** The default reviewer is
+the strongest model at maximum reasoning effort, which takes minutes —
+a small diff measured 100s. The 120s tool default kills it mid-run. On
+a large diff, run it with `run_in_background` instead of racing the
+10-minute ceiling.
 
 Scope — exactly one, and they cannot be combined:
 
@@ -54,12 +57,22 @@ built-in review prompt would not prioritise. It replaces the built-in
 prompt rather than supplementing it, and it cannot be narrowed to a
 scope flag — say what to look at inside the text itself.
 
-Other options: `--model`, `--effort low|medium|high|xhigh`, `--repo`,
-`--keep-log`. Omit `--model` by default and inherit the user's
-configured model; escalate one tier only after a weak first pass.
-**When you do pass `--model`, pass `--effort` too** — the user's
-configured default effort may be rejected by the model you asked for,
-and the run fails a minute in.
+## Model
+
+The script defaults to the strongest available model at maximum
+reasoning effort, and **you should normally leave that alone**. A
+second opinion that is weaker than the first opinion is not worth the
+round trip; latency is the wrong thing to optimise here.
+
+Override only on an explicit request:
+
+- `--model <MODEL> --effort <LEVEL>` — always pass both. A weaker model
+  rejects the default `max` effort and the run dies a minute in.
+- `--inherit` — use the user's own codex config instead.
+
+If the pinned default model has gone stale, the script says so and
+retries once on the user's configured model. Relay that warning: the
+review still ran, but not on the tier it promised.
 
 ## Exit Codes
 
@@ -70,26 +83,29 @@ The script's exit code is the verdict on *the run*, never on the code:
 | `0` | A report was produced | Read stdout. Findings or not, both are `0`. |
 | `2` | Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
 | `3` | Environment problem | No `codex`, not a git tree, bad flags. Report it; do not silently substitute a Claude review. |
-| `4` | Codex ran and failed | Read the hint on stderr. Usually a model/effort mismatch — retry once with an explicit `--effort`. |
+| `4` | Codex ran and failed | Read stderr. A model/effort mismatch is retried automatically, so a `4` means both attempts failed. |
 
 Codex's own exit code is `0` for both a P1 finding and a clean review,
 so never gate on it directly. That is why this script exists.
 
 ## Reading The Result
 
-Findings come back as Markdown on stdout, in a fixed shape:
+Findings come back as Markdown on stdout:
 
 ```
 <one-paragraph overall verdict>
 
-Review comment:
+Full review comments:
 
-- [P1] <title> — /abs/path/file.py:7-7
+- [P1] <title> — /abs/path/file.py:10-14
   <body>
 ```
 
-Priority runs `P1` (most severe) downward. Zero findings reads as a
-plain sentence, not an empty list.
+Anchor on the `- [P<n>]` bullets, not on the heading above them — it
+varies with the number of findings ("Review comment:" for one, "Full
+review comments:" for several). Priority runs `P1` (most severe)
+downward. Zero findings reads as a plain sentence with no bullets at
+all, not an empty list.
 
 ## Reporting
 
@@ -107,8 +123,9 @@ plain sentence, not an empty list.
 
 - Not a replacement for `adversarial-code-review`. That skill runs a
   deep multi-agent Claude review with skeptics and red teams; this one
-  buys a cheap, fast, independent second opinion. Running both on a
-  high-stakes change is reasonable — Codex first, since it is cheaper.
+  is a single strong reviewer from a different model family. They are
+  complementary, not ranked — running both on a high-stakes change is
+  reasonable. Neither is the cheap option.
 - Never invoke `codex apply`, and never pass any `--dangerously-bypass-*`
   flag. Both routes can write.
 - If Codex returns nothing usable twice, say so honestly instead of
@@ -134,3 +151,6 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   session file under `CODEX_HOME/sessions`, as
   `exited_review_mode.review_output`. Parsing that is a possible future
   addition; it would break under `--ephemeral`.
+- The default model slug is pinned in the script, which will go stale.
+  That is why a rejected model triggers one automatic retry on the
+  user's config instead of a hard failure.

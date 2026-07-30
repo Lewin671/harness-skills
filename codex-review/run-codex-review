@@ -23,24 +23,41 @@ Scope (choose exactly one, default --uncommitted):
                        and skips the empty-scope precheck
 
 Options:
-  --model <MODEL>      override the model (default: inherit user config)
-  --effort <LEVEL>     reasoning effort: low|medium|high|xhigh (and max
-                       on models that support it). Pass this whenever
-                       you pass --model: the configured default effort
-                       may be rejected by the model you asked for.
+  --model <MODEL>      override the model (default: strongest tier)
+  --effort <LEVEL>     low|medium|high|xhigh|max (default: max). Pass
+                       this whenever you pass --model — a weaker model
+                       may not accept the default effort.
+  --inherit            use the model and effort from your codex config
+                       instead of the pinned strongest defaults
   --repo <DIR>         repository to review (default: current directory)
   --keep-log           print the raw event-log path on success too
 
+Defaults to the strongest available model at maximum reasoning effort.
+A second opinion is only worth the wait if it comes from the best
+reviewer available, so speed is deliberately not the priority here.
+
 Environment:
   CODEX_BIN            path to the codex binary (default: codex)
+  CODEX_REVIEW_MODEL   override the pinned default model
+  CODEX_REVIEW_EFFORT  override the pinned default effort
 USAGE
 }
+
+# A second opinion is only worth having from the strongest reviewer, so
+# these pin the top tier rather than inheriting whatever the user last
+# configured. Verified against codex-cli 0.146.0 on 2026-07-30; if the
+# slug goes stale the script falls back to the user's config (see
+# defaults_rejected below). `ultra` is deliberately not used: it
+# delegates subtasks, which is not what a review wants.
+default_model="${CODEX_REVIEW_MODEL:-gpt-5.6-sol}"
+default_effort="${CODEX_REVIEW_EFFORT:-max}"
 
 scope_flag="--uncommitted"
 scope_value=""
 scope_set=0
-model=""
-effort=""
+model="$default_model"
+effort="$default_effort"
+pinned=1
 repo="."
 keep_log=0
 
@@ -64,10 +81,12 @@ while [ "$#" -gt 0 ]; do
       scope_value="$1"; shift ;;
     --model)
       shift; [ "$#" -gt 0 ] || { echo "error: --model needs a value" >&2; exit 3; }
-      model="$1"; shift ;;
+      model="$1"; pinned=0; shift ;;
     --effort)
       shift; [ "$#" -gt 0 ] || { echo "error: --effort needs a value" >&2; exit 3; }
-      effort="$1"; shift ;;
+      effort="$1"; pinned=0; shift ;;
+    --inherit)
+      model=""; effort=""; pinned=0; shift ;;
     --repo)
       shift; [ "$#" -gt 0 ] || { echo "error: --repo needs a value" >&2; exit 3; }
       repo="$1"; shift ;;
@@ -132,32 +151,56 @@ esac
 out="$(mktemp "${TMPDIR:-/tmp}/codex-review-XXXXXX")"
 log="$(mktemp "${TMPDIR:-/tmp}/codex-review-log-XXXXXX")"
 
-cmd=("$codex_bin" exec review)
-if [ "$scope_flag" = "--custom" ]; then
-  # Custom instructions are a bare positional PROMPT, and every scope
-  # flag is mutually exclusive with it.
-  cmd+=("$scope_value")
-else
-  cmd+=("$scope_flag")
-  [ -n "$scope_value" ] && cmd+=("$scope_value")
-fi
-# No -s/--sandbox flag exists on `exec review`; this override is the only
-# way to guarantee the reviewer cannot write.
-cmd+=(-c 'sandbox_mode="read-only"')
-[ -n "$model" ] && cmd+=(-m "$model")
-[ -n "$effort" ] && cmd+=(-c "model_reasoning_effort=\"${effort}\"")
-cmd+=(-o "$out")
-
-echo "running: ${cmd[*]}" >&2
-
-if ! "${cmd[@]}" >"$log" 2>&1; then
-  echo "error: codex review failed; raw output at ${log}" >&2
-  if grep -q "reasoning.effort" "$log" 2>/dev/null; then
-    echo "hint: the configured reasoning effort is not supported by this model — rerun with --effort high" >&2
+# Build and run the review. Args: model ("" to inherit), effort ("" to
+# inherit). Returns codex's exit status.
+run_review() {
+  local use_model="$1" use_effort="$2"
+  cmd=("$codex_bin" exec review)
+  if [ "$scope_flag" = "--custom" ]; then
+    # Custom instructions are a bare positional PROMPT, and every scope
+    # flag is mutually exclusive with it.
+    cmd+=("$scope_value")
+  else
+    cmd+=("$scope_flag")
+    [ -n "$scope_value" ] && cmd+=("$scope_value")
   fi
-  tail -n 20 "$log" >&2
-  rm -f "$out"
-  exit 4
+  # No -s/--sandbox flag exists on `exec review`; this override is the
+  # only way to guarantee the reviewer cannot write.
+  cmd+=(-c 'sandbox_mode="read-only"')
+  [ -n "$use_model" ] && cmd+=(-m "$use_model")
+  [ -n "$use_effort" ] && cmd+=(-c "model_reasoning_effort=\"${use_effort}\"")
+  cmd+=(-o "$out")
+
+  echo "running: ${cmd[*]}" >&2
+  "${cmd[@]}" >"$log" 2>&1
+}
+
+# A rejected model or effort means the pinned defaults have gone stale,
+# not that the review is impossible. Fall back to the user's configured
+# model once rather than failing a minute in.
+defaults_rejected() {
+  [ "$pinned" -eq 1 ] || return 1
+  grep -qE "reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found" "$log" 2>/dev/null
+}
+
+if ! run_review "$model" "$effort"; then
+  if defaults_rejected; then
+    echo "warning: '${model}' at effort '${effort}' was rejected — these pinned defaults look stale." >&2
+    echo "warning: retrying once with the model and effort from your codex config." >&2
+    if run_review "" ""; then
+      echo "note: the review below ran on your configured model, not '${model}'." >&2
+    else
+      echo "error: codex review failed on both the pinned defaults and your config; raw output at ${log}" >&2
+      tail -n 20 "$log" >&2
+      rm -f "$out"
+      exit 4
+    fi
+  else
+    echo "error: codex review failed; raw output at ${log}" >&2
+    tail -n 20 "$log" >&2
+    rm -f "$out"
+    exit 4
+  fi
 fi
 
 if [ ! -s "$out" ]; then
