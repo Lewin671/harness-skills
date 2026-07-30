@@ -25,13 +25,17 @@ Read-only by design. Never use this skill to apply fixes.
 
 ## Usage
 
-Run `run-codex-review` from this skill's directory. It handles the
-parts that fail silently when hand-rolled — read-only enforcement,
+Run the `run-codex-review` script that sits next to this SKILL.md —
+usually `~/.claude/skills/codex-review/run-codex-review`. It handles
+the parts that fail silently when hand-rolled: read-only enforcement,
 output placement, empty-scope detection, mutually exclusive flags.
 
 ```bash
-<skill-dir>/run-codex-review --repo /path/to/repo --uncommitted
+~/.claude/skills/codex-review/run-codex-review --repo /path/to/repo --uncommitted
 ```
+
+If that path does not exist, locate the script beside this file rather
+than reconstructing the command by hand.
 
 Set the Bash tool `timeout` to at least `600000`. Reviews routinely
 run for minutes; the 120s default kills them mid-run.
