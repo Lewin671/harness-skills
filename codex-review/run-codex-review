@@ -113,9 +113,17 @@ fi
 
 # Refuse to spend minutes on an empty scope. Codex reports "there are no
 # changes" as an ordinary successful review, which reads like a pass.
+#
+# Every check here must match what Codex actually reviews. A precheck
+# that is narrower than the real scope silently skips a valid review,
+# which is the worst failure this script can have.
 case "$scope_flag" in
   --uncommitted)
-    if [ -z "$(git status --porcelain)" ]; then
+    # --untracked-files=normal is explicit because a repo configured
+    # with status.showUntrackedFiles=no would otherwise report nothing
+    # while untracked files — which this scope promises to review — sit
+    # right there.
+    if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then
       echo "nothing to review: no staged, unstaged, or untracked changes" >&2
       exit 2
     fi
@@ -123,17 +131,32 @@ case "$scope_flag" in
   --base)
     git rev-parse --verify --quiet "$scope_value" >/dev/null || {
       echo "error: no such branch or ref: ${scope_value}" >&2; exit 3; }
-    # Two-dot on purpose: wider than merge-base, so a real difference is
-    # never mistaken for an empty scope.
-    if git diff --quiet "$scope_value" HEAD; then
-      echo "nothing to review: HEAD is identical to ${scope_value}" >&2
+    # Codex reviews `git diff <merge-base>` with no second revision, so
+    # its scope runs from the merge base to the *working tree*. Diffing
+    # against HEAD instead would miss uncommitted edits and wrongly
+    # declare an empty scope whenever HEAD already matches the base.
+    merge_base="$(git merge-base "$scope_value" HEAD 2>/dev/null)" || merge_base=""
+    if [ -z "$merge_base" ]; then
+      echo "error: ${scope_value} and HEAD have no common ancestor" >&2
+      exit 3
+    fi
+    if git diff --quiet "$merge_base"; then
+      echo "nothing to review: no changes since the merge base with ${scope_value}" >&2
       exit 2
     fi
     ;;
   --commit)
     git rev-parse --verify --quiet "${scope_value}^{commit}" >/dev/null || {
       echo "error: no such commit: ${scope_value}" >&2; exit 3; }
-    if [ -z "$(git show --pretty=format: --name-only "$scope_value")" ]; then
+    # Against the first parent, not `git show`: for a merge commit the
+    # latter uses combined-diff semantics and usually prints nothing,
+    # which would misreport an ordinary merge as an empty commit.
+    if git rev-parse --verify --quiet "${scope_value}^1" >/dev/null; then
+      commit_files="$(git diff --name-only "${scope_value}^1" "$scope_value")"
+    else
+      commit_files="$(git show --pretty=format: --name-only "$scope_value")"
+    fi
+    if [ -z "$commit_files" ]; then
       echo "nothing to review: ${scope_value} is an empty commit" >&2
       exit 2
     fi
@@ -144,9 +167,20 @@ case "$scope_flag" in
 esac
 
 # Output must live outside the repo: a file written inside it gets picked
-# up by Codex's own file sweeps and pollutes the review.
-out="$(mktemp "${TMPDIR:-/tmp}/codex-review-XXXXXX")"
-log="$(mktemp "${TMPDIR:-/tmp}/codex-review-log-XXXXXX")"
+# up by Codex's own file sweeps and pollutes the review. A relative or
+# repo-local TMPDIR would quietly break that invariant, so resolve it and
+# fall back to /tmp when it lands inside the worktree.
+scratch="${TMPDIR:-/tmp}"
+scratch="$(cd "$scratch" 2>/dev/null && pwd -P)" || scratch="/tmp"
+worktree_root="$(git rev-parse --show-toplevel)"
+worktree_root="$(cd "$worktree_root" && pwd -P)"
+if [ "$scratch" = "$worktree_root" ] || case "$scratch/" in "$worktree_root"/*) true ;; *) false ;; esac; then
+  echo "warning: TMPDIR is inside the reviewed repo; using /tmp instead" >&2
+  scratch="/tmp"
+fi
+
+out="$(mktemp "${scratch}/codex-review-XXXXXX")"
+log="$(mktemp "${scratch}/codex-review-log-XXXXXX")"
 
 # Announce up front, not just on failure: a caller watching a long run
 # needs somewhere to look while it is still going.
@@ -157,11 +191,7 @@ echo "log: ${log}" >&2
 run_review() {
   local use_model="$1" use_effort="$2"
   cmd=("$codex_bin" exec review)
-  if [ "$scope_flag" = "--custom" ]; then
-    # Custom instructions are a bare positional PROMPT, and every scope
-    # flag is mutually exclusive with it.
-    cmd+=("$scope_value")
-  else
+  if [ "$scope_flag" != "--custom" ]; then
     cmd+=("$scope_flag")
     [ -n "$scope_value" ] && cmd+=("$scope_value")
   fi
@@ -177,23 +207,43 @@ run_review() {
   [ -n "$use_model" ] && cmd+=(-m "$use_model")
   [ -n "$use_effort" ] && cmd+=(-c "model_reasoning_effort=\"${use_effort}\"")
   cmd+=(-o "$out")
+  if [ "$scope_flag" = "--custom" ]; then
+    # Custom instructions are a bare positional PROMPT — mutually
+    # exclusive with every scope flag, and last, after a `--`. Without
+    # the terminator, instructions that begin with a dash (a Markdown
+    # bullet, say) are parsed as an unknown option.
+    cmd+=(-- "$scope_value")
+  fi
 
   echo "running: ${cmd[*]}" >&2
   # Stream a bounded progress feed to stderr, archive the full stream to
   # the log. Reviews run for many minutes; without a live feed there is
-  # no way to tell a working run from a hung one. Each line is truncated
-  # so the feed stays readable and small enough to poll safely. stdout
-  # stays clean for the report.
-  "${cmd[@]}" 2>&1 | tee -a "$log" \
-    | awk '{ print (length($0) > 180 ? substr($0, 1, 180) "..." : $0) }' >&2
+  # no way to tell a working run from a hung one. stdout stays clean for
+  # the report.
+  "${cmd[@]}" 2>&1 | tee -a "$log" | truncate_stream >&2
   return "${PIPESTATUS[0]}"
+}
+
+# Truncate each line and emit it immediately. A `while read` loop is
+# line-buffered by construction; awk block-buffers when its stdout is
+# not a TTY, which is exactly the background case where a live progress
+# feed is the only way to tell a working run from a hung one — there,
+# a whole short review can finish before the first byte appears.
+truncate_stream() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "${#line}" -gt 180 ]; then
+      printf '%s...\n' "${line:0:180}"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
 }
 
 # Show the tail of the log without dumping raw event JSON, whose single
 # lines can carry tens of KB of captured command output.
 tail_log() {
-  tail -n 20 "$log" \
-    | awk '{ print (length($0) > 180 ? substr($0, 1, 180) "..." : $0) }' >&2
+  tail -n 20 "$log" | truncate_stream >&2
 }
 
 # A rejected model or effort means the pinned defaults have gone stale,
