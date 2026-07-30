@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Run `codex exec review` as a read-only second-opinion reviewer.
+#
+# Prints the review Markdown to stdout; diagnostics go to stderr.
+#
+# Exit codes carry the meaning that Codex's own exit code does not:
+#   0  review ran and produced a report (findings or not)
+#   2  nothing in scope to review — Codex was never invoked
+#   3  environment problem (no codex, not a git repo, bad arguments)
+#   4  codex ran but failed
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: run-codex-review [SCOPE] [OPTIONS]
+
+Scope (choose exactly one, default --uncommitted):
+  --uncommitted        staged + unstaged + untracked changes
+  --base <BRANCH>      current branch against BRANCH
+  --commit <SHA>       the changes introduced by one commit
+  --custom <TEXT>      free-form instructions that describe their own
+                       scope; mutually exclusive with the three above,
+                       and skips the empty-scope precheck
+
+Options:
+  --model <MODEL>      override the model (default: inherit user config)
+  --effort <LEVEL>     reasoning effort: low|medium|high|xhigh (and max
+                       on models that support it). Pass this whenever
+                       you pass --model: the configured default effort
+                       may be rejected by the model you asked for.
+  --repo <DIR>         repository to review (default: current directory)
+  --keep-log           print the raw event-log path on success too
+
+Environment:
+  CODEX_BIN            path to the codex binary (default: codex)
+USAGE
+}
+
+scope_flag="--uncommitted"
+scope_value=""
+scope_set=0
+model=""
+effort=""
+repo="."
+keep_log=0
+
+set_scope() {
+  if [ "$scope_set" -eq 1 ]; then
+    echo "error: scopes are mutually exclusive; pick one of --uncommitted, --base, --commit, --custom" >&2
+    exit 3
+  fi
+  scope_set=1
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --uncommitted)
+      set_scope; scope_flag="--uncommitted"; scope_value=""; shift ;;
+    --base|--commit|--custom)
+      set_scope
+      scope_flag="$1"
+      shift
+      [ "$#" -gt 0 ] || { echo "error: ${scope_flag} needs a value" >&2; usage; exit 3; }
+      scope_value="$1"; shift ;;
+    --model)
+      shift; [ "$#" -gt 0 ] || { echo "error: --model needs a value" >&2; exit 3; }
+      model="$1"; shift ;;
+    --effort)
+      shift; [ "$#" -gt 0 ] || { echo "error: --effort needs a value" >&2; exit 3; }
+      effort="$1"; shift ;;
+    --repo)
+      shift; [ "$#" -gt 0 ] || { echo "error: --repo needs a value" >&2; exit 3; }
+      repo="$1"; shift ;;
+    --keep-log) keep_log=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "error: unknown argument: $1" >&2; usage; exit 3 ;;
+  esac
+done
+
+cd "$repo" || { echo "error: cannot enter ${repo}" >&2; exit 3; }
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+  echo "error: ${repo} is not a git work tree" >&2; exit 3; }
+
+codex_bin="${CODEX_BIN:-codex}"
+if ! "$codex_bin" --version >/dev/null 2>&1; then
+  cat >&2 <<EOF
+error: '${codex_bin}' is not runnable.
+
+A codex on PATH that fails --version usually means a broken install
+(a shell-function wrapper, or an npm shim whose vendored binary is
+missing) rather than a missing one. Try 'codex update', or set
+CODEX_BIN to a working binary.
+EOF
+  exit 3
+fi
+
+# Refuse to spend minutes on an empty scope. Codex reports "there are no
+# changes" as an ordinary successful review, which reads like a pass.
+case "$scope_flag" in
+  --uncommitted)
+    if [ -z "$(git status --porcelain)" ]; then
+      echo "nothing to review: no staged, unstaged, or untracked changes" >&2
+      exit 2
+    fi
+    ;;
+  --base)
+    git rev-parse --verify --quiet "$scope_value" >/dev/null || {
+      echo "error: no such branch or ref: ${scope_value}" >&2; exit 3; }
+    # Two-dot on purpose: wider than merge-base, so a real difference is
+    # never mistaken for an empty scope.
+    if git diff --quiet "$scope_value" HEAD; then
+      echo "nothing to review: HEAD is identical to ${scope_value}" >&2
+      exit 2
+    fi
+    ;;
+  --commit)
+    git rev-parse --verify --quiet "${scope_value}^{commit}" >/dev/null || {
+      echo "error: no such commit: ${scope_value}" >&2; exit 3; }
+    if [ -z "$(git show --pretty=format: --name-only "$scope_value")" ]; then
+      echo "nothing to review: ${scope_value} is an empty commit" >&2
+      exit 2
+    fi
+    ;;
+  --custom)
+    : # scope is whatever the instructions describe; nothing to precheck
+    ;;
+esac
+
+# Output must live outside the repo: a file written inside it gets picked
+# up by Codex's own file sweeps and pollutes the review.
+out="$(mktemp "${TMPDIR:-/tmp}/codex-review-XXXXXX")"
+log="$(mktemp "${TMPDIR:-/tmp}/codex-review-log-XXXXXX")"
+
+cmd=("$codex_bin" exec review)
+if [ "$scope_flag" = "--custom" ]; then
+  # Custom instructions are a bare positional PROMPT, and every scope
+  # flag is mutually exclusive with it.
+  cmd+=("$scope_value")
+else
+  cmd+=("$scope_flag")
+  [ -n "$scope_value" ] && cmd+=("$scope_value")
+fi
+# No -s/--sandbox flag exists on `exec review`; this override is the only
+# way to guarantee the reviewer cannot write.
+cmd+=(-c 'sandbox_mode="read-only"')
+[ -n "$model" ] && cmd+=(-m "$model")
+[ -n "$effort" ] && cmd+=(-c "model_reasoning_effort=\"${effort}\"")
+cmd+=(-o "$out")
+
+echo "running: ${cmd[*]}" >&2
+
+if ! "${cmd[@]}" >"$log" 2>&1; then
+  echo "error: codex review failed; raw output at ${log}" >&2
+  if grep -q "reasoning.effort" "$log" 2>/dev/null; then
+    echo "hint: the configured reasoning effort is not supported by this model — rerun with --effort high" >&2
+  fi
+  tail -n 20 "$log" >&2
+  rm -f "$out"
+  exit 4
+fi
+
+if [ ! -s "$out" ]; then
+  echo "error: codex review produced no report; raw output at ${log}" >&2
+  tail -n 20 "$log" >&2
+  exit 4
+fi
+
+cat "$out"
+echo "report: ${out}" >&2
+if [ "$keep_log" -eq 1 ]; then
+  echo "event log: ${log}" >&2
+else
+  rm -f "$log"
+fi
