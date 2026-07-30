@@ -37,11 +37,34 @@ output placement, empty-scope detection, mutually exclusive flags.
 If that path does not exist, locate the script beside this file rather
 than reconstructing the command by hand.
 
-**Set the Bash tool `timeout` to `600000`.** The default reviewer is
-the strongest model at maximum reasoning effort, which takes minutes —
-a small diff measured 100s. The 120s tool default kills it mid-run. On
-a large diff, run it with `run_in_background` instead of racing the
-10-minute ceiling.
+**Always run it with `run_in_background: true`.** The default reviewer
+is the strongest model at maximum reasoning effort: a two-file, 374-line
+diff blew past the Bash tool's 10-minute ceiling, and a tiny one still
+took 100s. Foreground runs are a coin flip, and losing costs the whole
+review. Start it in the background, then do other work or wait for the
+completion notification — never `sleep`-poll for it.
+
+### Is it still running, or hung?
+
+The script streams a bounded progress feed to stderr — one truncated
+line per Codex event — so the background task's output file grows in
+real time and stays small. A full review of a small diff produced 19
+lines, 3 KB. Read that file to check:
+
+- New `item.started` / `item.completed` lines → working; Codex is
+  reading files and running git commands.
+- Nothing new for several minutes → likely stalled on the model side.
+- `report:` line → finished; the report is on stdout.
+
+The feed is deliberately `--json`, one line per event, **not** Codex's
+default human stream. That default echoes the full output of every
+command Codex runs — entire `git diff`s, entire directory listings —
+which runs to thousands of lines and will blow up the context of
+whoever reads it.
+
+The script also prints `log: <path>` at startup. That file holds the
+same stream **untruncated**, so `tail` it for diagnostics; never read
+it whole for the same reason.
 
 Scope — exactly one, and they cannot be combined:
 

@@ -30,7 +30,6 @@ Options:
   --inherit            use the model and effort from your codex config
                        instead of the pinned strongest defaults
   --repo <DIR>         repository to review (default: current directory)
-  --keep-log           print the raw event-log path on success too
 
 Defaults to the strongest available model at maximum reasoning effort.
 A second opinion is only worth the wait if it comes from the best
@@ -59,7 +58,6 @@ model="$default_model"
 effort="$default_effort"
 pinned=1
 repo="."
-keep_log=0
 
 set_scope() {
   if [ "$scope_set" -eq 1 ]; then
@@ -90,7 +88,6 @@ while [ "$#" -gt 0 ]; do
     --repo)
       shift; [ "$#" -gt 0 ] || { echo "error: --repo needs a value" >&2; exit 3; }
       repo="$1"; shift ;;
-    --keep-log) keep_log=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; usage; exit 3 ;;
   esac
@@ -151,6 +148,10 @@ esac
 out="$(mktemp "${TMPDIR:-/tmp}/codex-review-XXXXXX")"
 log="$(mktemp "${TMPDIR:-/tmp}/codex-review-log-XXXXXX")"
 
+# Announce up front, not just on failure: a caller watching a long run
+# needs somewhere to look while it is still going.
+echo "log: ${log}" >&2
+
 # Build and run the review. Args: model ("" to inherit), effort ("" to
 # inherit). Returns codex's exit status.
 run_review() {
@@ -167,17 +168,41 @@ run_review() {
   # No -s/--sandbox flag exists on `exec review`; this override is the
   # only way to guarantee the reviewer cannot write.
   cmd+=(-c 'sandbox_mode="read-only"')
+  # --json is for progress bounding, not for parsing: it turns the run
+  # into one line per event. The default human stream instead echoes the
+  # full output of every command Codex runs (entire git diffs, entire
+  # ls listings), which can reach thousands of lines and blow up the
+  # context of whoever reads it. The report still comes from -o.
+  cmd+=(--json)
   [ -n "$use_model" ] && cmd+=(-m "$use_model")
   [ -n "$use_effort" ] && cmd+=(-c "model_reasoning_effort=\"${use_effort}\"")
   cmd+=(-o "$out")
 
   echo "running: ${cmd[*]}" >&2
-  "${cmd[@]}" >"$log" 2>&1
+  # Stream a bounded progress feed to stderr, archive the full stream to
+  # the log. Reviews run for many minutes; without a live feed there is
+  # no way to tell a working run from a hung one. Each line is truncated
+  # so the feed stays readable and small enough to poll safely. stdout
+  # stays clean for the report.
+  "${cmd[@]}" 2>&1 | tee -a "$log" \
+    | awk '{ print (length($0) > 180 ? substr($0, 1, 180) "..." : $0) }' >&2
+  return "${PIPESTATUS[0]}"
+}
+
+# Show the tail of the log without dumping raw event JSON, whose single
+# lines can carry tens of KB of captured command output.
+tail_log() {
+  tail -n 20 "$log" \
+    | awk '{ print (length($0) > 180 ? substr($0, 1, 180) "..." : $0) }' >&2
 }
 
 # A rejected model or effort means the pinned defaults have gone stale,
 # not that the review is impossible. Fall back to the user's configured
 # model once rather than failing a minute in.
+#
+# The match is deliberately loose, and not anchored to an error line:
+# Codex formats these 400s differently across modes. A false positive
+# costs one extra run; a false negative costs the whole review.
 defaults_rejected() {
   [ "$pinned" -eq 1 ] || return 1
   grep -qE "reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found" "$log" 2>/dev/null
@@ -191,13 +216,13 @@ if ! run_review "$model" "$effort"; then
       echo "note: the review below ran on your configured model, not '${model}'." >&2
     else
       echo "error: codex review failed on both the pinned defaults and your config; raw output at ${log}" >&2
-      tail -n 20 "$log" >&2
+      tail_log
       rm -f "$out"
       exit 4
     fi
   else
     echo "error: codex review failed; raw output at ${log}" >&2
-    tail -n 20 "$log" >&2
+    tail_log
     rm -f "$out"
     exit 4
   fi
@@ -205,14 +230,12 @@ fi
 
 if [ ! -s "$out" ]; then
   echo "error: codex review produced no report; raw output at ${log}" >&2
-  tail -n 20 "$log" >&2
+  tail_log
   exit 4
 fi
 
 cat "$out"
+# Both files are left in place: the log path was announced at startup,
+# so deleting it here would break a promise the caller may still be
+# holding. TMPDIR cleanup is the system's job.
 echo "report: ${out}" >&2
-if [ "$keep_log" -eq 1 ]; then
-  echo "event log: ${log}" >&2
-else
-  rm -f "$log"
-fi
