@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Read-only second opinions from OpenAI's Codex, in two modes:
+#
+#   review   run `codex exec review` over a code change
+#   consult  ask a free-form question answered with the repo as context
+#
+# Prints the result Markdown to stdout; diagnostics go to stderr.
+#
+# Exit codes carry the meaning that Codex's own exit code does not:
+#   0  a result was produced
+#   2  (review only) nothing in scope — Codex was never invoked
+#   3  environment problem (no codex, not a git repo, bad arguments)
+#   4  codex ran but failed
+#   5  hung past --timeout and was killed
+set -euo pipefail
+# An exported CDPATH would make the `cd "$repo"` in the shared runtime
+# resolve a slashless --repo through other directories — running against
+# a same-named wrong tree — and echo the resolved path onto stdout,
+# which must carry nothing but the result. It would corrupt the
+# $(cd ...) substitutions the same way.
+unset CDPATH
+
+# Resolve the physical directory so the lib/ files are found through
+# the symlink the skill linker installs.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+top_usage() {
+  cat >&2 <<'USAGE'
+Usage: run-codex-second-opinion <review|consult> [ARGS]
+
+  review   run `codex exec review` over a code change
+  consult  ask a free-form question answered with the repo as context
+
+Run `run-codex-second-opinion <mode> --help` for that mode's arguments.
+
+Environment:
+  CODEX_BIN                     path to the codex binary (default: codex)
+  CODEX_SECOND_OPINION_MODEL    override the pinned default model
+  CODEX_SECOND_OPINION_EFFORT   override the pinned default effort
+  CODEX_SECOND_OPINION_TIMEOUT  override the default timeout (seconds)
+USAGE
+}
+
+mode="${1:-}"
+case "$mode" in
+  review|consult) shift ;;
+  -h|--help) top_usage; exit 0 ;;
+  '')
+    echo "error: a mode is required" >&2
+    top_usage
+    exit 3 ;;
+  *)
+    echo "error: unknown mode: ${mode}" >&2
+    top_usage
+    exit 3 ;;
+esac
+
+# shellcheck source=lib/common.bash
+source "${script_dir}/lib/common.bash"
+# shellcheck source=/dev/null
+source "${script_dir}/lib/${mode}.bash"
+
+mode_main "$@"
