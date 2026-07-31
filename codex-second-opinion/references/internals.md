@@ -18,17 +18,50 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   `codex features list`, exiting `3` if managed policy forces any of
   them back on. Fail closed: an unparseable answer counts as enabled.
 - Standalone MCP servers from the user's own config have no global
-  disable switch on 0.146.0 (only per-server
-  `mcp_servers.<id>.enabled` keys). The script inspects them with
-  `codex mcp list --json` and fails closed if any are enabled or the
-  listing cannot be verified. `--allow-mcp` is an explicit user-approved
-  escape hatch; it keeps local commands read-only but accepts that MCP
-  tools may mutate external systems.
+  disable switch on 0.146.0 — but the per-server
+  `mcp_servers.<id>.enabled` key can be overridden through `-c` for a
+  single invocation, verified: `codex mcp list --json -c
+  mcp_servers.<id>.enabled=false` reports that server as disabled. So
+  the script switches them off rather than refusing, which removes the
+  exposure instead of merely declining to proceed in its presence.
+  Three things make that safe:
+  - Entries are read by brace depth, not by indentation or key order,
+    so the parser survives a compact listing and ignores nested
+    objects.
+  - The parser emits one line per enabled *entry*, printing `?` when it
+    cannot read that entry's name, and a `?` is a refusal. Keying
+    safety on names instead would put the same blind spot in both the
+    first pass and the re-check: a nameless enabled server sitting
+    beside a named one would be disabled in neither and reported by
+    neither. An id that is not a TOML bare key is refused for the same
+    reason — it cannot be reached by a dotted `-c` path.
+  - The overrides are not trusted on their own: the script re-runs
+    `codex mcp list --json` *with* them and refuses unless codex agrees
+    nothing is enabled any more. That re-check must also *look* like a
+    listing; output it cannot recognize — including nothing at all —
+    is evidence of nothing and is refused rather than read as "all
+    clear".
+  `--allow-mcp` inverts the default: it drops the overrides and leaves
+  the servers reachable, on explicit user approval. Local commands stay
+  read-only either way.
 - The legacy `notify = [...]` callback is not feature-gated, so
   `--disable hooks` does not stop it. The script clears it with
   `-c notify=[]`; plain config keys have no managed-policy override,
   so the `-c` layer — the highest-precedence config source — is both
   the fix and the guarantee.
+- `--strict-config` closes the one drift the rest of this file cannot
+  detect. Verified on 0.146.0: an unknown `-c` key is silently ignored
+  without it (`-c bogus_key_zzz="x"` runs fine; with `--strict-config`
+  it errors "unknown configuration field ... in -c/--config override").
+  So if a later codex renames or moves `sandbox_mode` or `notify`, the
+  two guarantees above would quietly stop applying while the run
+  succeeded. Everything else here already fails closed —
+  features/mcp verification, model rejection, session mismatch — and
+  this puts the config layer on the same footing. The cost: an unknown
+  field in the *user's* config.toml now fails the run too, with the
+  same error text, which is why the failure path prints a hint naming
+  both causes. All three keys this script sets are accepted under
+  `--strict-config` on 0.146.0.
 - The result comes from `-o` (the agent's last message), not stdout:
   the event stream on stdout is `--json`, one bounded line per event,
   because the default human stream echoes entire file dumps.
@@ -51,7 +84,17 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   wants.
 - The `running:` diagnostic never includes the prompt or question
   body: a multiline value would forge standalone `report:` /
-  `answer:` / `item.started` markers in the stderr feed.
+  `answer:` / `item.started` markers in the stderr feed. The consult
+  `resume:` line has the same exposure through caller-supplied
+  `--model`/`--effort` values, and sanitizes them the same way.
+- Model settings are validated as a closed three-way choice (pinned /
+  explicit pair / `--inherit`) rather than as independent flags. Left
+  open, `--model X` alone keeps the pinned `xhigh` — the tier weaker
+  models reject — *and* clears `pinned`, which disables the
+  stale-default retry, so the documented "always pass both" rule was
+  the only thing standing between a caller and a guaranteed exit 4.
+  `--inherit` mixed with `--model` was order-dependent for the same
+  reason.
 
 ## Review mode (lib/review.bash)
 
@@ -60,7 +103,27 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   script uses it.
 - The positional `[PROMPT]` is **mutually exclusive with all three
   scope flags** — hence `--custom` being its own scope rather than a
-  modifier.
+  modifier. Confirmed on 0.146.0: `exec review --uncommitted -- "x"`
+  fails at argument parsing with "the argument '--uncommitted' cannot
+  be used with '[PROMPT]'".
+- A `--context` prompt names revisions by resolved object name, never
+  by the ref the caller typed. `git check-ref-format` accepts branch
+  names like `a;whoami` and ``a`id` ``, and the composed prompt is a
+  command the reviewer is invited to run — a raw ref there is command
+  injection into that reviewer's shell, and can point the review at a
+  different scope. Hashes carry no metacharacters and pin the scope
+  against a ref that moves mid-run. The ref is still named for human
+  context, shell-quoted. The same helper quotes the model values in
+  consult's `resume:` line, which is advertised as ready to run.
+- That exclusivity is also why `--context` restates the scope as prose
+  instead of keeping the flag: there is no invocation that carries
+  both. The wrapper still runs the precheck on the real flag, so an
+  empty scope is caught, but the reviewed scope becomes
+  prompt-described. `--title` looked like a way out — it coexists with
+  scope flags — but it is not a general context channel: in the
+  binary, `commit_title` hangs off `ReviewTarget::Commit` alone
+  (`BaseBranch` and `Custom` carry one field each), so it reaches the
+  model only for `--commit` and only as a commit title.
 - The empty-scope prechecks must match what Codex actually reviews: it
   diffs the merge base against the *working tree* (not HEAD) for
   `--base`, and a merge commit needs a first-parent diff (not
@@ -89,3 +152,13 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
 - A rejected model on a follow-up is never auto-retried: codex may
   have persisted the question in the session before rejecting the
   model, and a resend could record it twice.
+- A `resume:` line is printed even when there is no session id, as
+  prose rather than a command. Callers are told to trust the *final*
+  marker line; printing nothing would hand that status to a `resume:`
+  line invented inside the model-controlled answer body.
+- The `resume:` line exists because the session id alone is not enough
+  to reproduce a turn: model settings do not travel with the session,
+  and the operator was otherwise expected to remember them. After a
+  stale-default fallback it prints `--inherit`, not the pinned
+  defaults — those already failed once, and a resumed session has no
+  automatic retry left to catch the second failure.

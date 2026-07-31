@@ -32,11 +32,16 @@ Markdown bullet, say) are not parsed as options.
 
 ## Multi-Turn Discussion
 
-Every successful run prints `session: <ID>` to stderr. To push back,
-probe an argument, or ask a follow-up, pass that id with `--continue`.
-Codex resumes the same session with everything it already read and
-said, so follow-ups need only the new material, not a restatement.
-Each follow-up prints the `session:` line again for the next turn.
+Every successful run prints two lines to stderr: `session: <ID>`, and a
+ready-made `resume: --continue <ID> [model flags]` descriptor. To push
+back, probe an argument, or ask a follow-up, run the resume line with
+the new question. Codex resumes the same session with everything it
+already read and said, so follow-ups need only the new material, not a
+restatement. Each follow-up prints both lines again for the next turn.
+
+That resumability is on-disk state: Codex keeps the conversation under
+`CODEX_HOME/sessions`, so a consultation's question and answer outlive
+the run.
 This is a real discussion loop: relay each answer, gather the user's
 (or Claude's own) counterpoints, and continue until the question is
 settled or the disagreement is crisply mapped.
@@ -48,15 +53,23 @@ distinction when reporting them.
 
 Three rules keep the loop honest:
 
-- **Repeat model flags on every follow-up.** They do not travel with
-  the session: a follow-up without the original `--model`/`--effort`
-  (or `--inherit`) switches the discussion back to the pinned defaults
-  mid-conversation.
+- **Use the `resume:` line, do not reassemble it.** Model flags do not
+  travel with the session: a follow-up without the original
+  `--model`/`--effort` (or `--inherit`) switches the discussion back to
+  the pinned defaults mid-conversation. The descriptor already carries
+  them — including the case where a stale pinned model fell back to the
+  user's config, where the correct follow-up is `--inherit` and
+  repeating the pinned defaults would fail with no retry left.
 - Continuation is verified: if the session expired, the script
   discards the fresh-thread answer and exits `4` instead of passing it
   off as a follow-up. Start a new consultation and restate context.
 - If the `session:` line is ever missing, the answer is still valid —
   there is just nothing to continue; the next question starts fresh.
+  The `resume:` line is printed either way, reading `unavailable — ...`
+  in that case. That is deliberate: the answer body is
+  model-controlled, and a run that printed no `resume:` line at all
+  would leave one invented inside that body as the last such line in a
+  merged stream.
 
 A rejected model on a follow-up is never retried automatically: the
 rejected attempt may already have recorded the question in the

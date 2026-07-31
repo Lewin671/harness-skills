@@ -13,25 +13,25 @@ The QUESTION is one free-form argument: the decision to weigh, the plan
 to critique, the trade-off to argue. Name the files or documents Codex
 should read — it answers with the repository as context.
 
-After a successful run the script prints `session: <ID>` to stderr.
-Pass that id back via --continue to ask a follow-up in the same
-conversation — Codex keeps everything it already read and said.
-Model flags do not travel with the session: a follow-up to a run that
-used --model/--effort or --inherit must repeat those same flags, or
-the resumed turn switches back to the pinned defaults.
+After a successful run the script prints `session: <ID>` and a ready-made
+`resume: --continue <ID> [model flags]` line to stderr. Model flags do
+not travel with the session, so the resume line — not the bare id — is
+what reproduces the same model on a follow-up.
 
 Options:
   --continue <SESSION> resume this session UUID with a follow-up
                        QUESTION instead of starting fresh
   --model <MODEL>      override the pinned high-capability model
-  --effort <LEVEL>     low|medium|high|xhigh|max (default: xhigh). Pass
-                       this whenever you pass --model — a weaker model
+  --effort <LEVEL>     low|medium|high|xhigh|max (default: xhigh). Must
+                       be given together with --model — a weaker model
                        may not accept the default effort.
   --inherit            use the model and effort from your codex config
-                       instead of the pinned defaults
-  --allow-mcp          allow enabled or unverifiable standalone MCP
-                       servers; only after explicit user approval,
-                       because they may mutate external systems
+                       instead of the pinned defaults; cannot be
+                       combined with --model or --effort
+  --allow-mcp          keep enabled standalone MCP servers reachable
+                       instead of switching them off for this run;
+                       only after explicit user approval, because
+                       they may mutate external systems
   --repo <DIR>         repository for context (default: current
                        directory)
   --timeout <SECONDS>  abort a hung run (default: 3000; 0 disables;
@@ -90,13 +90,13 @@ mode_main() {
       --model)
         shift; [ "$#" -gt 0 ] && [ -n "$1" ] || {
           echo "error: --model needs a non-empty value (use --inherit for your config's model)" >&2; exit 3; }
-        model="$1"; pinned=0; shift ;;
+        model="$1"; pinned=0; model_set=$((model_set + 1)); shift ;;
       --effort)
         shift; [ "$#" -gt 0 ] && [ -n "$1" ] || {
           echo "error: --effort needs a non-empty value" >&2; exit 3; }
-        effort="$1"; pinned=0; shift ;;
+        effort="$1"; pinned=0; effort_set=$((effort_set + 1)); shift ;;
       --inherit)
-        model=""; effort=""; pinned=0; shift ;;
+        model=""; effort=""; pinned=0; inherit_set=$((inherit_set + 1)); shift ;;
       --allow-mcp)
         allow_mcp=1; shift ;;
       --continue)
@@ -155,6 +155,7 @@ mode_main() {
     exit 3
   fi
 
+  common_check_model_flags
   common_env_checks
   common_setup_scratch
   run_with_fallback
@@ -183,10 +184,43 @@ mode_main() {
   fi
 
   emit_result
-  # A missing id (say the event shape changed) just means no session
-  # line: the answer above stands, only the follow-up affordance is
+  # A missing id (say the event shape changed) just means no session to
+  # continue: the answer above stands, only the follow-up affordance is
   # lost.
-  if [ -n "$session_out" ]; then
+  if [ -z "$session_out" ]; then
+    # Still emit a `resume:` line, as prose that cannot be mistaken for
+    # a command. Callers are told to trust the *final* marker line, and
+    # the answer body is model-controlled: staying silent here would
+    # leave a `resume:` line invented inside that body as the last one
+    # in a merged stream.
+    echo "resume: unavailable — no session id in the stream; start a fresh consultation" >&2
+  else
     echo "session: ${session_out}" >&2
+    # Model settings do not travel with the session, so a bare id hands
+    # the caller half a command and asks them to remember the rest —
+    # and forgetting silently switches the discussion to a different
+    # model mid-conversation. Hence a whole resumable descriptor, built
+    # on three rules:
+    #
+    #  - Name the model that actually answered, not just flags the
+    #    caller typed: the effective settings can come from
+    #    CODEX_SECOND_OPINION_MODEL/_EFFORT, often as one-shot
+    #    assignments that are gone by the time anyone replays this line.
+    #    Being explicit costs nothing on a resumed session, where the
+    #    stale-default retry is blocked either way.
+    #  - After a stale-default fallback the answer came from the user's
+    #    config, so --inherit is what reproduces it. Repeating the
+    #    pinned defaults would fail a second time, with no automatic
+    #    retry left to catch it.
+    #  - Quote the values for the context this line is advertised in. A
+    #    model name carrying a space, `;`, or `$(...)` would otherwise
+    #    change the command it is offered as.
+    local resume_flags=""
+    if [ "$used_fallback" -eq 1 ] || [ -z "$model" ]; then
+      resume_flags=" --inherit"
+    else
+      resume_flags=" --model $(shell_quote "$model") --effort $(shell_quote "$effort")"
+    fi
+    echo "resume: --continue ${session_out}${resume_flags}" >&2
   fi
 }

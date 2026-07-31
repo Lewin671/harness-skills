@@ -24,6 +24,38 @@ intended behaviour without Claude's suspected findings. If the user asks
 Codex to adjudicate a specific finding, use `--custom` and label the result
 as a targeted cross-check rather than a blind review.
 
+## Context
+
+A scope flag carries the diff and nothing else. When the review needs to
+know what the change was *meant* to do — a refactor that must preserve
+behaviour, a constraint that is not visible in the diff, a
+performance-driven rewrite — pass that background with `--context`:
+
+```
+review --repo /path --base main \
+  --context "Extracts the retry loop into retry(); behaviour must be
+             unchanged. Callers in jobs/ rely on the old back-off timing."
+```
+
+Keep it to intended behaviour, facts, and constraints. Claude's
+suspected defects do not belong there — that is a cross-check, and it
+belongs in `--custom` with the result labelled accordingly. The prompt
+tells Codex to treat the background as something to check the code
+against, not to accept: where code and stated intent disagree, that
+mismatch is itself a finding.
+
+One trade-off is worth knowing, because it is not free. `codex exec
+review` refuses a scope flag and a prompt in the same invocation, so
+with `--context` the scope reaches Codex as prose ("review the diff from
+`git merge-base main HEAD` to the working tree") instead of as a flag.
+The empty-scope precheck still runs on the real flag, so an empty scope
+still exits `2` — but what Codex ends up diffing is now
+prompt-described, and can drift. Without a genuine need for context,
+prefer the plain scope flag.
+
+`--context` cannot be combined with `--custom`: custom instructions
+already are free-form text carrying their own scope.
+
 The script refuses to spend minutes on an empty scope: a clean tree,
 an empty commit, or no changes since the merge base exit `2` before
 Codex is ever invoked. Codex itself reports "there are no changes" as

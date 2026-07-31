@@ -31,6 +31,29 @@ pinned=1
 repo="."
 allow_mcp=0
 
+# `-c mcp_servers.<id>.enabled=false` overrides, one pair per enabled
+# standalone MCP server, filled in by common_env_checks and replayed on
+# every invocation. Empty when the config has none, or when --allow-mcp
+# deliberately keeps them reachable.
+mcp_disable_args=()
+
+# Model settings are a closed three-way choice — pinned defaults, a
+# complete --model/--effort pair, or --inherit — not a bag of independent
+# flags whose outcome depends on their order. The parsers count what was
+# asked for; common_check_model_flags rejects every other combination.
+# Enforcing it matters because a half-specification fails in a way that
+# reads like a Codex problem: `--model X` alone keeps the pinned effort —
+# the exact tier weaker models reject — and clears `pinned`, which
+# disables the fallback retry that would otherwise rescue the run.
+model_set=0
+effort_set=0
+inherit_set=0
+
+# Set when the stale-default fallback is what actually answered. A
+# follow-up then has to repeat --inherit: the pinned defaults already
+# failed once, and on a resumed session there is no automatic retry left.
+used_fallback=0
+
 # Bounded, not just numeric: a digit string longer than what `[ -gt ]`
 # can parse makes the comparison error out inside an `if`, silently
 # removing the hang protection entirely. The length gate runs before any
@@ -61,6 +84,139 @@ timeout_secs="${CODEX_SECOND_OPINION_TIMEOUT:-3000}"
 # Validated here, not just at the flag: the environment is an input too.
 validate_timeout "$timeout_secs" "CODEX_SECOND_OPINION_TIMEOUT"
 timeout_secs="$validated_timeout"
+
+# Render a value for display inside a command someone is expected to
+# copy, run, or hand to a model. Anything outside a plainly safe set is
+# single-quoted, with embedded quotes escaped the portable '\'' way, so
+# a value carrying `;`, `$(...)`, backticks, or spaces cannot turn into
+# syntax. Ordinary values are left bare to keep the common case
+# readable.
+shell_quote() {
+  local v="$1"
+  # The replacement is the four-character sequence '\'' — close the
+  # quote, emit an escaped one, reopen. It lives in a variable because
+  # spelling it inline in the substitution is exactly where the escaping
+  # goes wrong: an earlier inline attempt produced `'a\'\'\'b'`, which
+  # is not valid shell at all.
+  local esc="'\\''"
+  case "$v" in
+    ''|*[!A-Za-z0-9._/-]*)
+      v="${v//\'/$esc}"
+      printf "'%s'" "$v" ;;
+    *)
+      printf '%s' "$v" ;;
+  esac
+}
+
+# Print one line per *enabled* server in a `codex mcp list --json`
+# payload read from stdin: its id, or `?` when the entry is enabled but
+# its name could not be read.
+#
+# One line per entry, never per name, is the whole point. Safety here
+# depends on counting enabled *entries*, and a nameless entry is exactly
+# the one a name-keyed check would miss — in both the first pass and the
+# re-check, whose blind spots would then coincide and hide it twice.
+# `?` is not a TOML bare key, so it can never collide with a real id.
+#
+# A payload whose braces or brackets never balance — truncated output —
+# prints `!` instead. Both matter: a cut mid-entry leaves that entry
+# unclosed and therefore unemitted, while a cut cleanly *between*
+# entries is brace-balanced and would otherwise look like a complete
+# listing that simply has no servers after the cut. Either way the
+# missing part is exactly what has not been switched off.
+#
+# Brace depth, not indentation or key order: the listing is
+# pretty-printed today and could be compact tomorrow, and a nested
+# object — a transport block with its own `name`, say — must never be
+# mistaken for a server. Only keys directly inside a top-level entry
+# (depth 1) are read.
+mcp_enabled_ids() {
+  awk '
+    function flush() {
+      if (enabled == 1) print (name == "" ? "?" : name)
+      name = ""; enabled = 0; key = ""
+    }
+    {
+      s = $0; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\"") {
+          # Consume the whole string token, honouring backslash escapes,
+          # so that a brace or colon inside it cannot move the parser.
+          val = ""; i++
+          while (i <= n) {
+            c = substr(s, i, 1)
+            if (c == "\\") { val = val substr(s, i, 2); i += 2; continue }
+            if (c == "\"") break
+            val = val c; i++
+          }
+          # A string followed by `:` is a key; anything else is a value.
+          j = i + 1
+          while (j <= n && substr(s, j, 1) ~ /[ \t\r]/) j++
+          if (substr(s, j, 1) == ":") {
+            if (depth == 1) key = val
+            i = j
+          } else {
+            if (depth == 1 && key == "name") name = val
+            key = ""
+          }
+          continue
+        }
+        if (c == "{") { depth++; if (depth == 1) flush(); continue }
+        if (c == "}") { if (depth == 1) flush(); depth--; continue }
+        # Brackets are tracked purely to prove the payload is whole.
+        # Braces alone are not enough: a listing cut off between two
+        # entries — after `}` but before `]` — is brace-balanced, so it
+        # would parse as a complete listing that happens to omit every
+        # server after the cut.
+        if (c == "[") { bdepth++; continue }
+        if (c == "]") { bdepth--; continue }
+        if (depth == 1 && key == "enabled" && substr(s, i, 4) == "true") {
+          enabled = 1; key = ""; i += 3
+        }
+      }
+    }
+    END { if (depth != 0 || bdepth != 0) print "!" }'
+}
+
+# Close the model state machine. Called by each mode_main straight after
+# parsing, before anything is spent: every rejection here is a mistake
+# that would otherwise surface minutes later as a failed run.
+common_check_model_flags() {
+  # A newline in either value would survive into the consult `resume:`
+  # line and forge a second standalone marker there. Rejecting it beats
+  # sanitizing: silently rewriting a model name would advertise a
+  # command that does not reproduce the run. Both sources are covered,
+  # since $model/$effort already hold the environment defaults.
+  # Held in variables: `$(printf '\n')` would strip the very newline it
+  # is meant to match, leaving a pattern of `**` that rejects everything.
+  local lf=$'\n' cr=$'\r'
+  case "${model}${effort}" in
+    *"$lf"*|*"$cr"*)
+      echo "error: the model and effort must not contain line breaks" >&2
+      exit 3 ;;
+  esac
+  if [ "$model_set" -gt 1 ] || [ "$effort_set" -gt 1 ] || [ "$inherit_set" -gt 1 ]; then
+    echo "error: --model, --effort, and --inherit may each be given only once." >&2
+    echo "hint: repeating one makes the effective setting depend on flag order." >&2
+    exit 3
+  fi
+  if [ "$inherit_set" -eq 1 ] && { [ "$model_set" -eq 1 ] || [ "$effort_set" -eq 1 ]; }; then
+    echo "error: --inherit cannot be combined with --model or --effort." >&2
+    echo "hint: pick one — no flags for the pinned defaults, '--model M --effort L' for an explicit pair, or --inherit for your codex config." >&2
+    exit 3
+  fi
+  if [ "$model_set" -eq 1 ] && [ "$effort_set" -eq 0 ]; then
+    echo "error: --model needs an explicit --effort." >&2
+    echo "hint: the pinned default effort ('${default_effort}') is a tier weaker models reject, and naming a model already turns off the automatic fallback that would rescue the run." >&2
+    exit 3
+  fi
+  if [ "$effort_set" -eq 1 ] && [ "$model_set" -eq 0 ]; then
+    echo "error: --effort needs an explicit --model." >&2
+    echo "hint: naming an effort turns off the automatic fallback that rescues a stale pinned model, so the model has to be named too." >&2
+    exit 3
+  fi
+}
 
 # Enter the repo and verify the environment. Called by mode_main after
 # argument parsing, before any codex invocation.
@@ -112,14 +268,20 @@ EOF
     fi
   done
 
-  # Standalone MCP servers from the user's own codex config cannot be
-  # globally disabled on 0.146.0 (no --disable mcp; only per-server
-  # config keys). They sit outside sandbox_mode and may mutate external
-  # systems, so fail closed when any are enabled or their state cannot
-  # be verified. --allow-mcp is deliberately wrapper-local: it records
-  # explicit user acceptance of that separate boundary without changing
-  # the local read-only sandbox.
-  local mcp_out mcp_status=0 mcp_problem=""
+  # Standalone MCP servers from the user's own codex config sit outside
+  # sandbox_mode and may mutate external systems. There is no global
+  # kill switch on 0.146.0 (no --disable mcp), but each server has an
+  # `mcp_servers.<id>.enabled` key, and the -c layer overrides it for
+  # this invocation alone — verified: `mcp list -c
+  # mcp_servers.<id>.enabled=false` reports that server as disabled.
+  # So the default is to neutralize them rather than to refuse: the run
+  # proceeds with the exposure actually removed, which is a stronger
+  # guarantee than a refusal the caller can be tempted to override.
+  # Refusing is reserved for the case where they cannot be enumerated —
+  # an unusable listing means there is nothing to switch off, and
+  # assuming an empty config there would fail open. --allow-mcp is the
+  # opposite opt-in: leave them reachable, on explicit user acceptance.
+  local mcp_out mcp_status=0 mcp_problem="" mcp_count=0
   mcp_out="$("$codex_bin" mcp list --json \
     --disable hooks --disable apps --disable plugins 2>/dev/null)" || mcp_status=$?
   # A failed or unrecognizable listing is unsafe, never equivalent to an
@@ -130,7 +292,96 @@ EOF
   if [ "$mcp_status" -ne 0 ]; then
     mcp_problem="could not verify standalone MCP exposure ('codex mcp list' failed)"
   elif grep -qE '"enabled"[[:space:]]*:[[:space:]]*true' <<< "$mcp_out"; then
-    mcp_problem="enabled standalone MCP servers remain reachable outside the read-only sandbox"
+    local mcp_id unaddressable="" unnamed=0 truncated=0
+    while IFS= read -r mcp_id; do
+      [ -n "$mcp_id" ] || continue
+      if [ "$mcp_id" = "!" ]; then
+        truncated=1
+        break
+      fi
+      # An enabled entry with no readable name cannot be switched off,
+      # and the re-check below shares that blind spot exactly — so it
+      # has to stop the run here, where it is still visible.
+      if [ "$mcp_id" = "?" ]; then
+        unnamed=1
+        break
+      fi
+      # A dotted -c path can only address a TOML bare key. An id with
+      # anything else in it cannot be switched off this way, and
+      # pretending otherwise would leave it live behind a reassuring
+      # message.
+      case "$mcp_id" in
+        *[!A-Za-z0-9_-]*) unaddressable="$mcp_id"; break ;;
+      esac
+      mcp_disable_args+=(-c "mcp_servers.${mcp_id}.enabled=false")
+      mcp_count=$((mcp_count + 1))
+    done <<< "$(mcp_enabled_ids <<< "$mcp_out")"
+
+    if [ "$truncated" -eq 1 ]; then
+      mcp_disable_args=()
+      mcp_problem="the standalone MCP listing is incomplete, so its enabled servers cannot be identified"
+    elif [ "$unnamed" -eq 1 ]; then
+      mcp_disable_args=()
+      mcp_problem="an enabled standalone MCP server has no readable name and so cannot be switched off"
+    elif [ -n "$unaddressable" ]; then
+      mcp_disable_args=()
+      mcp_problem="standalone MCP server '${unaddressable}' cannot be addressed by a config override and so cannot be switched off"
+    elif [ "$mcp_count" -eq 0 ]; then
+      # The listing says something is enabled but no entry could be
+      # named. The re-check below cannot catch this — with no overrides
+      # to apply it would just re-read the same unparsed payload — so
+      # this is its own refusal rather than a silent pass.
+      mcp_problem="could not identify the enabled standalone MCP server(s) to switch off"
+    elif [ "$allow_mcp" -eq 0 ]; then
+      # Ask codex itself whether the overrides worked, rather than
+      # trusting the parser that produced them. This is what makes a
+      # missed or misnamed server a refusal instead of a silent
+      # exposure: whatever the reason, a server still reporting as
+      # enabled here is one the run would have left reachable.
+      local verify_out verify_status=0 verify_left=""
+      if [ "${#mcp_disable_args[@]}" -gt 0 ]; then
+        verify_out="$("$codex_bin" mcp list --json \
+          --disable hooks --disable apps --disable plugins \
+          "${mcp_disable_args[@]}" 2>/dev/null)" || verify_status=$?
+      else
+        verify_out="$mcp_out"
+      fi
+      if [ "$verify_status" -ne 0 ]; then
+        mcp_problem="could not confirm the standalone MCP servers were switched off ('codex mcp list' failed on the re-check)"
+      else
+        # The re-check is only evidence if it is a listing. Output this
+        # pass cannot recognize proves nothing, and reading it as "no
+        # enabled servers" would turn every parse failure into a silent
+        # pass. Stricter than the first listing on purpose: empty output
+        # is plausible for a config with no servers at all, but not here,
+        # where a listing with entries was just read.
+        case "$verify_out" in
+          '[]'|'{}') : ;;
+          *'"enabled"'*) : ;;
+          *)
+            mcp_problem="could not confirm the standalone MCP servers were switched off (unrecognized re-check output)" ;;
+        esac
+        if [ -z "$mcp_problem" ]; then
+          verify_left="$(mcp_enabled_ids <<< "$verify_out")"
+          # `!` can never be an id, so its presence anywhere means the
+          # payload never balanced — truncated after an enabled entry,
+          # say, which would otherwise parse to nothing and read as
+          # all-clear.
+          case "$verify_left" in
+            *'!'*)
+              mcp_problem="could not confirm the standalone MCP servers were switched off (incomplete re-check output)" ;;
+            ?*)
+              mcp_problem="standalone MCP server(s) still enabled after being switched off: $(printf '%s' "$verify_left" | tr '\n' ' ')" ;;
+          esac
+        fi
+      fi
+      # A plain `if`: as the last statement of this branch, a `&&` list
+      # whose test fails would return 1 out of common_env_checks and
+      # end the script under `set -e`.
+      if [ -n "$mcp_problem" ]; then
+        mcp_disable_args=()
+      fi
+    fi
   else
     case "$mcp_out" in
       ''|'[]'|'{}') : ;;          # empty config: nothing to disclose
@@ -138,6 +389,16 @@ EOF
       *)
         mcp_problem="could not verify standalone MCP exposure (unrecognized 'codex mcp list --json' output)" ;;
     esac
+  fi
+
+  # Explicitly asking for MCP access means keeping it: drop the
+  # overrides so the servers stay reachable, and say so.
+  if [ "$allow_mcp" -eq 1 ] && [ "${#mcp_disable_args[@]}" -gt 0 ]; then
+    mcp_disable_args=()
+    echo "warning: leaving ${mcp_count} enabled standalone MCP server(s) reachable because --allow-mcp was set" >&2
+    echo "warning: local commands stay read-only, but MCP tools may mutate external systems" >&2
+  elif [ "${#mcp_disable_args[@]}" -gt 0 ]; then
+    echo "note: disabled ${mcp_count} enabled standalone MCP server(s) for this ${run_noun}; pass --allow-mcp to keep them" >&2
   fi
 
   if [ -n "$mcp_problem" ]; then
@@ -207,6 +468,23 @@ append_safety_args() {
   # the -c layer — the highest-precedence config source — is both the
   # fix and the guarantee.
   cmd+=(-c 'notify=[]')
+  # Without this, an unknown `-c` key is silently ignored — verified on
+  # 0.146.0, where only --strict-config turns it into an error. That is
+  # the one drift this script cannot otherwise detect: if a later codex
+  # renames or moves `sandbox_mode` or `notify`, the two lines above stop
+  # taking effect and the run keeps going with no sandbox and a live
+  # notify callback. Every other dependency here already fails closed
+  # (features/mcp verification, model rejection, session mismatch); this
+  # makes the config layer fail closed too. It also rejects unknown
+  # fields in the user's own config.toml — same error, different cause,
+  # which is why the failure path names both.
+  cmd+=(--strict-config)
+  # One `-c mcp_servers.<id>.enabled=false` per enabled standalone MCP
+  # server, so the exposure is removed for this invocation instead of
+  # merely refused. Length-guarded: expanding an empty array under
+  # `set -u` is an unbound-variable error on the bash 3.2 that macOS
+  # ships.
+  [ "${#mcp_disable_args[@]}" -gt 0 ] && cmd+=("${mcp_disable_args[@]}")
   # --json is for progress bounding, not for parsing: it turns the run
   # into one line per event. The default human stream instead echoes the
   # full output of every command Codex runs (entire diffs, entire ls
@@ -412,6 +690,18 @@ defaults_rejected() {
   rejected_model
 }
 
+# A --strict-config rejection has two very different causes and the same
+# error text, so never let it be read as a generic codex failure: either
+# this script's safety keys no longer match the installed codex — in
+# which case the read-only guarantee is what broke — or the user's own
+# config.toml carries a field this version does not know. Silence when
+# the log shows neither.
+strict_config_hint() {
+  grep -q 'unknown configuration field' "$log" 2>/dev/null || return 0
+  echo "hint: codex rejected an unrecognized configuration field. --strict-config is deliberate: it stops a renamed config key from silently disabling the read-only sandbox." >&2
+  echo "hint: the error line names the field. A key this script sets — sandbox_mode, notify, model_reasoning_effort, or an mcp_servers.<id>.enabled override — means the codex CLI drifted and the safety keys need updating; any other field is your own config.toml." >&2
+}
+
 # Timing out is not a stale-model symptom, so it must not trigger the
 # fallback retry — that would double an already too-long wait. It also
 # has to be recognised on the retry, not just the first attempt.
@@ -451,6 +741,7 @@ run_with_fallback() {
 
   if [ "$status" -ne 0 ]; then
     if rejected_model && mode_block_retry; then
+      strict_config_hint
       tail_log
       rm -f "$out"
       exit 4
@@ -463,17 +754,20 @@ run_with_fallback() {
       execute_codex || retry_status=$?
       [ "$watchdog_fired" -eq 1 ] && exit_timed_out
       if [ "$retry_status" -eq 0 ]; then
+        used_fallback=1
         local fallback_model
         fallback_model="$(effective_model_from_log)"
         echo "note: the ${result_noun} below came from your configured model${fallback_model:+ (${fallback_model})}, not '${model}'." >&2
       else
         echo "error: codex ${run_noun} failed on both the pinned defaults and your config; raw output at ${log}" >&2
+        strict_config_hint
         tail_log
         rm -f "$out"
         exit 4
       fi
     else
       echo "error: codex ${run_noun} failed; raw output at ${log}" >&2
+      strict_config_hint
       tail_log
       rm -f "$out"
       exit 4
