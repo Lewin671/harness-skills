@@ -241,6 +241,7 @@ run_review() {
   # /tmp, which would both forge a timeout and truncate whatever it
   # points at.
   statedir="$(mktemp -d "${scratch}/codex-review-state-XXXXXX")"
+  current_statedir="$statedir"
   pidfile="${statedir}/pgid"
   marker="${statedir}/timed-out"
 
@@ -281,6 +282,13 @@ run_review() {
   # the log. Reviews run for many minutes; without a live feed there is
   # no way to tell a working run from a hung one. stdout stays clean for
   # the report.
+  # The pipeline runs in the background and is awaited, rather than run
+  # in the foreground: bash defers traps until the current foreground
+  # command finishes, so a foreground pipeline would swallow a cancel
+  # signal for the entire length of the review — exactly when it needs
+  # to be honoured. `wait` is interruptible, so the traps fire at once.
+  # codex's status travels through a file because PIPESTATUS is not
+  # available for a backgrounded pipeline.
   {
     # `set -m` puts codex in its own process group (pgid == pid), which
     # is what makes the group-wide kill above possible without setsid.
@@ -288,21 +296,60 @@ run_review() {
     "${cmd[@]}" 2>&1 &
     echo $! > "$pidfile"
     set +m
-    wait $!
-  } | tee -a "$log" | truncate_stream >&2
-  status="${PIPESTATUS[0]}"
+    codex_status=0
+    wait $! || codex_status=$?
+    echo "$codex_status" > "${statedir}/status"
+  } | tee -a "$log" | truncate_stream >&2 &
+  local pipeline_pid=$!
+  wait "$pipeline_pid" 2>/dev/null || true
+  status="$(cat "${statedir}/status" 2>/dev/null || echo 1)"
 
   if [ -n "$watchdog" ]; then
-    kill -TERM "$watchdog" 2>/dev/null || true
-    wait "$watchdog" 2>/dev/null || true
+    if [ -f "$marker" ]; then
+      # Escalation is already under way. The pipeline can return during
+      # the grace period — a group member that ignores TERM may have
+      # closed the pipe without dying — so stopping the watchdog here
+      # would cancel the KILL and leave that process running behind an
+      # exit 5. Let it finish instead.
+      wait "$watchdog" 2>/dev/null || true
+    else
+      kill -TERM "$watchdog" 2>/dev/null || true
+      wait "$watchdog" 2>/dev/null || true
+    fi
   fi
 
   local timed_out=1
   [ -f "$marker" ] || timed_out=0
   rm -rf "$statedir"
+  current_statedir=""
   [ "$timed_out" -eq 1 ] && return 124
   return "$status"
 }
+
+# Set while a review is in flight, so the signal traps can find the
+# codex process group. Cleared once that group is gone.
+current_statedir=""
+
+# `set -m` runs codex in its own process group, which means a signal
+# aimed at this script's group — how task runners and Ctrl-C cancel
+# things — never reaches it. Without forwarding, a cancelled review
+# keeps running, burning tokens with nobody left to read the result.
+forward_termination() {
+  local pgid=""
+  [ -n "$current_statedir" ] && [ -f "${current_statedir}/pgid" ] &&
+    pgid="$(cat "${current_statedir}/pgid" 2>/dev/null || true)"
+
+  if [ -n "$pgid" ] && kill -0 "-${pgid}" 2>/dev/null; then
+    kill -TERM "-${pgid}" 2>/dev/null || true
+    sleep 2
+    kill -KILL "-${pgid}" 2>/dev/null || true
+  fi
+  [ -n "$current_statedir" ] && rm -rf "$current_statedir"
+  current_statedir=""
+}
+trap 'forward_termination; exit 130' INT
+trap 'forward_termination; exit 143' TERM
+trap 'forward_termination' EXIT
 
 # Truncate each line and emit it immediately. A `while read` loop is
 # line-buffered by construction; awk block-buffers when its stdout is
