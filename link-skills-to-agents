@@ -54,6 +54,7 @@ skill_allowed_in_dest() {
   harnesses="$(skill_harnesses "${skill_dir}/SKILL.md")"
   if [ "${harnesses}" = "__parse_error__" ]; then
     echo "warn  $(basename "${skill_dir}") (frontmatter unreadable: linking nowhere until fixed)" >&2
+    parse_error_seen=1
     return 1
   fi
   [ -n "${harnesses}" ] || return 0
@@ -199,6 +200,13 @@ sync_dest_root() {
   echo "done  linked=${linked} skipped=${skipped} removed=${removed} dest=${dest_root}"
 }
 
+parse_error_seen=0
+
 for dest_root in "${dest_roots[@]}"; do
   sync_dest_root "${dest_root}"
 done
+
+if [ "${parse_error_seen}" -ne 0 ]; then
+  echo "error: at least one skill has unreadable frontmatter and was linked nowhere" >&2
+  exit 1
+fi
