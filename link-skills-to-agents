@@ -29,7 +29,8 @@ dest_root_harness() {
 }
 
 # Print the skill's `harnesses:` frontmatter list (space-separated),
-# or nothing when the skill is unrestricted.
+# nothing when the skill is unrestricted, or `__parse_error__` when the
+# frontmatter cannot be read — callers must fail closed on that.
 skill_harnesses() {
   ruby -ryaml -e '
     begin
@@ -40,8 +41,9 @@ skill_harnesses() {
         puts harnesses.join(" ") if harnesses.is_a?(Array)
       end
     rescue StandardError
+      puts "__parse_error__"
     end
-  ' "$1" 2>/dev/null || true
+  ' "$1" 2>/dev/null || echo "__parse_error__"
 }
 
 skill_allowed_in_dest() {
@@ -50,6 +52,10 @@ skill_allowed_in_dest() {
   local harnesses harness
 
   harnesses="$(skill_harnesses "${skill_dir}/SKILL.md")"
+  if [ "${harnesses}" = "__parse_error__" ]; then
+    echo "warn  $(basename "${skill_dir}") (frontmatter unreadable: linking nowhere until fixed)" >&2
+    return 1
+  fi
   [ -n "${harnesses}" ] || return 0
 
   for harness in ${harnesses}; do
