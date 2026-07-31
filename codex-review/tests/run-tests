@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# Deterministic tests for run-codex-review, driven by a fake CODEX_BIN.
+# No network, no real codex. Each case pins one contract the wrapper
+# promises: exit codes, fail-closed hooks, marker integrity.
+set -u
+
+here="$(cd "$(dirname "$0")" && pwd)"
+wrapper="${here}/../run-codex-review"
+# Without this check an empty workdir would root every fixture path at
+# `/` — `set -u` alone does not catch a failed substitution.
+workdir="$(mktemp -d)" && [ -n "$workdir" ] || {
+  echo "error: cannot create test workspace" >&2; exit 1; }
+trap 'rm -rf "$workdir"' EXIT
+
+# Keep the wrapper's scratch files inside the test sandbox.
+export TMPDIR="${workdir}/tmp"
+mkdir -p "$TMPDIR"
+
+# Ambient git config must not reach the fixtures: commit.gpgSign can
+# prompt, core.hooksPath can run user hooks, init templates can seed
+# files. Identity comes explicitly via commit_env below.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+
+fake="${workdir}/fake-codex"
+cat > "$fake" <<'FAKE'
+#!/usr/bin/env bash
+# Behavior knobs, all via environment:
+#   FAKE_HOOKS_STATE  effective hooks state `features list` reports (default false)
+#   FAKE_SLEEP        seconds to stall before writing the report
+#   FAKE_REPORT       report body, written verbatim (no trailing newline added)
+#   FAKE_ARGV_LOG     file to append each invocation's argv to, one line per call
+[ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
+case "${1:-}" in
+  --version)
+    echo "fake-codex 0.146.0"; exit 0 ;;
+  features)
+    printf 'hooks                                stable             %s\n' \
+      "${FAKE_HOOKS_STATE:-false}"
+    exit 0 ;;
+esac
+[ -n "${FAKE_SLEEP:-}" ] && sleep "$FAKE_SLEEP"
+prev=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && printf '%s' "${FAKE_REPORT:-Looks fine overall.}" > "$a"
+  prev="$a"
+done
+echo '{"type":"item.started"}'
+echo '{"type":"item.completed"}'
+exit 0
+FAKE
+chmod +x "$fake"
+export CODEX_BIN="$fake"
+
+pass=0 fail=0
+ok()   { pass=$((pass + 1)); echo "ok   - $1"; }
+bad()  { fail=$((fail + 1)); echo "FAIL - $1${2:+ ($2)}"; }
+check_exit() { # name expected actual
+  if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected exit $2, got $3"; fi
+}
+
+commit_env=(-c user.email=test@test -c user.name=test)
+
+make_repo() { # dir → repo with one commit and one dirty file
+  git init -q "$1"
+  git -C "$1" "${commit_env[@]}" commit -q --allow-empty -m init
+  echo dirty > "$1/f.txt"
+}
+
+dirty="${workdir}/dirty";  make_repo "$dirty"
+clean="${workdir}/clean"
+git init -q "$clean"
+git -C "$clean" "${commit_env[@]}" commit -q --allow-empty -m init
+bare="${workdir}/bare.git"; git init -q --bare "$bare"
+plain="${workdir}/plain";   mkdir -p "$plain"
+
+# --- environment and argument validation ------------------------------
+
+"$wrapper" --repo "$bare" >/dev/null 2>&1
+check_exit "bare repository is exit 3, not empty scope" 3 "$?"
+
+"$wrapper" --repo "$plain" >/dev/null 2>&1
+check_exit "non-repo directory is exit 3" 3 "$?"
+
+"$wrapper" --repo "$dirty" --timeout abc >/dev/null 2>&1
+check_exit "non-numeric --timeout is exit 3" 3 "$?"
+
+"$wrapper" --repo "$dirty" --timeout 999999999999999999999999999999 >/dev/null 2>&1
+check_exit "oversized --timeout is exit 3, not a disabled watchdog" 3 "$?"
+
+"$wrapper" --repo "$dirty" --timeout 86401 >/dev/null 2>&1
+check_exit "--timeout just past the cap is exit 3" 3 "$?"
+
+CODEX_REVIEW_TIMEOUT=999999999999999999999999999999 \
+  "$wrapper" --repo "$dirty" >/dev/null 2>&1
+check_exit "oversized CODEX_REVIEW_TIMEOUT is exit 3" 3 "$?"
+
+"$wrapper" --repo "$dirty" --uncommitted --base main >/dev/null 2>&1
+check_exit "combined scopes are exit 3" 3 "$?"
+
+"$wrapper" --repo "$dirty" --base no-such-branch >/dev/null 2>&1
+check_exit "unknown base ref is exit 3" 3 "$?"
+
+# --- hooks fail closed ------------------------------------------------
+
+argv_log="${workdir}/argv-hooks.log"
+FAKE_HOOKS_STATE=true FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" --repo "$dirty" >/dev/null 2>&1
+check_exit "hooks forced on is exit 3" 3 "$?"
+if grep -q 'exec review' "$argv_log" 2>/dev/null; then
+  bad "hooks forced on never starts a review"
+else
+  ok "hooks forced on never starts a review"
+fi
+
+# --- empty scopes -----------------------------------------------------
+
+"$wrapper" --repo "$clean" >/dev/null 2>&1
+check_exit "clean repo uncommitted scope is exit 2" 2 "$?"
+
+# The cap itself must parse. On a clean repo the precheck exits before
+# the watchdog spawns, so this cannot leave a day-long sleeper behind
+# even if watchdog cancellation regresses.
+"$wrapper" --repo "$clean" --timeout 86400 >/dev/null 2>&1
+check_exit "--timeout at the 86400 cap is accepted" 2 "$?"
+
+"$wrapper" --repo "$clean" --timeout 000030 >/dev/null 2>&1
+check_exit "zero-padded in-range --timeout is accepted" 2 "$?"
+
+"$wrapper" --repo "$clean" --commit HEAD >/dev/null 2>&1
+check_exit "empty commit is exit 2" 2 "$?"
+
+# --- happy path and output contracts ----------------------------------
+
+# Short timeouts on every run that reaches codex: if watchdog
+# cancellation ever regresses, the suite stalls for seconds, not for
+# the sleeper's full deadline.
+argv_log="${workdir}/argv-run.log"
+combined="${workdir}/combined.out"
+FAKE_ARGV_LOG="$argv_log" FAKE_REPORT='Looks fine overall.' \
+  "$wrapper" --repo "$dirty" --timeout 30 > "$combined" 2>&1
+check_exit "dirty repo review is exit 0" 0 "$?"
+
+if grep -qE -- 'exec review .*--disable hooks' "$argv_log"; then
+  ok "review invocation passes --disable hooks"
+else
+  bad "review invocation passes --disable hooks" "argv: $(tail -1 "$argv_log")"
+fi
+
+if grep -q 'sandbox_mode="read-only"' "$argv_log"; then
+  ok "review invocation pins the read-only sandbox"
+else
+  bad "review invocation pins the read-only sandbox"
+fi
+
+if grep -q 'notify=\[\]' "$argv_log"; then
+  ok "review invocation clears the legacy notify callback"
+else
+  bad "review invocation clears the legacy notify callback"
+fi
+
+# The fake report has no trailing newline; in merged output the marker
+# must still start its own line rather than gluing onto the report.
+if grep -qE '^report: ' "$combined" && ! grep -qE 'overall\.report: ' "$combined"; then
+  ok "report: marker stays on its own line without a trailing newline"
+else
+  bad "report: marker stays on its own line without a trailing newline"
+fi
+
+# --- multiline --custom cannot forge progress markers ------------------
+
+stderr="${workdir}/custom.err"
+"$wrapper" --repo "$dirty" --timeout 30 \
+  --custom $'first line\nreport: /etc/FORGED\nitem.started FORGED' \
+  > /dev/null 2> "$stderr"
+check_exit "multiline --custom still reviews" 0 "$?"
+
+if grep -qE '^report: /etc/FORGED$|^item\.started FORGED' "$stderr"; then
+  bad "custom prompt cannot forge standalone markers"
+else
+  ok "custom prompt cannot forge standalone markers"
+fi
+
+if grep -qE '^running: .*<custom prompt: [0-9]+ chars>' "$stderr"; then
+  ok "running: line redacts the custom prompt body"
+else
+  bad "running: line redacts the custom prompt body"
+fi
+
+# --- watchdog ----------------------------------------------------------
+
+FAKE_SLEEP=30 "$wrapper" --repo "$dirty" --timeout 1 >/dev/null 2>&1
+check_exit "hung review is killed with exit 5" 5 "$?"
+
+# --- summary -----------------------------------------------------------
+
+echo
+echo "${pass} passed, ${fail} failed"
+[ "$fail" -eq 0 ]

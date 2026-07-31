@@ -9,9 +9,11 @@ description: >-
   independent reviewer would settle it. It runs `codex exec review` in
   read-only mode over uncommitted changes, a base branch, a single
   commit, or free-form instructions, then reports the findings verbatim
-  with a trust assessment. Pure review — it never edits the working
-  tree. Do not use for reviews Claude should do itself, or when the
-  `codex` CLI is not installed.
+  with a trust assessment. Pure review — model-generated commands run in
+  a read-only sandbox, and command hooks and notify callbacks are
+  disabled; only write-capable MCP servers from the user's own codex
+  config sit outside that boundary. Do not use for reviews Claude
+  should do itself, or when the `codex` CLI is not installed.
 harnesses: [claude-code]
 ---
 
@@ -21,7 +23,14 @@ Run OpenAI's Codex as an independent reviewer over a change, from
 inside Claude Code. The value is model diversity: a reviewer that did
 not write the code and does not share Claude's blind spots.
 
-Read-only by design. Never use this skill to apply fixes.
+Read-only by design, with a precise boundary: model-generated local
+commands run under `sandbox_mode="read-only"`; command hooks — which
+run *outside* that sandbox once trusted — are disabled, verified
+fail-closed before the review starts; and the legacy `notify` callback
+is cleared. The boundary does not extend to external MCP servers from
+the user's codex config — a write-capable MCP server stays reachable,
+so do not pick this skill where strict isolation from those is
+required. Never use this skill to apply fixes.
 
 ## Usage
 
@@ -54,8 +63,8 @@ lines, 3 KB. Read that file to check:
 - New `item.started` / `item.completed` lines → working; Codex is
   reading files and running git commands.
 - Nothing new for several minutes → likely stalled on the model side.
-  It will not hang forever: `--timeout` (default 1800s) kills the whole
-  process group and exits `5`.
+  It will not hang forever: `--timeout` (default 1800s, max 86400) kills
+  the whole process group and exits `5`.
 - `report:` line → finished; the report is on stdout.
 
 The feed is deliberately `--json`, one line per event, **not** Codex's
@@ -107,7 +116,7 @@ The script's exit code is the verdict on *the run*, never on the code:
 |------|---------|------------|
 | `0` | A report was produced | Read stdout. Findings or not, both are `0`. |
 | `2` | Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
-| `3` | Environment problem | No `codex`, not a git tree, bad flags. Report it; do not silently substitute a Claude review. |
+| `3` | Environment problem | No `codex`, not a git tree (bare repos included), bad flags, a hard git failure during scope checks, or hooks that managed policy keeps enabled. Report it; do not silently substitute a Claude review. |
 | `4` | Codex ran and failed | Read stderr. A model/effort mismatch is retried automatically, so a `4` means both attempts failed. |
 | `5` | Hung and was killed | The review passed `--timeout` (default 1800s) and its whole process group was terminated. Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
 
@@ -129,9 +138,9 @@ Full review comments:
 
 Anchor on the `- [P<n>]` bullets, not on the heading above them — it
 varies with the number of findings ("Review comment:" for one, "Full
-review comments:" for several). Priority runs `P1` (most severe)
-downward. Zero findings reads as a plain sentence with no bullets at
-all, not an empty list.
+review comments:" for several). Priority runs `P0` (most severe: a
+release blocker or critical failure) down to `P3`. Zero findings reads
+as a plain sentence with no bullets at all, not an empty list.
 
 ## Reporting
 
@@ -161,10 +170,19 @@ all, not an empty list.
 
 Verified against `codex-cli 0.146.0`; recheck if these stop holding.
 
-- Only `codex exec review` is scriptable. Bare `codex review` drives
-  the TUI and has no `-m`, `-o`, or `--json`.
-- `exec review` has **no `-s/--sandbox` flag**. Read-only is reachable
-  only via `-c sandbox_mode="read-only"`.
+- Both `codex review` and `codex exec review` run non-interactively,
+  but only `exec review` exposes `-m`, `-o`, and `--json`, so the
+  script uses it.
+- `exec review` has **no `-s/--sandbox` flag**. The shell sandbox is
+  reachable only via `-c sandbox_mode="read-only"`.
+- That sandbox covers model-generated commands only. Trusted command
+  hooks run outside it, so the script passes `--disable hooks` and
+  verifies the effective state with `codex features list`, exiting `3`
+  if managed policy forces hooks back on.
+- The legacy `notify = [...]` callback is not feature-gated, so
+  `--disable hooks` does not stop it. The script clears it with
+  `-c notify=[]`; plain config keys have no managed-policy override,
+  so the `-c` layer is authoritative there.
 - The positional `[PROMPT]` is **mutually exclusive with all three
   scope flags** — hence `--custom` being its own scope rather than a
   modifier.

@@ -30,7 +30,8 @@ Options:
   --inherit            use the model and effort from your codex config
                        instead of the pinned strongest defaults
   --repo <DIR>         repository to review (default: current directory)
-  --timeout <SECONDS>  abort a hung review (default: 1800; 0 disables)
+  --timeout <SECONDS>  abort a hung review (default: 1800; 0 disables;
+                       max 86400)
 
 Defaults to the strongest available model at maximum reasoning effort.
 A second opinion is only worth the wait if it comes from the best
@@ -59,17 +60,35 @@ model="$default_model"
 effort="$default_effort"
 pinned=1
 repo="."
+# Bounded, not just numeric: a digit string longer than what `[ -gt ]`
+# can parse makes the comparison error out inside an `if`, silently
+# removing the hang protection entirely. The length gate runs before any
+# numeric test so an oversized value never reaches one. 86400 (one day)
+# is far above any legitimate review.
+validate_timeout() {
+  local value="$1" source="$2"
+  case "$value" in
+    ''|*[!0-9]*)
+      echo "error: ${source} must be a whole number of seconds, got '${value}'" >&2
+      exit 3 ;;
+  esac
+  # Normalize leading zeros ("000030" → "30") so padded automation
+  # input is judged by numeric value; an all-zero string becomes 0.
+  value="${value#"${value%%[!0]*}"}"
+  [ -n "$value" ] || value=0
+  if [ "${#value}" -gt 5 ] || [ "$value" -gt 86400 ]; then
+    echo "error: ${source} must be between 0 and 86400 seconds, got '$1'" >&2
+    exit 3
+  fi
+  validated_timeout="$value"
+}
+
 # Generous by default: a max-effort review of a large diff legitimately
 # runs for many minutes. This is a stuck-process backstop, not a budget.
 timeout_secs="${CODEX_REVIEW_TIMEOUT:-1800}"
-# Validated here, not just at the flag: a nonnumeric or negative value
-# from the environment would otherwise make the later -gt test error out
-# inside an `if`, silently removing the hang protection entirely.
-case "$timeout_secs" in
-  ''|*[!0-9]*)
-    echo "error: CODEX_REVIEW_TIMEOUT must be a whole number of seconds, got '${timeout_secs}'" >&2
-    exit 3 ;;
-esac
+# Validated here, not just at the flag: the environment is an input too.
+validate_timeout "$timeout_secs" "CODEX_REVIEW_TIMEOUT"
+timeout_secs="$validated_timeout"
 
 set_scope() {
   if [ "$scope_set" -eq 1 ]; then
@@ -102,10 +121,8 @@ while [ "$#" -gt 0 ]; do
       repo="$1"; shift ;;
     --timeout)
       shift; [ "$#" -gt 0 ] || { echo "error: --timeout needs a value" >&2; exit 3; }
-      case "$1" in
-        ''|*[!0-9]*) echo "error: --timeout must be a whole number of seconds" >&2; exit 3 ;;
-      esac
-      timeout_secs="$1"; shift ;;
+      validate_timeout "$1" "--timeout"
+      timeout_secs="$validated_timeout"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; usage; exit 3 ;;
   esac
@@ -113,7 +130,12 @@ done
 
 cd "$repo" || { echo "error: cannot enter ${repo}" >&2; exit 3; }
 
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+# The printed value matters, not just the exit status: in a bare
+# repository this command *succeeds* and prints "false", and trusting
+# the status alone would later misreport the bare repo as an empty
+# scope (exit 2) when the truth is an environment problem (exit 3).
+work_tree="$(git rev-parse --is-inside-work-tree 2>/dev/null)" || work_tree=""
+[ "$work_tree" = "true" ] || {
   echo "error: ${repo} is not a git work tree" >&2; exit 3; }
 
 codex_bin="${CODEX_BIN:-codex}"
@@ -129,6 +151,21 @@ EOF
   exit 3
 fi
 
+# Command hooks run outside the shell sandbox once trusted — codex's own
+# trust prompt says "Hooks can run outside the sandbox after you trust
+# them" — so sandbox_mode="read-only" alone does not make the review
+# read-only. --disable hooks (passed to every review invocation below)
+# asks for them off; this verifies the *effective* state, because
+# managed policy can force a feature back on. Fail closed: an
+# unparseable or missing answer is treated the same as "enabled".
+hooks_state="$("$codex_bin" features list --disable hooks 2>/dev/null |
+  awk '$1 == "hooks" { state = $NF } END { print state }')" || hooks_state=""
+if [ "$hooks_state" != "false" ]; then
+  echo "error: codex command hooks stay enabled (effective state: '${hooks_state:-unknown}')." >&2
+  echo "error: hooks run outside the read-only sandbox, so this review could write; refusing to start." >&2
+  exit 3
+fi
+
 # Refuse to spend minutes on an empty scope. Codex reports "there are no
 # changes" as an ordinary successful review, which reads like a pass.
 #
@@ -140,8 +177,11 @@ case "$scope_flag" in
     # --untracked-files=normal is explicit because a repo configured
     # with status.showUntrackedFiles=no would otherwise report nothing
     # while untracked files — which this scope promises to review — sit
-    # right there.
-    if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then
+    # right there. A failing git status must surface as exit 3, not be
+    # read as an empty scope.
+    status_out="$(git status --porcelain --untracked-files=normal)" || {
+      echo "error: git status failed in ${repo}" >&2; exit 3; }
+    if [ -z "$status_out" ]; then
       echo "nothing to review: no staged, unstaged, or untracked changes" >&2
       exit 2
     fi
@@ -158,9 +198,16 @@ case "$scope_flag" in
       echo "error: ${scope_value} and HEAD have no common ancestor" >&2
       exit 3
     fi
-    if git diff --quiet "$merge_base"; then
+    # --quiet means exit 0 for no changes, 1 for changes, >1 for a hard
+    # failure. Collapsing the last two would review on a broken diff.
+    diff_status=0
+    git diff --quiet "$merge_base" || diff_status=$?
+    if [ "$diff_status" -eq 0 ]; then
       echo "nothing to review: no changes since the merge base with ${scope_value}" >&2
       exit 2
+    elif [ "$diff_status" -ne 1 ]; then
+      echo "error: git diff failed against merge base ${merge_base}" >&2
+      exit 3
     fi
     ;;
   --commit)
@@ -169,10 +216,15 @@ case "$scope_flag" in
     # Against the first parent, not `git show`: for a merge commit the
     # latter uses combined-diff semantics and usually prints nothing,
     # which would misreport an ordinary merge as an empty commit.
+    # `|| { exit 3; }` on each substitution: under set -e a bare failing
+    # assignment would end the script with git's own exit code (128),
+    # not the documented environment exit 3.
     if git rev-parse --verify --quiet "${scope_value}^1" >/dev/null; then
-      commit_files="$(git diff --name-only "${scope_value}^1" "$scope_value")"
+      commit_files="$(git diff --name-only "${scope_value}^1" "$scope_value")" || {
+        echo "error: git diff failed for ${scope_value}" >&2; exit 3; }
     else
-      commit_files="$(git show --pretty=format: --name-only "$scope_value")"
+      commit_files="$(git show --pretty=format: --name-only "$scope_value")" || {
+        echo "error: git show failed for ${scope_value}" >&2; exit 3; }
     fi
     if [ -z "$commit_files" ]; then
       echo "nothing to review: ${scope_value} is an empty commit" >&2
@@ -214,8 +266,18 @@ run_review() {
     [ -n "$scope_value" ] && cmd+=("$scope_value")
   fi
   # No -s/--sandbox flag exists on `exec review`; this override is the
-  # only way to guarantee the reviewer cannot write.
+  # only way to constrain model-generated commands. Hooks live outside
+  # that sandbox, hence the separate --disable (verified fail-closed at
+  # startup).
   cmd+=(-c 'sandbox_mode="read-only"')
+  cmd+=(--disable hooks)
+  # The legacy `notify = [...]` callback lives in the hooks crate but is
+  # a plain config key, not feature-gated: --disable hooks leaves it
+  # registered, and it runs outside the sandbox. Unlike features, plain
+  # keys have no managed-policy override and no inspection command, so
+  # the -c layer — the highest-precedence config source — is both the
+  # fix and the guarantee.
+  cmd+=(-c 'notify=[]')
   # --json is for progress bounding, not for parsing: it turns the run
   # into one line per event. The default human stream instead echoes the
   # full output of every command Codex runs (entire git diffs, entire
@@ -225,15 +287,22 @@ run_review() {
   [ -n "$use_model" ] && cmd+=(-m "$use_model")
   [ -n "$use_effort" ] && cmd+=(-c "model_reasoning_effort=\"${use_effort}\"")
   cmd+=(-o "$out")
+  # The diagnostic is rendered before the custom prompt is appended and
+  # never includes its body: a multiline prompt would otherwise break
+  # out of this line and forge standalone `report:` / `item.started`
+  # progress markers in the stderr feed. The tr pass keeps the line
+  # physical-single even if some other argument ever carries a newline.
+  local diag="running: ${cmd[*]}"
   if [ "$scope_flag" = "--custom" ]; then
+    diag="${diag} -- <custom prompt: ${#scope_value} chars>"
     # Custom instructions are a bare positional PROMPT — mutually
     # exclusive with every scope flag, and last, after a `--`. Without
     # the terminator, instructions that begin with a dash (a Markdown
     # bullet, say) are parsed as an unknown option.
     cmd+=(-- "$scope_value")
   fi
-
-  echo "running: ${cmd[*]}" >&2
+  diag="$(printf '%s' "$diag" | tr '\r\n' '  ')"
+  echo "$diag" >&2
 
   local status watchdog="" statedir pidfile marker
   # A private 0700 directory from mktemp -d: the marker must not be a
@@ -431,6 +500,11 @@ if [ ! -s "$out" ]; then
 fi
 
 cat "$out"
+# A report without a final newline would glue the `report:` marker onto
+# its last line when a caller merges the streams (2>&1), breaking the
+# marker's own-line contract. `tail -c 1` substitution is empty exactly
+# when the last byte is a newline.
+[ -z "$(tail -c 1 "$out")" ] || echo
 # Both files are left in place: the log path was announced at startup,
 # so deleting it here would break a promise the caller may still be
 # holding. TMPDIR cleanup is the system's job.
