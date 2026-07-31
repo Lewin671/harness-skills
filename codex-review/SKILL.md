@@ -54,6 +54,8 @@ lines, 3 KB. Read that file to check:
 - New `item.started` / `item.completed` lines → working; Codex is
   reading files and running git commands.
 - Nothing new for several minutes → likely stalled on the model side.
+  It will not hang forever: `--timeout` (default 1800s) kills the whole
+  process group and exits `5`.
 - `report:` line → finished; the report is on stdout.
 
 The feed is deliberately `--json`, one line per event, **not** Codex's
@@ -107,6 +109,7 @@ The script's exit code is the verdict on *the run*, never on the code:
 | `2` | Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
 | `3` | Environment problem | No `codex`, not a git tree, bad flags. Report it; do not silently substitute a Claude review. |
 | `4` | Codex ran and failed | Read stderr. A model/effort mismatch is retried automatically, so a `4` means both attempts failed. |
+| `5` | Hung and was killed | The review passed `--timeout` (default 1800s) and its whole process group was terminated. Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
 
 Codex's own exit code is `0` for both a P1 finding and a clean review,
 so never gate on it directly. That is why this script exists.

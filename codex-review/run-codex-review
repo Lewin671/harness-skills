@@ -62,7 +62,14 @@ repo="."
 # Generous by default: a max-effort review of a large diff legitimately
 # runs for many minutes. This is a stuck-process backstop, not a budget.
 timeout_secs="${CODEX_REVIEW_TIMEOUT:-1800}"
-timed_out_marker=""
+# Validated here, not just at the flag: a nonnumeric or negative value
+# from the environment would otherwise make the later -gt test error out
+# inside an `if`, silently removing the hang protection entirely.
+case "$timeout_secs" in
+  ''|*[!0-9]*)
+    echo "error: CODEX_REVIEW_TIMEOUT must be a whole number of seconds, got '${timeout_secs}'" >&2
+    exit 3 ;;
+esac
 
 set_scope() {
   if [ "$scope_set" -eq 1 ]; then
@@ -228,33 +235,43 @@ run_review() {
 
   echo "running: ${cmd[*]}" >&2
 
-  local pidfile status watchdog=""
-  pidfile="$(mktemp "${scratch}/codex-review-pid-XXXXXX")"
-  timed_out_marker="${pidfile}.timeout"
+  local status watchdog="" statedir pidfile marker
+  # A private 0700 directory from mktemp -d: the marker must not be a
+  # path another local process can pre-create as a symlink in a shared
+  # /tmp, which would both forge a timeout and truncate whatever it
+  # points at.
+  statedir="$(mktemp -d "${scratch}/codex-review-state-XXXXXX")"
+  pidfile="${statedir}/pgid"
+  marker="${statedir}/timed-out"
 
   # A hung review would otherwise wait forever. The progress feed only
   # lets a caller *notice* that; this is what stops it. There is no
-  # portable `timeout` binary here — macOS ships none — so the watchdog
-  # is a plain background sleep that signals the codex process itself,
-  # not the surrounding pipeline, which would leave codex orphaned.
+  # portable `timeout` binary here — macOS ships none.
   if [ "$timeout_secs" -gt 0 ]; then
     (
-      sleep "$timeout_secs"
-      local_pid="$(cat "$pidfile" 2>/dev/null || true)"
-      if [ -n "$local_pid" ] && kill -0 "$local_pid" 2>/dev/null; then
-        : > "$timed_out_marker"
-        kill -TERM "$local_pid" 2>/dev/null || true
-        # Escalate. A process that ignores TERM, or that is blocked in a
-        # child, would otherwise keep the pipeline open and make the
-        # timeout advisory rather than real.
+      # Sleep as a job so the TERM below can reap it. Killing this
+      # subshell alone would orphan the sleeper, leaking one per
+      # successful review until its original deadline expired.
+      sleep "$timeout_secs" &
+      sleeper=$!
+      trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
+      wait "$sleeper" 2>/dev/null || exit 0
+
+      pgid="$(cat "$pidfile" 2>/dev/null || true)"
+      if [ -n "$pgid" ] && kill -0 "-${pgid}" 2>/dev/null; then
+        : > "$marker"
+        # Signal the whole process group, not just codex. Codex spawns
+        # shell commands that inherit the pipeline's stdout; killing
+        # only the parent leaves them holding it open, so the script
+        # would hang forever on a timeout that was supposed to end it.
+        kill -TERM "-${pgid}" 2>/dev/null || true
         for _ in 1 2 3 4 5 6 7 8 9 10; do
-          kill -0 "$local_pid" 2>/dev/null || break
+          kill -0 "-${pgid}" 2>/dev/null || break
           sleep 1
         done
-        if kill -0 "$local_pid" 2>/dev/null; then
-          pkill -KILL -P "$local_pid" 2>/dev/null || true
-          kill -KILL "$local_pid" 2>/dev/null || true
-        fi
+        # Unconditional: whether or not the group looks gone, a
+        # survivor here is exactly the case this backstop exists for.
+        kill -KILL "-${pgid}" 2>/dev/null || true
       fi
     ) &
     watchdog=$!
@@ -265,22 +282,25 @@ run_review() {
   # no way to tell a working run from a hung one. stdout stays clean for
   # the report.
   {
+    # `set -m` puts codex in its own process group (pgid == pid), which
+    # is what makes the group-wide kill above possible without setsid.
+    set -m
     "${cmd[@]}" 2>&1 &
     echo $! > "$pidfile"
+    set +m
     wait $!
   } | tee -a "$log" | truncate_stream >&2
   status="${PIPESTATUS[0]}"
 
   if [ -n "$watchdog" ]; then
-    kill "$watchdog" 2>/dev/null || true
+    kill -TERM "$watchdog" 2>/dev/null || true
     wait "$watchdog" 2>/dev/null || true
   fi
-  rm -f "$pidfile"
 
-  if [ -f "$timed_out_marker" ]; then
-    rm -f "$timed_out_marker"
-    return 124
-  fi
+  local timed_out=1
+  [ -f "$marker" ] || timed_out=0
+  rm -rf "$statedir"
+  [ "$timed_out" -eq 1 ] && return 124
   return "$status"
 }
 
@@ -318,24 +338,30 @@ defaults_rejected() {
   grep -qE "reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found" "$log" 2>/dev/null
 }
 
-review_status=0
-run_review "$model" "$effort" || review_status=$?
-
 # Timing out is not a stale-model symptom, so it must not trigger the
-# fallback retry — that would double an already too-long wait.
-if [ "$review_status" -eq 124 ]; then
+# fallback retry — that would double an already too-long wait. It also
+# has to be recognised on the retry, not just the first attempt.
+exit_timed_out() {
   echo "error: review exceeded ${timeout_secs}s and was terminated" >&2
   echo "hint: raise --timeout, or check the log for where it stalled: ${log}" >&2
   tail_log
   rm -f "$out"
   exit 5
-fi
+}
+
+review_status=0
+run_review "$model" "$effort" || review_status=$?
+
+[ "$review_status" -eq 124 ] && exit_timed_out
 
 if [ "$review_status" -ne 0 ]; then
   if defaults_rejected; then
     echo "warning: '${model}' at effort '${effort}' was rejected — these pinned defaults look stale." >&2
     echo "warning: retrying once with the model and effort from your codex config." >&2
-    if run_review "" ""; then
+    retry_status=0
+    run_review "" "" || retry_status=$?
+    [ "$retry_status" -eq 124 ] && exit_timed_out
+    if [ "$retry_status" -eq 0 ]; then
       echo "note: the review below ran on your configured model, not '${model}'." >&2
     else
       echo "error: codex review failed on both the pinned defaults and your config; raw output at ${log}" >&2
