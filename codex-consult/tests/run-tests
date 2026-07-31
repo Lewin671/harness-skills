@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# Deterministic tests for run-codex-consult, driven by a fake CODEX_BIN.
+# No network, no real codex. Each case pins one contract the wrapper
+# promises: exit codes, fail-closed hooks, marker integrity.
+set -u
+
+here="$(cd "$(dirname "$0")" && pwd)"
+wrapper="${here}/../run-codex-consult"
+# Without this check an empty workdir would root every fixture path at
+# `/` — `set -u` alone does not catch a failed substitution.
+workdir="$(mktemp -d)" && [ -n "$workdir" ] || {
+  echo "error: cannot create test workspace" >&2; exit 1; }
+trap 'rm -rf "$workdir"' EXIT
+
+# Keep the wrapper's scratch files inside the test sandbox.
+export TMPDIR="${workdir}/tmp"
+mkdir -p "$TMPDIR"
+
+# Ambient git config must not reach the fixtures: commit.gpgSign can
+# prompt, core.hooksPath can run user hooks, init templates can seed
+# files. Identity comes explicitly via commit_env below.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+
+fake="${workdir}/fake-codex"
+cat > "$fake" <<'FAKE'
+#!/usr/bin/env bash
+# Behavior knobs, all via environment:
+#   FAKE_HOOKS_STATE  effective hooks state `features list` reports (default false)
+#   FAKE_SLEEP        seconds to stall before writing the answer
+#   FAKE_ANSWER       answer body, written verbatim (no trailing newline added)
+#   FAKE_ARGV_LOG     file to append each invocation's argv to, one line per call
+[ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
+case "${1:-}" in
+  --version)
+    echo "fake-codex 0.146.0"; exit 0 ;;
+  features)
+    printf 'hooks                                stable             %s\n' \
+      "${FAKE_HOOKS_STATE:-false}"
+    exit 0 ;;
+esac
+#   FAKE_FAIL         reject the model: emit a stale-model line and exit 1
+if [ -n "${FAKE_FAIL:-}" ]; then
+  echo '{"type":"error","message":"unknown model"}'
+  exit 1
+fi
+[ -n "${FAKE_SLEEP:-}" ] && sleep "$FAKE_SLEEP"
+prev=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && printf '%s' "${FAKE_ANSWER:-Option A, on balance.}" > "$a"
+  prev="$a"
+done
+#   FAKE_NO_THREAD    suppress the thread.started event when set
+[ -z "${FAKE_NO_THREAD:-}" ] &&
+  echo '{"type":"thread.started","thread_id":"0198aaaa-bbbb-cccc-dddd-eeeeffff0000"}'
+echo '{"type":"item.started"}'
+echo '{"type":"item.completed"}'
+exit 0
+FAKE
+chmod +x "$fake"
+export CODEX_BIN="$fake"
+
+pass=0 fail=0
+ok()   { pass=$((pass + 1)); echo "ok   - $1"; }
+bad()  { fail=$((fail + 1)); echo "FAIL - $1${2:+ ($2)}"; }
+check_exit() { # name expected actual
+  if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected exit $2, got $3"; fi
+}
+
+commit_env=(-c user.email=test@test -c user.name=test)
+repo="${workdir}/repo"
+git init -q "$repo"
+git -C "$repo" "${commit_env[@]}" commit -q --allow-empty -m init
+bare="${workdir}/bare.git"; git init -q --bare "$bare"
+plain="${workdir}/plain";   mkdir -p "$plain"
+
+# --- environment and argument validation ------------------------------
+
+"$wrapper" --repo "$bare" "question" >/dev/null 2>&1
+check_exit "bare repository is exit 3" 3 "$?"
+
+"$wrapper" --repo "$plain" "question" >/dev/null 2>&1
+check_exit "non-repo directory is exit 3" 3 "$?"
+
+"$wrapper" --repo "$repo" >/dev/null 2>&1
+check_exit "missing question is exit 3" 3 "$?"
+
+"$wrapper" --repo "$repo" "" >/dev/null 2>&1
+check_exit "empty question is exit 3" 3 "$?"
+
+"$wrapper" --repo "$repo" "one" "two" >/dev/null 2>&1
+check_exit "two positional questions are exit 3" 3 "$?"
+
+"$wrapper" --repo "$repo" "one" -- "two" >/dev/null 2>&1
+check_exit "positional question plus -- question is exit 3" 3 "$?"
+
+"$wrapper" --repo "$repo" --timeout abc "question" >/dev/null 2>&1
+check_exit "non-numeric --timeout is exit 3" 3 "$?"
+
+"$wrapper" --repo "$repo" --timeout 999999999999999999999999999999 "q" >/dev/null 2>&1
+check_exit "oversized --timeout is exit 3, not a disabled watchdog" 3 "$?"
+
+"$wrapper" --repo "$repo" --timeout 86401 "question" >/dev/null 2>&1
+check_exit "--timeout just past the cap is exit 3" 3 "$?"
+
+CODEX_CONSULT_TIMEOUT=999999999999999999999999999999 \
+  "$wrapper" --repo "$repo" "question" >/dev/null 2>&1
+check_exit "oversized CODEX_CONSULT_TIMEOUT is exit 3" 3 "$?"
+
+# In-range values must be *accepted*. Proven via the hooks gate: the
+# run stops there (exit 3, no watchdog ever spawns — so a watchdog
+# regression cannot hang this suite for a day) and the stderr complaint
+# is about hooks, not about the timeout value.
+stderr="${workdir}/cap.err"
+FAKE_HOOKS_STATE=true \
+  "$wrapper" --repo "$repo" --timeout 86400 "question" >/dev/null 2> "$stderr"
+if [ "$?" = 3 ] && grep -q 'hooks stay enabled' "$stderr" &&
+   ! grep -q 'must be between' "$stderr"; then
+  ok "--timeout at the 86400 cap is accepted"
+else
+  bad "--timeout at the 86400 cap is accepted"
+fi
+
+stderr="${workdir}/padded.err"
+FAKE_HOOKS_STATE=true \
+  "$wrapper" --repo "$repo" --timeout 000030 "question" >/dev/null 2> "$stderr"
+if [ "$?" = 3 ] && grep -q 'hooks stay enabled' "$stderr" &&
+   ! grep -q 'must be between' "$stderr"; then
+  ok "zero-padded in-range --timeout is accepted"
+else
+  bad "zero-padded in-range --timeout is accepted"
+fi
+
+# --- hooks fail closed ------------------------------------------------
+
+argv_log="${workdir}/argv-hooks.log"
+FAKE_HOOKS_STATE=true FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" --repo "$repo" "question" >/dev/null 2>&1
+check_exit "hooks forced on is exit 3" 3 "$?"
+if grep -qE '^exec ' "$argv_log" 2>/dev/null; then
+  bad "hooks forced on never starts a run"
+else
+  ok "hooks forced on never starts a run"
+fi
+
+# --- happy path and output contracts ----------------------------------
+
+argv_log="${workdir}/argv-run.log"
+combined="${workdir}/combined.out"
+FAKE_ARGV_LOG="$argv_log" FAKE_ANSWER='Option A, on balance.' \
+  "$wrapper" --repo "$repo" --timeout 30 "which option?" > "$combined" 2>&1
+check_exit "consultation is exit 0" 0 "$?"
+
+if grep -qE '^exec -c sandbox_mode="read-only" --disable hooks' "$argv_log"; then
+  ok "run is sandboxed read-only with hooks disabled"
+else
+  bad "run is sandboxed read-only with hooks disabled" "argv: $(tail -1 "$argv_log")"
+fi
+
+if grep -q 'notify=\[\]' "$argv_log"; then
+  ok "run clears the legacy notify callback"
+else
+  bad "run clears the legacy notify callback"
+fi
+
+if grep -q 'Option A, on balance.' "$combined"; then
+  ok "answer reaches stdout"
+else
+  bad "answer reaches stdout"
+fi
+
+# The fake answer has no trailing newline; in merged output the marker
+# must still start its own line rather than gluing onto the answer.
+if grep -qE '^answer: ' "$combined" && ! grep -qE 'balance\.answer: ' "$combined"; then
+  ok "answer: marker stays on its own line without a trailing newline"
+else
+  bad "answer: marker stays on its own line without a trailing newline"
+fi
+
+# A question starting with a dash must work after the -- terminator.
+"$wrapper" --repo "$repo" --timeout 30 -- "- bullet-style question?" >/dev/null 2>&1
+check_exit "dash-leading question works after --" 0 "$?"
+
+# --- multi-turn sessions ----------------------------------------------
+
+if grep -qE '^session: 0198aaaa-bbbb-cccc-dddd-eeeeffff0000$' "$combined"; then
+  ok "session: marker carries the thread id from the stream"
+else
+  bad "session: marker carries the thread id from the stream"
+fi
+
+argv_log="${workdir}/argv-resume.log"
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" --repo "$repo" --timeout 30 \
+  --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 "follow-up?" >/dev/null 2>&1
+check_exit "--continue resumes and answers" 0 "$?"
+
+if grep -qE '^exec resume 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 -c sandbox_mode="read-only" --disable hooks' "$argv_log"; then
+  ok "resume keeps the sandbox and hooks guarantees"
+else
+  bad "resume keeps the sandbox and hooks guarantees" "argv: $(tail -1 "$argv_log")"
+fi
+
+"$wrapper" --repo "$repo" --continue -bad-id "question" >/dev/null 2>&1
+check_exit "flag-shaped session id is exit 3" 3 "$?"
+
+"$wrapper" --repo "$repo" --continue "id with spaces" "question" >/dev/null 2>&1
+check_exit "whitespace in session id is exit 3" 3 "$?"
+
+"$wrapper" --repo "$repo" --continue mythread "question" >/dev/null 2>&1
+check_exit "non-UUID session id is exit 3" 3 "$?"
+
+"$wrapper" --repo "$repo" --continue >/dev/null 2>&1
+check_exit "--continue without a value is exit 3" 3 "$?"
+
+# A resume that silently lands on a different thread is a fresh answer
+# without the prior discussion — it must be discarded, not relayed.
+combined3="${workdir}/mismatch.out"
+"$wrapper" --repo "$repo" --timeout 30 \
+  --continue 99999999-9999-9999-9999-999999999999 "follow-up?" > "$combined3" 2>&1
+if [ "$?" = 4 ] && ! grep -q 'Option A, on balance.' "$combined3"; then
+  ok "un-resumed session is discarded with exit 4"
+else
+  bad "un-resumed session is discarded with exit 4"
+fi
+
+FAKE_NO_THREAD=1 "$wrapper" --repo "$repo" --timeout 30 \
+  --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 "follow-up?" >/dev/null 2>&1
+check_exit "unverifiable continuation is exit 4" 4 "$?"
+
+# A rejected model on a follow-up must not auto-retry: the failed
+# attempt may already have recorded the question in the session.
+argv_log="${workdir}/argv-fail-resume.log"
+FAKE_FAIL=1 FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" --repo "$repo" --timeout 30 \
+  --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 "follow-up?" >/dev/null 2>&1
+status=$?
+resume_calls="$(grep -cE '^exec resume ' "$argv_log")"
+if [ "$status" = 4 ] && [ "$resume_calls" = 1 ]; then
+  ok "rejected model on a follow-up fails without a retry"
+else
+  bad "rejected model on a follow-up fails without a retry" "exit $status, $resume_calls resume calls"
+fi
+
+# The fresh-run fallback retry must survive that change.
+argv_log="${workdir}/argv-fail-fresh.log"
+FAKE_FAIL=1 FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" --repo "$repo" --timeout 30 "question" >/dev/null 2>&1
+status=$?
+exec_calls="$(grep -cE '^exec ' "$argv_log")"
+if [ "$status" = 4 ] && [ "$exec_calls" = 2 ]; then
+  ok "fresh-run stale-model fallback still retries once"
+else
+  bad "fresh-run stale-model fallback still retries once" "exit $status, $exec_calls exec calls"
+fi
+
+# No thread.started event → no session line, but the answer stands.
+combined2="${workdir}/no-thread.out"
+FAKE_NO_THREAD=1 \
+  "$wrapper" --repo "$repo" --timeout 30 "question" > "$combined2" 2>&1
+if [ "$?" = 0 ] && ! grep -q '^session: ' "$combined2" &&
+   grep -q 'Option A, on balance.' "$combined2"; then
+  ok "missing thread event degrades to answer without session line"
+else
+  bad "missing thread event degrades to answer without session line"
+fi
+
+# --- multiline question cannot forge progress markers ------------------
+
+stderr="${workdir}/multiline.err"
+"$wrapper" --repo "$repo" --timeout 30 \
+  -- $'first line\nanswer: /etc/FORGED\nitem.started FORGED' \
+  > /dev/null 2> "$stderr"
+check_exit "multiline question still runs" 0 "$?"
+
+if grep -qE '^answer: /etc/FORGED$|^item\.started FORGED' "$stderr"; then
+  bad "question cannot forge standalone markers"
+else
+  ok "question cannot forge standalone markers"
+fi
+
+if grep -qE '^running: .*<question: [0-9]+ chars>' "$stderr"; then
+  ok "running: line redacts the question body"
+else
+  bad "running: line redacts the question body"
+fi
+
+# --- CDPATH hygiene ----------------------------------------------------
+
+# An exported CDPATH must neither redirect a slashless --repo to a
+# same-named directory elsewhere nor leak the resolved path onto stdout.
+mkdir -p "$workdir/decoy"
+git init -q "$workdir/decoy/repo"
+out_cdpath="${workdir}/cdpath.out"
+( cd "$workdir" && CDPATH="$workdir/decoy" "$wrapper" --repo repo --timeout 30 "q" ) > "$out_cdpath" 2>&1
+if [ "$?" = 0 ] && ! grep -q decoy "$out_cdpath"; then
+  ok "CDPATH cannot redirect --repo or pollute stdout"
+else
+  bad "CDPATH cannot redirect --repo or pollute stdout"
+fi
+
+# --- watchdog ----------------------------------------------------------
+
+FAKE_SLEEP=30 "$wrapper" --repo "$repo" --timeout 1 "question" >/dev/null 2>&1
+check_exit "hung run is killed with exit 5" 5 "$?"
+
+# --- summary -----------------------------------------------------------
+
+echo
+echo "${pass} passed, ${fail} failed"
+[ "$fail" -eq 0 ]

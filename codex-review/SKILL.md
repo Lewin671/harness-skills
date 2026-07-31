@@ -46,12 +46,15 @@ output placement, empty-scope detection, mutually exclusive flags.
 If that path does not exist, locate the script beside this file rather
 than reconstructing the command by hand.
 
-**Always run it with `run_in_background: true`.** The default reviewer
-is the strongest model at maximum reasoning effort: a two-file, 374-line
-diff blew past the Bash tool's 10-minute ceiling, and a tiny one still
-took 100s. Foreground runs are a coin flip, and losing costs the whole
-review. Start it in the background, then do other work or wait for the
-completion notification — never `sleep`-poll for it.
+**Always run it with `run_in_background: true`, then end the turn.**
+The default reviewer is the strongest model at maximum reasoning
+effort: a two-file, 374-line diff blew past the Bash tool's 10-minute
+ceiling, and a tiny one still took 100s. Foreground runs are a coin
+flip, and losing costs the whole review. Start it in the background,
+then do other work or stop and wait — the completion notification
+resumes the conversation the moment the review finishes. Never
+`sleep`-poll: a guessed sleep usually overshoots the actual finish
+time and wastes the difference.
 
 ### Is it still running, or hung?
 
@@ -156,6 +159,10 @@ as a plain sentence with no bullets at all, not an empty list.
 
 ## Boundaries
 
+- For open questions rather than code changes — evaluating a plan,
+  weighing a design decision, "should we do X or Y" — use
+  `codex-consult` instead: it runs plain `codex exec` and returns a
+  reasoned position instead of a defect list.
 - Not a replacement for `adversarial-code-review`. That skill runs a
   deep multi-agent Claude review with skeptics and red teams; this one
   is a single strong reviewer from a different model family. They are

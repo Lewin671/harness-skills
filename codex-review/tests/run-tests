@@ -186,6 +186,21 @@ else
   bad "running: line redacts the custom prompt body"
 fi
 
+# --- CDPATH hygiene ----------------------------------------------------
+
+# An exported CDPATH must neither redirect a slashless --repo to a
+# same-named directory elsewhere (here: an empty decoy that would
+# misreport exit 2) nor leak the resolved path onto stdout.
+mkdir -p "$workdir/decoy"
+git init -q "$workdir/decoy/dirty"
+out_cdpath="${workdir}/cdpath.out"
+( cd "$workdir" && CDPATH="$workdir/decoy" "$wrapper" --repo dirty --timeout 30 ) > "$out_cdpath" 2>&1
+if [ "$?" = 0 ] && ! grep -q decoy "$out_cdpath"; then
+  ok "CDPATH cannot redirect --repo or pollute stdout"
+else
+  bad "CDPATH cannot redirect --repo or pollute stdout"
+fi
+
 # --- watchdog ----------------------------------------------------------
 
 FAKE_SLEEP=30 "$wrapper" --repo "$dirty" --timeout 1 >/dev/null 2>&1
