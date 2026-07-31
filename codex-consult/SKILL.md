@@ -87,7 +87,7 @@ Three rules keep the loop honest:
   there is just nothing to continue; the next question starts fresh.
 
 **Always run it with `run_in_background: true`, then end the turn.**
-The default adviser is the strongest model at maximum reasoning effort
+The default adviser is the strongest model at xhigh reasoning effort
 and legitimately runs for minutes. Do other work or stop and wait —
 the completion notification resumes the conversation the moment the
 run finishes. Never `sleep`-poll: a guessed sleep usually overshoots
@@ -102,7 +102,7 @@ real time and stays small:
 - New `item.started` / `item.completed` lines → working; Codex is
   reading files and running commands.
 - Nothing new for several minutes → likely stalled on the model side.
-  It will not hang forever: `--timeout` (default 1800s, max 86400)
+  It will not hang forever: `--timeout` (default 3000s, max 86400)
   kills the whole process group and exits `5`.
 - `answer:` line → finished; the answer is on stdout.
 - `session: <ID>` line → the id to pass with `--continue` for a
@@ -114,7 +114,7 @@ it whole — single JSON lines can carry tens of KB.
 
 ## Model
 
-The script defaults to the strongest available model at maximum
+The script defaults to the strongest available model at xhigh
 reasoning effort, and **you should normally leave that alone**. A
 second opinion that is weaker than the first opinion is not worth the
 round trip; latency is the wrong thing to optimise here.
@@ -122,7 +122,7 @@ round trip; latency is the wrong thing to optimise here.
 Override only on an explicit request:
 
 - `--model <MODEL> --effort <LEVEL>` — always pass both. A weaker model
-  rejects the default `max` effort and the run dies a minute in.
+  rejects the default `xhigh` effort and the run dies a minute in.
 - `--inherit` — use the user's own codex config instead.
 
 If the pinned default model has gone stale, the script says so and

@@ -30,16 +30,16 @@ Scope (choose exactly one, default --uncommitted):
 
 Options:
   --model <MODEL>      override the model (default: strongest tier)
-  --effort <LEVEL>     low|medium|high|xhigh|max (default: max). Pass
+  --effort <LEVEL>     low|medium|high|xhigh|max (default: xhigh). Pass
                        this whenever you pass --model — a weaker model
                        may not accept the default effort.
   --inherit            use the model and effort from your codex config
                        instead of the pinned strongest defaults
   --repo <DIR>         repository to review (default: current directory)
-  --timeout <SECONDS>  abort a hung review (default: 1800; 0 disables;
+  --timeout <SECONDS>  abort a hung review (default: 3000; 0 disables;
                        max 86400)
 
-Defaults to the strongest available model at maximum reasoning effort.
+Defaults to the strongest available model at xhigh reasoning effort.
 A second opinion is only worth the wait if it comes from the best
 reviewer available, so speed is deliberately not the priority here.
 
@@ -57,7 +57,7 @@ USAGE
 # defaults_rejected below). `ultra` is deliberately not used: it
 # delegates subtasks, which is not what a review wants.
 default_model="${CODEX_REVIEW_MODEL:-gpt-5.6-sol}"
-default_effort="${CODEX_REVIEW_EFFORT:-max}"
+default_effort="${CODEX_REVIEW_EFFORT:-xhigh}"
 
 scope_flag="--uncommitted"
 scope_value=""
@@ -89,9 +89,9 @@ validate_timeout() {
   validated_timeout="$value"
 }
 
-# Generous by default: a max-effort review of a large diff legitimately
+# Generous by default: an xhigh-effort review of a large diff legitimately
 # runs for many minutes. This is a stuck-process backstop, not a budget.
-timeout_secs="${CODEX_REVIEW_TIMEOUT:-1800}"
+timeout_secs="${CODEX_REVIEW_TIMEOUT:-3000}"
 # Validated here, not just at the flag: the environment is an input too.
 validate_timeout "$timeout_secs" "CODEX_REVIEW_TIMEOUT"
 timeout_secs="$validated_timeout"

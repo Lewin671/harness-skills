@@ -47,7 +47,7 @@ If that path does not exist, locate the script beside this file rather
 than reconstructing the command by hand.
 
 **Always run it with `run_in_background: true`, then end the turn.**
-The default reviewer is the strongest model at maximum reasoning
+The default reviewer is the strongest model at xhigh reasoning
 effort: a two-file, 374-line diff blew past the Bash tool's 10-minute
 ceiling, and a tiny one still took 100s. Foreground runs are a coin
 flip, and losing costs the whole review. Start it in the background,
@@ -66,7 +66,7 @@ lines, 3 KB. Read that file to check:
 - New `item.started` / `item.completed` lines → working; Codex is
   reading files and running git commands.
 - Nothing new for several minutes → likely stalled on the model side.
-  It will not hang forever: `--timeout` (default 1800s, max 86400) kills
+  It will not hang forever: `--timeout` (default 3000s, max 86400) kills
   the whole process group and exits `5`.
 - `report:` line → finished; the report is on stdout.
 
@@ -96,7 +96,7 @@ scope flag — say what to look at inside the text itself.
 
 ## Model
 
-The script defaults to the strongest available model at maximum
+The script defaults to the strongest available model at xhigh
 reasoning effort, and **you should normally leave that alone**. A
 second opinion that is weaker than the first opinion is not worth the
 round trip; latency is the wrong thing to optimise here.
@@ -104,7 +104,7 @@ round trip; latency is the wrong thing to optimise here.
 Override only on an explicit request:
 
 - `--model <MODEL> --effort <LEVEL>` — always pass both. A weaker model
-  rejects the default `max` effort and the run dies a minute in.
+  rejects the default `xhigh` effort and the run dies a minute in.
 - `--inherit` — use the user's own codex config instead.
 
 If the pinned default model has gone stale, the script says so and
@@ -121,7 +121,7 @@ The script's exit code is the verdict on *the run*, never on the code:
 | `2` | Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
 | `3` | Environment problem | No `codex`, not a git tree (bare repos included), bad flags, a hard git failure during scope checks, or hooks that managed policy keeps enabled. Report it; do not silently substitute a Claude review. |
 | `4` | Codex ran and failed | Read stderr. A model/effort mismatch is retried automatically, so a `4` means both attempts failed. |
-| `5` | Hung and was killed | The review passed `--timeout` (default 1800s) and its whole process group was terminated. Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
+| `5` | Hung and was killed | The review passed `--timeout` (default 3000s) and its whole process group was terminated. Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
 
 Codex's own exit code is `0` for both a P1 finding and a clean review,
 so never gate on it directly. That is why this script exists.
