@@ -30,15 +30,33 @@ dest_root_harness() {
 
 # Print the skill's `harnesses:` frontmatter list (space-separated),
 # nothing when the skill is unrestricted, or `__parse_error__` when the
-# frontmatter cannot be read — callers must fail closed on that.
+# frontmatter cannot be trusted — callers must fail closed on that.
+# Fail closed on *shape* errors too, not just parse exceptions: missing
+# delimiters, a non-mapping document, or a harnesses key that is not a
+# non-empty string array all parse "successfully" but say nothing
+# reliable about where the skill may be linked.
 skill_harnesses() {
   ruby -ryaml -e '
     begin
       content = File.read(ARGV[0])
-      if content =~ /\A---\s*\n(.*?)\n---\s*(\n|\z)/m
-        meta = YAML.safe_load(Regexp.last_match(1))
-        harnesses = meta.is_a?(Hash) ? meta["harnesses"] : nil
-        puts harnesses.join(" ") if harnesses.is_a?(Array)
+      unless content =~ /\A---\s*\n(.*?)\n---\s*(\n|\z)/m
+        puts "__parse_error__"
+        exit
+      end
+      meta = YAML.safe_load(Regexp.last_match(1))
+      unless meta.is_a?(Hash)
+        puts "__parse_error__"
+        exit
+      end
+      unless meta.key?("harnesses")
+        exit # unrestricted: valid frontmatter, no harness restriction
+      end
+      harnesses = meta["harnesses"]
+      if harnesses.is_a?(Array) && !harnesses.empty? &&
+         harnesses.all? { |h| h.is_a?(String) && !h.strip.empty? }
+        puts harnesses.join(" ")
+      else
+        puts "__parse_error__"
       end
     rescue StandardError
       puts "__parse_error__"

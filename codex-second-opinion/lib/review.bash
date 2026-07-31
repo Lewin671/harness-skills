@@ -157,13 +157,19 @@ mode_main() {
         set_scope
         scope_flag="$1"
         shift
-        [ "$#" -gt 0 ] || { echo "error: ${scope_flag} needs a value" >&2; mode_usage; exit 3; }
+        # Non-empty, not just present: an empty --custom would skip
+        # every precheck and spend a full run on an empty prompt with
+        # no scope flag at all.
+        [ "$#" -gt 0 ] && [ -n "$1" ] || {
+          echo "error: ${scope_flag} needs a non-empty value" >&2; mode_usage; exit 3; }
         scope_value="$1"; shift ;;
       --model)
-        shift; [ "$#" -gt 0 ] || { echo "error: --model needs a value" >&2; exit 3; }
+        shift; [ "$#" -gt 0 ] && [ -n "$1" ] || {
+          echo "error: --model needs a non-empty value (use --inherit for your config's model)" >&2; exit 3; }
         model="$1"; pinned=0; shift ;;
       --effort)
-        shift; [ "$#" -gt 0 ] || { echo "error: --effort needs a value" >&2; exit 3; }
+        shift; [ "$#" -gt 0 ] && [ -n "$1" ] || {
+          echo "error: --effort needs a non-empty value" >&2; exit 3; }
         effort="$1"; pinned=0; shift ;;
       --inherit)
         model=""; effort=""; pinned=0; shift ;;

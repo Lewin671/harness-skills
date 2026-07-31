@@ -44,10 +44,11 @@ for it only when the user names it or asks for its falsification
 contract in their own words; do not infer invocation from "thorough",
 "deep", "verified", or "high effort" — those route to the native
 /code-review flow. What this skill guarantees beyond that flow is an
-auditable falsification *procedure*: every reported finding survived
-named skeptics, red-team attacks are graded and reported even when
-they fail, and killed findings stay visible in the residual-risk
-ledger.
+auditable falsification *procedure*: every reported finding either
+survived named skeptics or carries a graded red-team counterexample
+(`reproduced` or `plausible`), red-team attacks are graded and
+reported even when they fail, and killed findings stay visible in the
+residual-risk ledger.
 
 ## Hard Requirements
 
@@ -56,8 +57,9 @@ ledger.
   you to call Workflow — the user invoking this skill is the
   multi-agent opt-in.
 - Never modify the user's working tree or index. Red-team tests run
-  only in throwaway git worktrees (Workflow `isolation: 'worktree'`),
-  discarded after the run.
+  only in throwaway git worktrees (`isolation: 'worktree'` — both the
+  Agent tool and Workflow `agent()` accept it, whichever launches the
+  red-team agent), discarded after the run.
 - Tier every subagent's `model` per the defaults below. The tier
   names (`haiku`/`sonnet`/`opus`) are rolling aliases and role
   *defaults*, not permanent model identities: pass only values the
@@ -183,9 +185,13 @@ surviving critical and major findings on the large tier; (b) on the
 large tier only, additionally every triage `high_risk_region` —
 **even regions with zero findings**.
 Channel (b) is what catches bugs no finder saw; it is the reason the
-large tier costs more. One agent per target, model omitted so it
-inherits the main loop (these verdicts are final — verification
-floor).
+large tier costs more. One agent per target, at a declared tier above
+the finders (default: opus, or the highest tier the live schema
+declares) — these verdicts are final, and the verification floor
+requires them to outrank the agents that produced the findings. If
+the finders already ran at the schema's ceiling, run the red team at
+that same ceiling with raised effort where the launcher supports it,
+and note in the report that the floor was met at equal tier.
 
 The task is to construct a concrete counterexample — an input, call
 sequence, or interleaving that makes the new code misbehave:

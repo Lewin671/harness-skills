@@ -26,12 +26,19 @@ fake="${workdir}/fake-codex"
 cat > "$fake" <<'FAKE'
 #!/usr/bin/env bash
 # Behavior knobs, all via environment:
-#   FAKE_HOOKS_STATE  effective hooks state `features list` reports (default false)
-#   FAKE_SLEEP        seconds to stall before writing the result
-#   FAKE_OUTPUT       result body, written verbatim (no trailing newline added)
-#   FAKE_ARGV_LOG     file to append each invocation's argv to, one line per call
-#   FAKE_FAIL         reject the model: emit a stale-model line and exit 1
-#   FAKE_NO_THREAD    suppress the thread.started event when set
+#   FAKE_HOOKS_STATE    effective hooks state `features list` reports (default false)
+#   FAKE_APPS_STATE     effective apps state (default false)
+#   FAKE_PLUGINS_STATE  effective plugins state (default false)
+#   FAKE_MCP_LIST       what `mcp list --json` prints (default [])
+#   FAKE_MCP_FAIL       make `mcp list` exit 1 when set
+#   FAKE_SLEEP          seconds to stall before writing the result
+#   FAKE_OUTPUT         result body, written verbatim (no trailing newline added)
+#   FAKE_ARGV_LOG       file to append each invocation's argv to, one line per call
+#   FAKE_FAIL           reject the model: emit a stale-model line and exit 1
+#   FAKE_FAIL_ONCE      path: fail like FAKE_FAIL only while this file is
+#                       absent (created on the first failure)
+#   FAKE_EXIT           exit with this status after the event stream (default 0)
+#   FAKE_NO_THREAD      suppress the thread.started event when set
 [ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
 case "${1:-}" in
   --version)
@@ -39,9 +46,22 @@ case "${1:-}" in
   features)
     printf 'hooks                                stable             %s\n' \
       "${FAKE_HOOKS_STATE:-false}"
+    printf 'apps                                 stable             %s\n' \
+      "${FAKE_APPS_STATE:-false}"
+    printf 'plugins                              stable             %s\n' \
+      "${FAKE_PLUGINS_STATE:-false}"
+    exit 0 ;;
+  mcp)
+    [ -n "${FAKE_MCP_FAIL:-}" ] && exit 1
+    printf '%s\n' "${FAKE_MCP_LIST:-[]}"
     exit 0 ;;
 esac
 if [ -n "${FAKE_FAIL:-}" ]; then
+  echo '{"type":"error","message":"unknown model"}'
+  exit 1
+fi
+if [ -n "${FAKE_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_FAIL_ONCE" ]; then
+  : > "$FAKE_FAIL_ONCE"
   echo '{"type":"error","message":"unknown model"}'
   exit 1
 fi
@@ -55,7 +75,7 @@ done
   echo '{"type":"thread.started","thread_id":"0198aaaa-bbbb-cccc-dddd-eeeeffff0000"}'
 echo '{"type":"item.started"}'
 echo '{"type":"item.completed"}'
-exit 0
+exit "${FAKE_EXIT:-0}"
 FAKE
 chmod +x "$fake"
 export CODEX_BIN="$fake"
@@ -129,7 +149,28 @@ check_exit "review: combined scopes are exit 3" 3 "$?"
 "$wrapper" review --repo "$dirty" --base no-such-branch >/dev/null 2>&1
 check_exit "review: unknown base ref is exit 3" 3 "$?"
 
-# --- hooks fail closed ------------------------------------------------
+"$wrapper" review --repo "$dirty" --custom "" >/dev/null 2>&1
+check_exit "review: empty --custom is exit 3, not a full run" 3 "$?"
+
+"$wrapper" review --repo "$dirty" --model "" >/dev/null 2>&1
+check_exit "review: empty --model is exit 3, not silent inheritance" 3 "$?"
+
+"$wrapper" consult --repo "$dirty" --effort "" "question" >/dev/null 2>&1
+check_exit "consult: empty --effort is exit 3, not silent inheritance" 3 "$?"
+
+# Scratch allocation failures must map to the documented exit 3.
+ro_tmp="${workdir}/ro-tmp"
+mkdir -p "$ro_tmp"; chmod 555 "$ro_tmp"
+TMPDIR="$ro_tmp" "$wrapper" review --repo "$dirty" >/dev/null 2>&1
+check_exit "review: unwritable scratch dir is exit 3" 3 "$?"
+chmod 755 "$ro_tmp"
+
+# Codex exiting 124 on its own is a failed run (4), not a fabricated
+# watchdog timeout (5).
+FAKE_EXIT=124 "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+check_exit "review: codex's own exit 124 is exit 4, not 5" 4 "$?"
+
+# --- hooks/apps/plugins fail closed -----------------------------------
 
 argv_log="${workdir}/argv-hooks.log"
 FAKE_HOOKS_STATE=true FAKE_ARGV_LOG="$argv_log" \
@@ -139,6 +180,68 @@ if grep -q 'exec review' "$argv_log" 2>/dev/null; then
   bad "review: hooks forced on never starts a review"
 else
   ok "review: hooks forced on never starts a review"
+fi
+
+FAKE_APPS_STATE=true "$wrapper" review --repo "$dirty" >/dev/null 2>&1
+check_exit "review: apps forced on is exit 3" 3 "$?"
+
+FAKE_PLUGINS_STATE=true "$wrapper" review --repo "$dirty" >/dev/null 2>&1
+check_exit "review: plugins forced on is exit 3" 3 "$?"
+
+# Enabled standalone MCP servers warn but do not block.
+stderr="${workdir}/mcp.err"
+FAKE_MCP_LIST='[{"name":"github","enabled":true}]' \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+if [ "$?" = 0 ] && grep -q 'enabled MCP servers from your codex config remain reachable' "$stderr"; then
+  ok "review: enabled MCP servers warn without blocking"
+else
+  bad "review: enabled MCP servers warn without blocking"
+fi
+
+# A config whose MCP entries are all disabled must NOT warn.
+stderr="${workdir}/mcp-disabled.err"
+FAKE_MCP_LIST='[{"name":"chrome_devtools","enabled":false,"disabled_reason":null}]' \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+if [ "$?" = 0 ] && ! grep -q 'remain reachable' "$stderr"; then
+  ok "review: disabled-only MCP config does not warn"
+else
+  bad "review: disabled-only MCP config does not warn"
+fi
+
+# A failed MCP inspection must not fail open into silence.
+stderr="${workdir}/mcp-fail.err"
+FAKE_MCP_FAIL=1 \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+if [ "$?" = 0 ] && grep -q 'could not inspect MCP servers' "$stderr"; then
+  ok "review: failed MCP inspection warns instead of staying silent"
+else
+  bad "review: failed MCP inspection warns instead of staying silent"
+fi
+
+# Unrecognizable listing output warns for manual verification.
+stderr="${workdir}/mcp-odd.err"
+FAKE_MCP_LIST='mcp servers: github (on)' \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+if [ "$?" = 0 ] && grep -q 'unrecognized' "$stderr"; then
+  ok "review: unrecognized MCP listing warns for manual verification"
+else
+  bad "review: unrecognized MCP listing warns for manual verification"
+fi
+
+# --inherit success on a stream with no model field must still emit
+# the report (a failing metadata grep must not abort under set -e).
+"$wrapper" review --repo "$dirty" --timeout 30 --inherit >/dev/null 2>&1
+check_exit "review: --inherit succeeds without model metadata in the stream" 0 "$?"
+
+# Stale-default fallback success: first exec rejected, retry succeeds,
+# and the missing model field must not abort the note path.
+stderr="${workdir}/fallback.err"
+FAKE_FAIL_ONCE="${workdir}/fail-once-marker" \
+  "$wrapper" consult --repo "$dirty" --timeout 30 "question" >/dev/null 2> "$stderr"
+if [ "$?" = 0 ] && grep -q 'came from your configured model' "$stderr"; then
+  ok "consult: fallback success emits the note and the answer"
+else
+  bad "consult: fallback success emits the note and the answer"
 fi
 
 # --- empty scopes -----------------------------------------------------
@@ -185,6 +288,12 @@ if grep -q 'notify=\[\]' "$argv_log"; then
   ok "review: invocation clears the legacy notify callback"
 else
   bad "review: invocation clears the legacy notify callback"
+fi
+
+if grep -qE -- 'exec review .*--disable apps --disable plugins' "$argv_log"; then
+  ok "review: invocation disables apps and plugins"
+else
+  bad "review: invocation disables apps and plugins" "argv: $(tail -1 "$argv_log")"
 fi
 
 # The fake report has no trailing newline; in merged output the marker

@@ -90,17 +90,53 @@ EOF
   # Command hooks run outside the shell sandbox once trusted — codex's
   # own trust prompt says "Hooks can run outside the sandbox after you
   # trust them" — so a read-only sandbox alone does not make the run
-  # read-only. --disable hooks (passed to every invocation) asks for
-  # them off; this verifies the *effective* state, because managed
-  # policy can force a feature back on. Fail closed: an unparseable or
-  # missing answer is treated the same as "enabled".
-  local hooks_state
-  hooks_state="$("$codex_bin" features list --disable hooks 2>/dev/null |
-    awk '$1 == "hooks" { state = $NF } END { print state }')" || hooks_state=""
-  if [ "$hooks_state" != "false" ]; then
-    echo "error: codex command hooks stay enabled (effective state: '${hooks_state:-unknown}')." >&2
-    echo "error: hooks run outside the read-only sandbox, so this ${run_noun} could write; refusing to start." >&2
-    exit 3
+  # read-only. Apps and plugins likewise act outside it: an installed
+  # plugin can bundle a write-capable connector or MCP server whose
+  # tools mutate external systems regardless of sandbox_mode. All
+  # three are disabled on every invocation; this verifies the
+  # *effective* states, because managed policy can force a feature
+  # back on. Fail closed: an unparseable or missing answer is treated
+  # the same as "enabled".
+  local features_out feature state
+  features_out="$("$codex_bin" features list \
+    --disable hooks --disable apps --disable plugins 2>/dev/null)" || features_out=""
+  for feature in hooks apps plugins; do
+    state="$(printf '%s\n' "$features_out" |
+      awk -v f="$feature" '$1 == f { state = $NF } END { print state }')" || state=""
+    if [ "$state" != "false" ]; then
+      echo "error: codex ${feature} stay enabled (effective state: '${state:-unknown}')." >&2
+      echo "error: ${feature} act outside the read-only sandbox, so this ${run_noun} could write; refusing to start." >&2
+      exit 3
+    fi
+  done
+
+  # Standalone MCP servers from the user's own codex config cannot be
+  # globally disabled on 0.146.0 (no --disable mcp; only per-server
+  # config keys). They stay reachable by design and the SKILL documents
+  # that boundary — but say so out loud when any are enabled, so the
+  # caller can weigh it per run instead of rediscovering it later.
+  local mcp_out mcp_status=0
+  mcp_out="$("$codex_bin" mcp list --json \
+    --disable hooks --disable apps --disable plugins 2>/dev/null)" || mcp_status=$?
+  # The disclosure must not fail open: a failed or unrecognizable
+  # listing is reported as such, never treated like an empty config.
+  # Warn only when something is actually *enabled*: the listing
+  # includes disabled entries too, and a warning that fires for a
+  # fully disabled config trains callers to ignore it. A here-string,
+  # not a pipeline: grep -q exits on the first match, and under
+  # pipefail the writer's SIGPIPE would turn a *found* entry into a
+  # false pipeline status that suppresses the warning.
+  if [ "$mcp_status" -ne 0 ]; then
+    echo "warning: could not inspect MCP servers ('codex mcp list' failed); any enabled servers in your codex config remain reachable outside the read-only sandbox" >&2
+  elif grep -qE '"enabled"[[:space:]]*:[[:space:]]*true' <<< "$mcp_out"; then
+    echo "warning: enabled MCP servers from your codex config remain reachable outside the read-only sandbox (run 'codex mcp list' for details)" >&2
+  else
+    case "$mcp_out" in
+      ''|'[]'|'{}') : ;;          # empty config: nothing to disclose
+      *'"enabled"'*) : ;;         # recognized shape, none enabled
+      *)
+        echo "warning: unrecognized 'codex mcp list --json' output; verify MCP exposure manually" >&2 ;;
+    esac
   fi
 }
 
@@ -117,10 +153,23 @@ common_setup_scratch() {
   if [ "$scratch" = "$worktree_root" ] || case "$scratch/" in "$worktree_root"/*) true ;; *) false ;; esac; then
     echo "warning: TMPDIR is inside the repo; using /tmp instead" >&2
     scratch="/tmp"
+    # Recheck the fallback: on a repo rooted at (or above) the real
+    # /tmp — /private/tmp on macOS — the substitute is just as unsafe,
+    # and there is nowhere non-repo left to write.
+    scratch="$(cd "$scratch" 2>/dev/null && pwd -P)" || scratch=""
+    if [ -z "$scratch" ] || [ "$scratch" = "$worktree_root" ] ||
+       case "$scratch/" in "$worktree_root"/*) true ;; *) false ;; esac; then
+      echo "error: no temporary directory outside the repo; set TMPDIR elsewhere" >&2
+      exit 3
+    fi
   fi
 
-  out="$(mktemp "${scratch}/codex-${mode}-XXXXXX")"
-  log="$(mktemp "${scratch}/codex-${mode}-log-XXXXXX")"
+  # Guarded: under set -e a bare failing substitution would exit with
+  # mktemp's own status, not the documented environment exit 3.
+  out="$(mktemp "${scratch}/codex-${mode}-XXXXXX")" || {
+    echo "error: cannot create scratch files under ${scratch}" >&2; exit 3; }
+  log="$(mktemp "${scratch}/codex-${mode}-log-XXXXXX")" || {
+    echo "error: cannot create scratch files under ${scratch}" >&2; exit 3; }
 
   # Announce up front, not just on failure: a caller watching a long
   # run needs somewhere to look while it is still going.
@@ -133,7 +182,11 @@ append_safety_args() {
   # no sandbox flag, and sandbox_mode is the key `-s` sets anyway — one
   # spelling keeps every path verifiably identical.
   cmd+=(-c 'sandbox_mode="read-only"')
-  cmd+=(--disable hooks)
+  # apps and plugins ride outside the shell sandbox just like hooks —
+  # a plugin can bundle write-capable connectors and MCP tools — so
+  # all three are disabled on every invocation, matching the
+  # fail-closed verification at startup.
+  cmd+=(--disable hooks --disable apps --disable plugins)
   # The legacy `notify = [...]` callback lives in the hooks crate but is
   # a plain config key, not feature-gated: --disable hooks leaves it
   # registered, and it runs outside the sandbox. Unlike features, plain
@@ -168,7 +221,8 @@ execute_codex() {
   # path another local process can pre-create as a symlink in a shared
   # /tmp, which would both forge a timeout and truncate whatever it
   # points at.
-  statedir="$(mktemp -d "${scratch}/codex-${mode}-state-XXXXXX")"
+  statedir="$(mktemp -d "${scratch}/codex-${mode}-state-XXXXXX")" || {
+    echo "error: cannot create scratch files under ${scratch}" >&2; exit 3; }
   current_statedir="$statedir"
   pidfile="${statedir}/pgid"
   marker="${statedir}/timed-out"
@@ -204,6 +258,10 @@ execute_codex() {
       fi
     ) &
     watchdog=$!
+    # Published so the signal traps can reap the watchdog too: when a
+    # supervisor signals only the wrapper PID, the watchdog would
+    # otherwise sleep on harmlessly for up to the full timeout.
+    current_watchdog="$watchdog"
   fi
 
   # Stream a bounded progress feed to stderr, archive the full stream to
@@ -246,37 +304,60 @@ execute_codex() {
     fi
   fi
 
-  local timed_out=1
-  [ -f "$marker" ] || timed_out=0
+  # The timeout travels through a dedicated flag, not an overloaded
+  # return code: codex itself (or a CODEX_BIN wrapper) can exit 124
+  # without any watchdog involvement, and that must surface as a
+  # failed run (exit 4), not a fabricated timeout (exit 5).
+  watchdog_fired=0
+  [ -f "$marker" ] && watchdog_fired=1
   rm -rf "$statedir"
   current_statedir=""
-  [ "$timed_out" -eq 1 ] && return 124
+  current_watchdog=""
   return "$status"
 }
 
 # Set while a run is in flight, so the signal traps can find the codex
-# process group. Cleared once that group is gone.
+# process group and the watchdog. Cleared once they are gone.
 current_statedir=""
+current_watchdog=""
+watchdog_fired=0
 
 # `set -m` runs codex in its own process group, which means a signal
 # aimed at this script's group — how task runners and Ctrl-C cancel
 # things — never reaches it. Without forwarding, a cancelled run keeps
 # going, burning tokens with nobody left to read the result.
 forward_termination() {
-  local pgid=""
-  [ -n "$current_statedir" ] && [ -f "${current_statedir}/pgid" ] &&
+  local pgid="" attempt
+  # The pgid is published by the background pipeline moments after the
+  # run starts; a signal landing in that window would otherwise find
+  # the file missing and leave the just-launched group running. A
+  # bounded re-read covers the gap.
+  for attempt in 1 2 3 4 5; do
+    [ -n "$current_statedir" ] || break
     pgid="$(cat "${current_statedir}/pgid" 2>/dev/null || true)"
+    [ -n "$pgid" ] && break
+    sleep 0.2
+  done
 
   if [ -n "$pgid" ] && kill -0 "-${pgid}" 2>/dev/null; then
     kill -TERM "-${pgid}" 2>/dev/null || true
     sleep 2
     kill -KILL "-${pgid}" 2>/dev/null || true
   fi
+  # Reap the watchdog too — its own TERM trap kills the sleeper — so a
+  # PID-targeted cancel does not leave a subshell sleeping for up to
+  # the full timeout.
+  if [ -n "$current_watchdog" ]; then
+    kill -TERM "$current_watchdog" 2>/dev/null || true
+    wait "$current_watchdog" 2>/dev/null || true
+    current_watchdog=""
+  fi
   [ -n "$current_statedir" ] && rm -rf "$current_statedir"
   current_statedir=""
 }
 trap 'forward_termination; exit 130' INT
 trap 'forward_termination; exit 143' TERM
+trap 'forward_termination; exit 129' HUP
 trap 'forward_termination' EXIT
 
 # Truncate each line and emit it immediately. A `while read` loop is
@@ -301,16 +382,21 @@ tail_log() {
   tail -n 20 "$log" | truncate_stream >&2
 }
 
-# A rejected model or effort means the pinned defaults have gone stale,
-# not that the run is impossible. Fall back to the user's configured
-# model once rather than failing a minute in.
+# Model/effort rejection detection is split from retry eligibility:
+# a rejection on a resumed session must trigger the contamination
+# warning whether the settings were pinned or explicit, while the
+# automatic fallback retry stays reserved for the pinned defaults.
 #
 # The match is deliberately loose, and not anchored to an error line:
 # Codex formats these 400s differently across modes. A false positive
 # costs one extra run; a false negative costs the whole result.
+rejected_model() {
+  grep -qE "reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found" "$log" 2>/dev/null
+}
+
 defaults_rejected() {
   [ "$pinned" -eq 1 ] || return 1
-  grep -qE "reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found" "$log" 2>/dev/null
+  rejected_model
 }
 
 # Timing out is not a stale-model symptom, so it must not trigger the
@@ -333,15 +419,25 @@ mode_block_retry() {
 # Run once via the mode's build_cmd, retrying once on the user's config
 # when the pinned defaults are rejected. Leaves a successful result in
 # $out or exits with the documented code.
+# Best-effort name of the model a fallback or --inherit run actually
+# used, extracted from the event stream. Empty when the stream carries
+# no model field. Always returns success: a missing field makes grep
+# exit 1, and under set -e a failing substitution in the caller would
+# otherwise abort the script *after* a successful run.
+effective_model_from_log() {
+  grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$log" 2>/dev/null |
+    tail -1 | sed 's/.*"model"[[:space:]]*:[[:space:]]*"//; s/"$//' || true
+}
+
 run_with_fallback() {
   local status=0
   build_cmd "$model" "$effort"
   execute_codex || status=$?
 
-  [ "$status" -eq 124 ] && exit_timed_out
+  [ "$watchdog_fired" -eq 1 ] && exit_timed_out
 
   if [ "$status" -ne 0 ]; then
-    if defaults_rejected && mode_block_retry; then
+    if rejected_model && mode_block_retry; then
       tail_log
       rm -f "$out"
       exit 4
@@ -352,9 +448,11 @@ run_with_fallback() {
       local retry_status=0
       build_cmd "" ""
       execute_codex || retry_status=$?
-      [ "$retry_status" -eq 124 ] && exit_timed_out
+      [ "$watchdog_fired" -eq 1 ] && exit_timed_out
       if [ "$retry_status" -eq 0 ]; then
-        echo "note: the ${result_noun} below came from your configured model, not '${model}'." >&2
+        local fallback_model
+        fallback_model="$(effective_model_from_log)"
+        echo "note: the ${result_noun} below came from your configured model${fallback_model:+ (${fallback_model})}, not '${model}'." >&2
       else
         echo "error: codex ${run_noun} failed on both the pinned defaults and your config; raw output at ${log}" >&2
         tail_log
@@ -373,6 +471,26 @@ run_with_fallback() {
     echo "error: codex produced no ${result_noun}; raw output at ${log}" >&2
     tail_log
     exit 4
+  fi
+
+  # The log was announced at startup and downstream steps (consult's
+  # session id, diagnostics) read it; a missing or empty log after a
+  # successful run means the tee leg of the pipeline failed. The
+  # result above is still valid — say what was lost instead of failing.
+  if [ ! -s "$log" ]; then
+    echo "warning: progress log ${log} is missing or empty; session and diagnostic details may be lost" >&2
+  fi
+
+  # Reproducibility: when the run inherited the user's config
+  # (--inherit), name the model that actually answered if the stream
+  # exposed it. Explicit if: a `[ -n ] &&` as the function's last
+  # statement would return 1 on an absent field and abort under set -e.
+  if [ -z "$model" ]; then
+    local inherited_model
+    inherited_model="$(effective_model_from_log)"
+    if [ -n "$inherited_model" ]; then
+      echo "note: inherited model in effect: ${inherited_model}" >&2
+    fi
   fi
 }
 

@@ -85,10 +85,12 @@ mode_main() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --model)
-        shift; [ "$#" -gt 0 ] || { echo "error: --model needs a value" >&2; exit 3; }
+        shift; [ "$#" -gt 0 ] && [ -n "$1" ] || {
+          echo "error: --model needs a non-empty value (use --inherit for your config's model)" >&2; exit 3; }
         model="$1"; pinned=0; shift ;;
       --effort)
-        shift; [ "$#" -gt 0 ] || { echo "error: --effort needs a value" >&2; exit 3; }
+        shift; [ "$#" -gt 0 ] && [ -n "$1" ] || {
+          echo "error: --effort needs a non-empty value" >&2; exit 3; }
         effort="$1"; pinned=0; shift ;;
       --inherit)
         model=""; effort=""; pinned=0; shift ;;

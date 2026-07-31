@@ -9,10 +9,19 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   and the config key is exactly what `-s` sets, so one spelling keeps
   all paths verifiably identical.
 - That sandbox covers model-generated commands only. Trusted command
-  hooks run outside it — codex's own trust prompt says so — so the
-  script passes `--disable hooks` and verifies the *effective* state
-  with `codex features list`, exiting `3` if managed policy forces
-  hooks back on. Fail closed: an unparseable answer counts as enabled.
+  hooks run outside it — codex's own trust prompt says so — and so do
+  apps and plugins: an installed plugin can bundle a write-capable
+  connector and its own MCP server (capability `"Write"` in the
+  plugin manifest), none of which sandbox_mode touches. The script
+  passes `--disable hooks --disable apps --disable plugins` on every
+  invocation and verifies each *effective* state with
+  `codex features list`, exiting `3` if managed policy forces any of
+  them back on. Fail closed: an unparseable answer counts as enabled.
+- Standalone MCP servers from the user's own config have no global
+  disable switch on 0.146.0 (only per-server
+  `mcp_servers.<id>.enabled` keys), so they stay reachable by design;
+  the script surfaces them with `codex mcp list --json` as a startup
+  warning instead of silently accepting the exposure.
 - The legacy `notify = [...]` callback is not feature-gated, so
   `--disable hooks` does not stop it. The script clears it with
   `-c notify=[]`; plain config keys have no managed-policy override,
