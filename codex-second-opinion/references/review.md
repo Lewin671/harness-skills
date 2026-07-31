@@ -19,6 +19,11 @@ built-in review prompt would not prioritise. It replaces the built-in
 prompt rather than supplementing it, and it cannot be narrowed to a
 scope flag — say what to look at inside the text itself.
 
+Keep an independent first review unseeded: provide the change and its
+intended behaviour without Claude's suspected findings. If the user asks
+Codex to adjudicate a specific finding, use `--custom` and label the result
+as a targeted cross-check rather than a blind review.
+
 The script refuses to spend minutes on an empty scope: a clean tree,
 an empty commit, or no changes since the merge base exit `2` before
 Codex is ever invoked. Codex itself reports "there are no changes" as
@@ -46,8 +51,9 @@ as a plain sentence with no bullets at all, not an empty list.
 
 ## Reporting Duties
 
-1. Relay every finding with its priority, file, and line range. Do not
-   silently drop low-priority ones.
+1. Account for every finding with its priority, file, and line range.
+   Summarise repetitive detail if useful, but do not silently drop
+   low-priority findings.
 2. Add a Claude-side trust line per finding: agree, disagree with
    reason, or needs-checking. You have repo context Codex lacks, and
    Codex has no stake in defending code Claude wrote.

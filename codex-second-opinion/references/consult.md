@@ -21,6 +21,12 @@ truly must be a file (very large, or referenced repeatedly across
 turns), put it *outside* the repo — under TMPDIR, say — and give Codex
 its absolute path; the read-only sandbox can still read it.
 
+Keep that first question blind and neutral. Include facts, constraints,
+candidate options in neutral order, and evaluation criteria; withhold
+Claude's preferred option, ranking, and reasoning until after Codex has
+answered. If the user explicitly wants a Claude claim challenged, include
+the claim but call the result a targeted cross-check, not a blind opinion.
+
 Pass the question after `--` so questions starting with a dash (a
 Markdown bullet, say) are not parsed as options.
 
@@ -34,6 +40,11 @@ Each follow-up prints the `session:` line again for the next turn.
 This is a real discussion loop: relay each answer, gather the user's
 (or Claude's own) counterpoints, and continue until the question is
 settled or the disagreement is crisply mapped.
+
+The first answer is the **independent first pass**. Once Claude's position
+or objections enter the session, subsequent answers are **deliberation**:
+useful for convergence, but no longer independent samples. Preserve that
+distinction when reporting them.
 
 Three rules keep the loop honest:
 
@@ -63,8 +74,8 @@ The answer is free-form Markdown — there is no fixed structure to
 parse, unlike review mode's `[P<n>]` bullets. Relay it faithfully:
 
 1. Present Codex's position and its load-bearing arguments, not just
-   its conclusion. Do not compress a nuanced recommendation into a
-   verdict.
+   its conclusion. Summarise for clarity without flattening a nuanced
+   recommendation into a verdict.
 2. Add Claude's own stance: agree, disagree with reason, or
    needs-checking — and verify Codex's checkable claims against the
    repo before relaying them as fact.
@@ -72,7 +83,9 @@ parse, unlike review mode's `[P<n>]` bullets. Relay it faithfully:
    averaging them away, and argue them to resolution in the session
    when a decision depends on it.
 4. State the question asked and the model used, so it is reproducible.
-5. The decision belongs to the user. Present, compare, recommend —
+5. Label a fresh session's first answer **independent first pass** and
+   resumed-session answers **deliberation**.
+6. The decision belongs to the user. Present, compare, recommend —
    never declare the question settled because two models agree.
 
 Do not use consult mode to outsource choices the user already made,

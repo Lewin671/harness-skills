@@ -10,13 +10,13 @@ description: >-
   needs an independent reviewer. Use consult mode when they ask Codex
   to weigh in on a design, plan, decision, trade-off, or open question
   ("ask codex what it thinks", "which option would codex pick");
-  consult supports multi-turn follow-ups in the same session. Both
-  modes run read-only: model-generated commands run in a read-only
-  sandbox, and command hooks, apps, plugins, and notify callbacks are
-  disabled; only standalone MCP servers from the user's own codex
-  config sit outside that boundary (warned about when enabled). Do
-  not trigger for reviews or advice Claude should give itself, and
-  not when the `codex` CLI is not installed.
+  consult starts with a blind first pass and supports clearly labelled
+  multi-turn deliberation afterwards. Model-generated commands run in
+  a read-only sandbox; command hooks, apps, plugins, and notify callbacks
+  are disabled. Standalone MCP access is refused by default and may be
+  allowed only after the user explicitly accepts the risk of external
+  side effects. Do not trigger for reviews or advice Claude should give itself,
+  and not when the `codex` CLI is not installed.
 harnesses: [claude-code]
 ---
 
@@ -26,24 +26,42 @@ Get an independent second opinion from OpenAI's Codex, from inside
 Claude Code. The value is model diversity: a reviewer or adviser that
 did not write the code and does not share Claude's blind spots.
 
-Two modes, one boundary:
+Two modes, one local boundary:
 
 - **review** — a prioritised defect list for a code change, via
   `codex exec review`. Changed code goes here.
 - **consult** — a reasoned position on an open question — a plan, a
   design choice, "should we do X or Y" — via `codex exec`, with
-  resumable multi-turn sessions. Everything that is not a diff goes
-  here.
+  a blind first pass and resumable follow-up deliberation. Everything
+  that is not a diff goes here.
 
-Read-only by design: model-generated local commands run under
+Local commands are read-only by design: model-generated commands run under
 `sandbox_mode="read-only"`; command hooks, apps, and plugins — all of
 which act *outside* that sandbox (a plugin can bundle write-capable
 connectors and MCP tools) — are disabled and verified fail-closed
 before the run starts; the legacy `notify` callback is cleared. The
 boundary does not extend to standalone MCP servers from the user's
-own codex config — those stay reachable (the script warns when any
-are enabled), so do not pick this skill where strict isolation from
-them is required. Never use this skill to apply fixes.
+own codex config. The script therefore refuses to start when any are
+enabled, or when their state cannot be verified. `--allow-mcp` overrides
+that refusal only after the user explicitly accepts that those tools may
+mutate external systems; local model-generated commands remain read-only.
+A request for a second opinion does not itself grant that approval: report
+the refusal and ask instead of adding the flag silently. Never use this
+skill to apply fixes.
+
+## Independence Contract
+
+Keep the first pass independent. Give Codex the artifacts, facts,
+constraints, candidate options in neutral order, and evaluation criteria.
+Do **not** include Claude's preferred answer, ranking, suspected defect,
+or argument unless evaluating that exact claim is what the user asked for.
+For a targeted claim, label the run as a cross-check rather than a blind
+opinion.
+
+After Codex answers, disclose Claude's position and use `--continue` to
+challenge assumptions or resolve disagreements. Label those later answers
+as **deliberation**, not as fresh independent samples: the session has now
+seen both sides' reasoning.
 
 ## Usage
 
@@ -81,13 +99,13 @@ Mode details live beside this file:
   standalone question, the multi-turn discussion loop and its rules,
   reporting duties.
 
-**Always run it with `run_in_background: true`, then end the turn.**
-The default is the strongest model at xhigh reasoning effort and
-legitimately runs for minutes — a two-file, 374-line review diff blew
-past the Bash tool's 10-minute ceiling, and a tiny one still took
-100s. Start it in the background, then do other work or stop and
-wait — the completion notification resumes the conversation the moment
-the run finishes. Never `sleep`-poll: a guessed sleep usually
+**Prefer `run_in_background: true` for the default xhigh run.** It can
+legitimately take minutes — a two-file, 374-line review diff blew past
+the Bash tool's 10-minute ceiling, and a tiny one still took 100s.
+Continue Claude's independent analysis while it runs; if no useful work
+remains, end the turn and wait for the completion notification. A
+foreground run is acceptable when the chosen model, effort, and scope make
+the latency predictably short. Never `sleep`-poll: a guessed sleep usually
 overshoots the actual finish time and wastes the difference.
 
 ### Is it still running, or hung?
@@ -115,10 +133,11 @@ model-controlled text and could contain look-alike marker lines.
 
 ## Model
 
-The script defaults to the strongest available model at xhigh
-reasoning effort, and **you should normally leave that alone**. A
-second opinion that is weaker than the first opinion is not worth the
-round trip; latency is the wrong thing to optimise here.
+The script defaults to a pinned high-capability model at xhigh reasoning
+effort, optimising for confidence on consequential reviews. Leave that
+default for high-stakes work, but respect an explicit cost, latency, or
+model-diversity preference: a useful second perspective need not always
+use the highest reasoning tier.
 
 Override only on an explicit request:
 
@@ -141,7 +160,7 @@ The exit code is the verdict on *the run*, never on the code:
 |------|---------|------------|
 | `0` | A result was produced | Read stdout and relay it. |
 | `2` | (review only) Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
-| `3` | Environment problem | No `codex`, not a git tree (bare repos included), bad flags or mode, or hooks that managed policy keeps enabled. Report it; do not silently substitute a Claude answer. |
+| `3` | Environment problem | No `codex`, not a git tree (bare repos included), bad flags or mode, unsafe features kept enabled, or standalone MCP exposure refused. Report it; do not silently substitute a Claude answer. |
 | `4` | Codex ran and failed | Read stderr. Also covers a consult follow-up whose session could not be resumed (the un-continued answer is discarded). |
 | `5` | Hung and was killed | Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
 
@@ -152,9 +171,10 @@ so never gate on it directly. That is why this script exists.
 
 Both modes end the same way:
 
-1. Relay Codex's output faithfully — every finding with its priority
-   in review mode, the position *and* its load-bearing arguments in
-   consult mode. Do not compress or silently drop anything.
+1. Relay Codex's output faithfully — account for every finding with its
+   priority in review mode, and preserve the position plus its
+   load-bearing arguments in consult mode. Summarise for clarity, but do
+   not silently drop a conclusion or disagreement.
 2. Add a Claude-side stance: agree, disagree with reason, or
    needs-checking. You have context Codex lacks; Codex has distance
    Claude lacks.
@@ -163,7 +183,9 @@ Both modes end the same way:
    this skill produces.
 4. State the scope or question and the model used, so it is
    reproducible.
-5. Stop there. The decision belongs to the user, and applying fixes is
+5. For consult, label the first answer **independent first pass** and all
+   resumed-session answers **deliberation**.
+6. Stop there. The decision belongs to the user, and applying fixes is
    a separate, user-authorized step.
 
 ## Boundaries

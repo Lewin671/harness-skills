@@ -1,11 +1,11 @@
 # Shared runtime for run-codex-second-opinion. Sourced, not executed.
 #
 # Everything here is mode-agnostic and safety-critical: read-only
-# enforcement, hook fail-closed verification, scratch placement, the
-# watchdog, process-group termination, bounded progress, and the
-# stale-default fallback. Mode files (review.bash, consult.bash) build
-# the codex command and interpret its result; nothing in them may relax
-# what this file enforces.
+# enforcement, external-tool fail-closed verification, scratch placement,
+# the watchdog, process-group termination, bounded progress, and the
+# stale-default fallback. Mode files (review.bash, consult.bash) build the
+# codex command and interpret its result; only the explicit --allow-mcp
+# acknowledgement may accept an external boundary this file detects.
 #
 # Mode files must set before use:
 #   run_noun     what a run is called in messages ("review"/"consultation")
@@ -15,12 +15,13 @@
 #   mode_block_retry  return 0 to suppress the stale-default retry
 #                     (printing its own explanation first)
 
-# A second opinion is only worth having from the strongest tier, so
-# these pin it rather than inheriting whatever the user last
-# configured. Verified against codex-cli 0.146.0 on 2026-07-31; if the
-# slug goes stale the script falls back to the user's config (see
-# defaults_rejected below). `ultra` is deliberately not used: it
-# delegates subtasks, which is not what a second opinion wants.
+# Pin a high-capability default for consequential reviews rather than
+# inheriting whichever model the user last configured. Explicit cost,
+# latency, and model-diversity preferences can override it. Verified
+# against codex-cli 0.146.0 on 2026-07-31; if the slug goes stale the
+# script falls back to the user's config (see defaults_rejected below).
+# `ultra` is deliberately not used: it delegates subtasks, which is not
+# what a single independent second opinion wants.
 default_model="${CODEX_SECOND_OPINION_MODEL:-gpt-5.6-sol}"
 default_effort="${CODEX_SECOND_OPINION_EFFORT:-xhigh}"
 
@@ -28,6 +29,7 @@ model="$default_model"
 effort="$default_effort"
 pinned=1
 repo="."
+allow_mcp=0
 
 # Bounded, not just numeric: a digit string longer than what `[ -gt ]`
 # can parse makes the comparison error out inside an `if`, silently
@@ -112,31 +114,42 @@ EOF
 
   # Standalone MCP servers from the user's own codex config cannot be
   # globally disabled on 0.146.0 (no --disable mcp; only per-server
-  # config keys). They stay reachable by design and the SKILL documents
-  # that boundary — but say so out loud when any are enabled, so the
-  # caller can weigh it per run instead of rediscovering it later.
-  local mcp_out mcp_status=0
+  # config keys). They sit outside sandbox_mode and may mutate external
+  # systems, so fail closed when any are enabled or their state cannot
+  # be verified. --allow-mcp is deliberately wrapper-local: it records
+  # explicit user acceptance of that separate boundary without changing
+  # the local read-only sandbox.
+  local mcp_out mcp_status=0 mcp_problem=""
   mcp_out="$("$codex_bin" mcp list --json \
     --disable hooks --disable apps --disable plugins 2>/dev/null)" || mcp_status=$?
-  # The disclosure must not fail open: a failed or unrecognizable
-  # listing is reported as such, never treated like an empty config.
-  # Warn only when something is actually *enabled*: the listing
-  # includes disabled entries too, and a warning that fires for a
-  # fully disabled config trains callers to ignore it. A here-string,
-  # not a pipeline: grep -q exits on the first match, and under
-  # pipefail the writer's SIGPIPE would turn a *found* entry into a
-  # false pipeline status that suppresses the warning.
+  # A failed or unrecognizable listing is unsafe, never equivalent to an
+  # empty config. Match only actually enabled entries: the listing also
+  # includes disabled ones. A here-string, not a pipeline: grep -q exits
+  # on the first match, and under pipefail the writer's SIGPIPE would
+  # turn a found entry into a false pipeline status.
   if [ "$mcp_status" -ne 0 ]; then
-    echo "warning: could not inspect MCP servers ('codex mcp list' failed); any enabled servers in your codex config remain reachable outside the read-only sandbox" >&2
+    mcp_problem="could not verify standalone MCP exposure ('codex mcp list' failed)"
   elif grep -qE '"enabled"[[:space:]]*:[[:space:]]*true' <<< "$mcp_out"; then
-    echo "warning: enabled MCP servers from your codex config remain reachable outside the read-only sandbox (run 'codex mcp list' for details)" >&2
+    mcp_problem="enabled standalone MCP servers remain reachable outside the read-only sandbox"
   else
     case "$mcp_out" in
       ''|'[]'|'{}') : ;;          # empty config: nothing to disclose
       *'"enabled"'*) : ;;         # recognized shape, none enabled
       *)
-        echo "warning: unrecognized 'codex mcp list --json' output; verify MCP exposure manually" >&2 ;;
+        mcp_problem="could not verify standalone MCP exposure (unrecognized 'codex mcp list --json' output)" ;;
     esac
+  fi
+
+  if [ -n "$mcp_problem" ]; then
+    if [ "$allow_mcp" -eq 1 ]; then
+      echo "warning: ${mcp_problem}; proceeding because --allow-mcp was set" >&2
+      echo "warning: local commands stay read-only, but MCP tools may mutate external systems" >&2
+    else
+      echo "error: ${mcp_problem}." >&2
+      echo "error: refusing to start because MCP tools may mutate external systems." >&2
+      echo "hint: disable those servers, or use --allow-mcp only after the user explicitly accepts that risk." >&2
+      exit 3
+    fi
   fi
 }
 

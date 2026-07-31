@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deterministic tests for run-codex-second-opinion, driven by a fake
 # CODEX_BIN. No network, no real codex. Each case pins one contract the
-# wrapper promises: exit codes, fail-closed hooks, marker integrity —
+# wrapper promises: exit codes, fail-closed external tools, marker integrity —
 # for the mode dispatcher and for both modes.
 set -u
 
@@ -188,44 +188,70 @@ check_exit "review: apps forced on is exit 3" 3 "$?"
 FAKE_PLUGINS_STATE=true "$wrapper" review --repo "$dirty" >/dev/null 2>&1
 check_exit "review: plugins forced on is exit 3" 3 "$?"
 
-# Enabled standalone MCP servers warn but do not block.
+# Enabled standalone MCP servers fail closed before Codex starts.
 stderr="${workdir}/mcp.err"
+argv_log="${workdir}/argv-mcp-blocked.log"
 FAKE_MCP_LIST='[{"name":"github","enabled":true}]' \
+FAKE_ARGV_LOG="$argv_log" \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
-if [ "$?" = 0 ] && grep -q 'enabled MCP servers from your codex config remain reachable' "$stderr"; then
-  ok "review: enabled MCP servers warn without blocking"
+if [ "$?" = 3 ] && grep -q 'enabled standalone MCP servers' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: enabled MCP servers fail closed before a review"
 else
-  bad "review: enabled MCP servers warn without blocking"
+  bad "review: enabled MCP servers fail closed before a review"
+fi
+
+# --allow-mcp is the explicit escape hatch and must retain a loud warning.
+stderr="${workdir}/mcp-allowed.err"
+FAKE_MCP_LIST='[{"name":"github","enabled":true}]' \
+  "$wrapper" review --repo "$dirty" --timeout 30 --allow-mcp \
+  >/dev/null 2> "$stderr"
+if [ "$?" = 0 ] && grep -q 'proceeding because --allow-mcp was set' "$stderr" &&
+   grep -q 'MCP tools may mutate external systems' "$stderr"; then
+  ok "review: --allow-mcp explicitly accepts enabled MCP exposure"
+else
+  bad "review: --allow-mcp explicitly accepts enabled MCP exposure"
 fi
 
 # A config whose MCP entries are all disabled must NOT warn.
 stderr="${workdir}/mcp-disabled.err"
 FAKE_MCP_LIST='[{"name":"chrome_devtools","enabled":false,"disabled_reason":null}]' \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
-if [ "$?" = 0 ] && ! grep -q 'remain reachable' "$stderr"; then
+if [ "$?" = 0 ] && ! grep -q 'standalone MCP exposure' "$stderr"; then
   ok "review: disabled-only MCP config does not warn"
 else
   bad "review: disabled-only MCP config does not warn"
 fi
 
-# A failed MCP inspection must not fail open into silence.
+# A failed MCP inspection must fail closed by default.
 stderr="${workdir}/mcp-fail.err"
 FAKE_MCP_FAIL=1 \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
-if [ "$?" = 0 ] && grep -q 'could not inspect MCP servers' "$stderr"; then
-  ok "review: failed MCP inspection warns instead of staying silent"
+if [ "$?" = 3 ] && grep -q 'could not verify standalone MCP exposure' "$stderr"; then
+  ok "review: failed MCP inspection fails closed"
 else
-  bad "review: failed MCP inspection warns instead of staying silent"
+  bad "review: failed MCP inspection fails closed"
 fi
 
-# Unrecognizable listing output warns for manual verification.
+# The explicit override also covers an unverifiable listing.
+stderr="${workdir}/mcp-fail-allowed.err"
+FAKE_MCP_FAIL=1 \
+  "$wrapper" consult --repo "$dirty" --timeout 30 --allow-mcp "question" \
+  >/dev/null 2> "$stderr"
+if [ "$?" = 0 ] && grep -q 'proceeding because --allow-mcp was set' "$stderr"; then
+  ok "consult: --allow-mcp accepts unverifiable MCP exposure"
+else
+  bad "consult: --allow-mcp accepts unverifiable MCP exposure"
+fi
+
+# Unrecognizable listing output also fails closed.
 stderr="${workdir}/mcp-odd.err"
 FAKE_MCP_LIST='mcp servers: github (on)' \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
-if [ "$?" = 0 ] && grep -q 'unrecognized' "$stderr"; then
-  ok "review: unrecognized MCP listing warns for manual verification"
+if [ "$?" = 3 ] && grep -q 'unrecognized' "$stderr"; then
+  ok "review: unrecognized MCP listing fails closed"
 else
-  bad "review: unrecognized MCP listing warns for manual verification"
+  bad "review: unrecognized MCP listing fails closed"
 fi
 
 # --inherit success on a stream with no model field must still emit

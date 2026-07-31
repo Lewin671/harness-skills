@@ -23,20 +23,23 @@ the resumed turn switches back to the pinned defaults.
 Options:
   --continue <SESSION> resume this session UUID with a follow-up
                        QUESTION instead of starting fresh
-  --model <MODEL>      override the model (default: strongest tier)
+  --model <MODEL>      override the pinned high-capability model
   --effort <LEVEL>     low|medium|high|xhigh|max (default: xhigh). Pass
                        this whenever you pass --model — a weaker model
                        may not accept the default effort.
   --inherit            use the model and effort from your codex config
-                       instead of the pinned strongest defaults
+                       instead of the pinned defaults
+  --allow-mcp          allow enabled or unverifiable standalone MCP
+                       servers; only after explicit user approval,
+                       because they may mutate external systems
   --repo <DIR>         repository for context (default: current
                        directory)
   --timeout <SECONDS>  abort a hung run (default: 3000; 0 disables;
                        max 86400)
 
-Defaults to the strongest available model at xhigh reasoning effort.
-A second opinion is only worth the wait if it comes from the best
-adviser available, so speed is deliberately not the priority here.
+Defaults to a pinned high-capability model at xhigh reasoning effort,
+optimising for confidence on consequential decisions. Use an explicit
+override when cost, latency, or a different model perspective matters.
 
 Environment:
   CODEX_BIN                     path to the codex binary (default: codex)
@@ -94,6 +97,8 @@ mode_main() {
         effort="$1"; pinned=0; shift ;;
       --inherit)
         model=""; effort=""; pinned=0; shift ;;
+      --allow-mcp)
+        allow_mcp=1; shift ;;
       --continue)
         shift; [ "$#" -gt 0 ] || { echo "error: --continue needs a session id" >&2; exit 3; }
         # UUIDs only — exactly what the previous run's `session:` line

@@ -19,9 +19,11 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   them back on. Fail closed: an unparseable answer counts as enabled.
 - Standalone MCP servers from the user's own config have no global
   disable switch on 0.146.0 (only per-server
-  `mcp_servers.<id>.enabled` keys), so they stay reachable by design;
-  the script surfaces them with `codex mcp list --json` as a startup
-  warning instead of silently accepting the exposure.
+  `mcp_servers.<id>.enabled` keys). The script inspects them with
+  `codex mcp list --json` and fails closed if any are enabled or the
+  listing cannot be verified. `--allow-mcp` is an explicit user-approved
+  escape hatch; it keeps local commands read-only but accepts that MCP
+  tools may mutate external systems.
 - The legacy `notify = [...]` callback is not feature-gated, so
   `--disable hooks` does not stop it. The script clears it with
   `-c notify=[]`; plain config keys have no managed-policy override,

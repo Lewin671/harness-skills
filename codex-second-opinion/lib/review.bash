@@ -17,19 +17,22 @@ Scope (choose exactly one, default --uncommitted):
                        and skips the empty-scope precheck
 
 Options:
-  --model <MODEL>      override the model (default: strongest tier)
+  --model <MODEL>      override the pinned high-capability model
   --effort <LEVEL>     low|medium|high|xhigh|max (default: xhigh). Pass
                        this whenever you pass --model — a weaker model
                        may not accept the default effort.
   --inherit            use the model and effort from your codex config
-                       instead of the pinned strongest defaults
+                       instead of the pinned defaults
+  --allow-mcp          allow enabled or unverifiable standalone MCP
+                       servers; only after explicit user approval,
+                       because they may mutate external systems
   --repo <DIR>         repository to review (default: current directory)
   --timeout <SECONDS>  abort a hung review (default: 3000; 0 disables;
                        max 86400)
 
-Defaults to the strongest available model at xhigh reasoning effort.
-A second opinion is only worth the wait if it comes from the best
-reviewer available, so speed is deliberately not the priority here.
+Defaults to a pinned high-capability model at xhigh reasoning effort,
+optimising for confidence on consequential reviews. Use an explicit
+override when cost, latency, or a different model perspective matters.
 
 Environment:
   CODEX_BIN                     path to the codex binary (default: codex)
@@ -173,6 +176,8 @@ mode_main() {
         effort="$1"; pinned=0; shift ;;
       --inherit)
         model=""; effort=""; pinned=0; shift ;;
+      --allow-mcp)
+        allow_mcp=1; shift ;;
       --repo)
         shift; [ "$#" -gt 0 ] || { echo "error: --repo needs a value" >&2; exit 3; }
         repo="$1"; shift ;;
