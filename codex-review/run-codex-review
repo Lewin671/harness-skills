@@ -30,6 +30,7 @@ Options:
   --inherit            use the model and effort from your codex config
                        instead of the pinned strongest defaults
   --repo <DIR>         repository to review (default: current directory)
+  --timeout <SECONDS>  abort a hung review (default: 1800; 0 disables)
 
 Defaults to the strongest available model at maximum reasoning effort.
 A second opinion is only worth the wait if it comes from the best
@@ -58,6 +59,10 @@ model="$default_model"
 effort="$default_effort"
 pinned=1
 repo="."
+# Generous by default: a max-effort review of a large diff legitimately
+# runs for many minutes. This is a stuck-process backstop, not a budget.
+timeout_secs="${CODEX_REVIEW_TIMEOUT:-1800}"
+timed_out_marker=""
 
 set_scope() {
   if [ "$scope_set" -eq 1 ]; then
@@ -88,6 +93,12 @@ while [ "$#" -gt 0 ]; do
     --repo)
       shift; [ "$#" -gt 0 ] || { echo "error: --repo needs a value" >&2; exit 3; }
       repo="$1"; shift ;;
+    --timeout)
+      shift; [ "$#" -gt 0 ] || { echo "error: --timeout needs a value" >&2; exit 3; }
+      case "$1" in
+        ''|*[!0-9]*) echo "error: --timeout must be a whole number of seconds" >&2; exit 3 ;;
+      esac
+      timeout_secs="$1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; usage; exit 3 ;;
   esac
@@ -216,12 +227,61 @@ run_review() {
   fi
 
   echo "running: ${cmd[*]}" >&2
+
+  local pidfile status watchdog=""
+  pidfile="$(mktemp "${scratch}/codex-review-pid-XXXXXX")"
+  timed_out_marker="${pidfile}.timeout"
+
+  # A hung review would otherwise wait forever. The progress feed only
+  # lets a caller *notice* that; this is what stops it. There is no
+  # portable `timeout` binary here — macOS ships none — so the watchdog
+  # is a plain background sleep that signals the codex process itself,
+  # not the surrounding pipeline, which would leave codex orphaned.
+  if [ "$timeout_secs" -gt 0 ]; then
+    (
+      sleep "$timeout_secs"
+      local_pid="$(cat "$pidfile" 2>/dev/null || true)"
+      if [ -n "$local_pid" ] && kill -0 "$local_pid" 2>/dev/null; then
+        : > "$timed_out_marker"
+        kill -TERM "$local_pid" 2>/dev/null || true
+        # Escalate. A process that ignores TERM, or that is blocked in a
+        # child, would otherwise keep the pipeline open and make the
+        # timeout advisory rather than real.
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+          kill -0 "$local_pid" 2>/dev/null || break
+          sleep 1
+        done
+        if kill -0 "$local_pid" 2>/dev/null; then
+          pkill -KILL -P "$local_pid" 2>/dev/null || true
+          kill -KILL "$local_pid" 2>/dev/null || true
+        fi
+      fi
+    ) &
+    watchdog=$!
+  fi
+
   # Stream a bounded progress feed to stderr, archive the full stream to
   # the log. Reviews run for many minutes; without a live feed there is
   # no way to tell a working run from a hung one. stdout stays clean for
   # the report.
-  "${cmd[@]}" 2>&1 | tee -a "$log" | truncate_stream >&2
-  return "${PIPESTATUS[0]}"
+  {
+    "${cmd[@]}" 2>&1 &
+    echo $! > "$pidfile"
+    wait $!
+  } | tee -a "$log" | truncate_stream >&2
+  status="${PIPESTATUS[0]}"
+
+  if [ -n "$watchdog" ]; then
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+  fi
+  rm -f "$pidfile"
+
+  if [ -f "$timed_out_marker" ]; then
+    rm -f "$timed_out_marker"
+    return 124
+  fi
+  return "$status"
 }
 
 # Truncate each line and emit it immediately. A `while read` loop is
@@ -258,7 +318,20 @@ defaults_rejected() {
   grep -qE "reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found" "$log" 2>/dev/null
 }
 
-if ! run_review "$model" "$effort"; then
+review_status=0
+run_review "$model" "$effort" || review_status=$?
+
+# Timing out is not a stale-model symptom, so it must not trigger the
+# fallback retry — that would double an already too-long wait.
+if [ "$review_status" -eq 124 ]; then
+  echo "error: review exceeded ${timeout_secs}s and was terminated" >&2
+  echo "hint: raise --timeout, or check the log for where it stalled: ${log}" >&2
+  tail_log
+  rm -f "$out"
+  exit 5
+fi
+
+if [ "$review_status" -ne 0 ]; then
   if defaults_rejected; then
     echo "warning: '${model}' at effort '${effort}' was rejected — these pinned defaults look stale." >&2
     echo "warning: retrying once with the model and effort from your codex config." >&2
