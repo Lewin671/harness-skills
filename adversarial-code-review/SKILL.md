@@ -47,9 +47,12 @@ must request afterwards.
 - Never modify the user's working tree or index. Red-team tests run
   only in throwaway git worktrees (Workflow `isolation: 'worktree'`),
   discarded after the run.
-- Tier every subagent's `model` per the `claude-code-model-routing`
-  skill. Defaults below; its rules (verification floor, escalate once)
-  override habit.
+- Tier every subagent's `model` per the defaults below. Two rules
+  override habit: the *verification floor* — an agent that judges or
+  refutes another agent's findings runs at least the tier that
+  produced them, higher when its verdict is final — and *escalate
+  once* — a weak or uncertain result is rerun exactly one tier up,
+  never retried at the same settings and never silently accepted.
 
 ## Phase 0 — Scope and Effort
 
@@ -137,8 +140,8 @@ Tiered by severity:
   returns a per-finding verdict list.
 - **major** — one sonnet skeptic per finding. If its verdict is
   uncertain or weakly grounded in cited code, escalate that one
-  finding to one opus skeptic (escalate once, per
-  `claude-code-model-routing`); if the opus verdict is still weak,
+  finding to one opus skeptic (escalate once); if the opus verdict
+  is still weak,
   surface the uncertainty. On the large tier, majors go straight to
   the critical panel below.
 - **critical** — three sonnet skeptics per finding, each with
@@ -206,5 +209,4 @@ agentic loop that may build and run a test). Keep it pointed only at
 the targets defined above, and never put a barrier in front of it
 that the data flow doesn't require. Triage on haiku and skeptics on
 sonnet are deliberate — do not silently upgrade them; escalate a
-single weak verdict one tier up per `claude-code-model-routing` rule
-4 instead.
+single weak verdict one tier up (escalate once) instead.
