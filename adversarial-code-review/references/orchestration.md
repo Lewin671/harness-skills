@@ -273,9 +273,11 @@ most-recent-wave, and a rate once observed is never forgotten.
 
 **The bound is not a single number, and it would be dishonest to quote one.**
 What is bounded is exposure to a *wave*: every multi-agent wave — finders,
-region probes, verifiers — launches one agent first, and the rest are
-admitted only at what that one actually cost, cumulatively rather than item
-by item. Candidate probes are repriced too, because they were admitted
+region probes, verifiers, and the escalated reruns — launches one agent
+first, and the rest are admitted only at what that one actually cost,
+cumulatively rather than item by item. The escalations matter most and were
+added last: they are the strongest model at the highest effort, and drift
+that appears only there has been priced by nothing before it. Candidate probes are repriced too, because they were admitted
 before the sample existed. Those shapes now hold at 1.35x, against 1.57x,
 1.92x, 1.99x, 3.35x and 4.42x before.
 

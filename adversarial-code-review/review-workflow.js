@@ -1298,9 +1298,18 @@ function pickVictim(pool) {
   return worst
 }
 
+// Regions first, from EVERY finder, before any candidate is ranked. absorb
+// used to fold in one finder's regions and immediately cap that finder's
+// candidates, so a region reported by a later finder could not protect an
+// earlier finder's claim — which made the cap depend on the order the
+// finders were processed in, the one thing bounded selection must not do.
+function absorbRegions(res) {
+  if (!res) return
+  for (const r of res.additional_high_risk_regions || []) extraRegions.push(r)
+}
+
 function absorb(res, lens) {
   if (!res) { ledger.unrun_lenses.push(lens); failed('finder', lens, 'finder did not return'); return }
-  for (const r of res.additional_high_risk_regions || []) extraRegions.push(r)
   if (res.recommended_missing_lens && !lensesRun.includes(res.recommended_missing_lens)) {
     recommendedLenses.push(res.recommended_missing_lens)
   }
@@ -1315,6 +1324,7 @@ function absorb(res, lens) {
   for (const c of ordered) addCandidate(c, lens, 'finder')
 }
 
+finderOut.forEach((res) => absorbRegions(res))
 finderOut.forEach((res, i) => absorb(res, lenses[i]))
 
 // recall-first buys one supplemental lens when a finder asked for a real one
@@ -1332,6 +1342,7 @@ if (wantedLens && P.supplementalLens && admitOptional(W.finder, floorsFor(candid
   lensesRun.push(wantedLens)
   supplementalLensRun = wantedLens
   const beforeSupplemental = candidates.length
+  absorbRegions(extraFinder)
   absorb(extraFinder, wantedLens)
   // A finder's yield cannot be bounded in advance, so the escrow above is a
   // guess and a productive supplemental lens can outgrow it. The lens was
@@ -1712,10 +1723,26 @@ for (const c of weakCriticals) {
 }
 if (escNow.length) {
   log(`escalating ${escNow.length}/${weakCriticals.length} weakly grounded critical verifier(s) once`)
-  const esc = await parallel(escNow.map((c) => () =>
-    agent(verifierPrompt(c), { label: `verify:${c.id}:escalated`, phase: 'Verify', schema: VERIFIER_SCHEMA, model: M.strong, effort: M.highEffort })
-      .then((r) => ({ c, r }), () => ({ c, r: null }))))
-  escNow.forEach((c) => launched(`verify:${c.id}:escalated`, W.criticalVerifierEscalated))
+  // Sampled like every other multi-agent wave. These reruns are the most
+  // expensive agents in the run — strongest model, highest effort — and drift
+  // that shows up only here has never been priced by anything before it: two
+  // escalations at 12x spent 1.46x the token target in one atomic launch.
+  const runEsc = (c) => agent(verifierPrompt(c), { label: `verify:${c.id}:escalated`, phase: 'Verify', schema: VERIFIER_SCHEMA, model: M.strong, effort: M.highEffort })
+    .then((r) => ({ c, r }), () => ({ c, r: null }))
+  const escSample = escNow.length > 1 ? escNow.slice(0, 1) : []
+  const escRest = escNow.length > 1 ? escNow.slice(1) : escNow
+  const escSampleOut = escSample.length ? await parallel(escSample.map((c) => () => runEsc(c))) : []
+  escSample.forEach((c) => launched(`verify:${c.id}:escalated`, W.criticalVerifierEscalated))
+  if (escSample.length) endWave()
+
+  const escAdmitted = []
+  let escPendingWU = 0
+  for (const c of escRest) {
+    if (admitTokens(escPendingWU + W.criticalVerifierEscalated)) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }
+    defer({ target_id: c.id, kind: 'verifier_escalation', anchor: `${c.file}:${c.line}` }, 'deferred_by_budget')
+  }
+  const esc = [...escSampleOut, ...await parallel(escAdmitted.map((c) => () => runEsc(c)))]
+  escAdmitted.forEach((c) => launched(`verify:${c.id}:escalated`, W.criticalVerifierEscalated))
   for (const e of esc) {
     if (!e) continue
     if (e.r && e.r.candidate_id === e.c.id && e.r.grounding === 'strong') verifierById.set(e.c.id, e.r)

@@ -48,8 +48,14 @@ const WU_BY_LABEL = (label) => label.startsWith('attack:') ? 10
 // draw are the binding checks rather than reserve().
 const drainer = (total, budgetWU, factor = 1, heavy = {}) => {
   let spent = 0
+  // A key beginning with '*' matches anywhere in the label. Escalated
+  // verifiers are labelled `verify:C1:escalated`, so no prefix can single
+  // them out from ordinary verifiers — and drift confined to the reruns is
+  // its own regime: they are the most expensive agents in the run.
   const mult = (label) => {
-    for (const prefix of Object.keys(heavy)) if (label.startsWith(prefix)) return heavy[prefix]
+    for (const key of Object.keys(heavy)) {
+      if (key.startsWith('*') ? label.includes(key.slice(1)) : label.startsWith(key)) return heavy[key]
+    }
     return factor
   }
   return {
@@ -214,6 +220,21 @@ function makeAgent(state, s) {
       // Twenty-five LOW-confidence candidates that sort ahead of one HIGH
       // confidence candidate. Same severity, none in a region: only the
       // confidence term can save the last one from the cap.
+      // The region that protects these candidates is reported by a LATER
+      // finder than the one that found them, so it only helps if every
+      // finder's regions are collected before any candidate is capped.
+      if (s.lateRegion) {
+        if (lens === 'logic correctness') {
+          const many = []
+          for (let i = 0; i < 25; i++) many.push(cand('bulk.js', 100 + i, 'minor', 'present_code', `outside ${String(i).padStart(2, '0')}`))
+          many.push(cand('late.js', 500, 'minor', 'present_code', 'inside the late region'))
+          return { candidates: many, additional_high_risk_regions: [] }
+        }
+        if (lens === 'security') {
+          return { candidates: [], additional_high_risk_regions: [{ file: 'late.js', start_line: 490, end_line: 510, why: 'noticed by a later lens' }] }
+        }
+        return { candidates: [], additional_high_risk_regions: [] }
+      }
       if (s.confidenceCap) {
         if (lens !== 'security') return { candidates: [], additional_high_risk_regions: [] }
         const many = []
@@ -795,8 +816,12 @@ R.push(await run('changed_ranges line zero', { ...BASE, changed_ranges: { 'pay.j
   expect: (res) => res.status === 'invalid_args' || 'a range starting at line 0 was accepted' }))
 R.push(await run('changed_ranges negative', { ...BASE, changed_ranges: { 'pay.js': [[-5, 10]] } }, {
   expect: (res) => res.status === 'invalid_args' || 'a negative range endpoint was accepted' }))
-R.push(await run('changed_ranges non-integer', { ...BASE, changed_ranges: { 'pay.js': [[1.5, 10]] } }, {
-  expect: (res) => res.status === 'invalid_args' || 'a fractional range endpoint was accepted' }))
+R.push(await run('changed_ranges non-integer start', { ...BASE, changed_ranges: { 'pay.js': [[1.5, 10]] } }, {
+  expect: (res) => res.status === 'invalid_args' || 'a fractional range start was accepted' }))
+// Both endpoints, separately: one fixture with a fractional start cannot show
+// that the END is checked at all.
+R.push(await run('changed_ranges non-integer end', { ...BASE, changed_ranges: { 'pay.js': [[1, 10.5]] } }, {
+  expect: (res) => res.status === 'invalid_args' || 'a fractional range end was accepted' }))
 R.push(await run('changed_ranges wrong arity', { ...BASE, changed_ranges: { 'pay.js': [[1, 5, 9]] } }, {
   expect: (res) => res.status === 'invalid_args' || 'a three-element range was accepted' }))
 R.push(await run('candidate at line zero', { ...BASE }, { lineZero: true,
@@ -919,6 +944,15 @@ R.push(await run('finding graded above its verification tier', { ...BASE }, { ad
     if (!below.length) return 'no finding was graded above its tier, so the positive path is untested'
     return res.disclosure_checklist.findings_verified_below_final_severity === below.length
       || `checklist says ${res.disclosure_checklist.findings_verified_below_final_severity}, results say ${below.length}` } }))
+// A region reported by a later finder must still protect an earlier finder's
+// candidate from the cap, or bounded selection depends on processing order.
+R.push(await run('cap respects a region a later finder reported',
+  { ...BASE, budget_wu: 200, included_paths: [...BASE.included_paths, 'late.js'] }, { lateRegion: true,
+    expect: (res) => {
+      if (!(res.ledger.invalid_candidates || []).some((x) => /exceeded/.test(x.reason))) return 'the cap never fired, so the ordering is untested'
+      const all = [...(res.candidate_results || []), ...(res.found_but_not_verified || [])]
+      return all.some((x) => x.anchor === 'late.js:500')
+        || 'the cap dropped the candidate inside a region a later finder reported' } }))
 R.push(await run('anchor does not match file:line', { ...BASE }, { anchorMismatch: true,
   expect: (res) => res.ledger.invalid_candidates.some((x) => /anchor/.test(x.reason))
     || 'a candidate whose anchor names a different file was accepted' }))
@@ -1016,6 +1050,34 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
     { onCall: d.onCall, drift: true }, d.budget,
     (res) => res.status !== 'adjudication_failed'
       || 'probes were launched at the pre-sample price and adjudication starved on the tokens they spent'))
+}
+{
+  // The adjudication escalation is paid from escrow, so the weighted units
+  // are already committed and the token ceiling is the ONLY thing that can
+  // still refuse it. With adjudication drifting 25x, drawing it anyway spends
+  // another 90,000 tokens on a rerun the target could never cover.
+  const d = drainer(48000, 48, 1, { adjudicate: 25 })
+  R.push(await run('escrow draw respects the token ceiling', { ...BASE },
+    { onCall: d.onCall, drift: true, unpriced: true, weakAdjudication: true }, d.budget,
+    (res) => {
+      const escalated = launchesOf(res).filter((x) => x.label.startsWith('adjudicate:escalated')).length
+      return escalated === 0
+        || 'an escrowed adjudication rerun was drawn with the token target already exhausted'
+    }))
+}
+{
+  // Drift confined to the ESCALATION reruns — the strongest model at the
+  // highest effort, and a wave nothing before it has priced. Two of them
+  // launched together spent 1.46x the token target.
+  const d = drainer(48000, 48, 1, { '*escalated': 12 })
+  R.push(await run('drift confined to escalated verifiers', { ...BASE },
+    { onCall: d.onCall, drift: true, weakCriticalVerifier: true }, d.budget,
+    (res) => {
+      const esc = launchesOf(res).filter((x) => x.label.includes(':escalated')).length
+      if (!esc) return 'no escalation ran, so the sampling is untested'
+      return esc <= 1 || (res.ledger.deferred || []).some((x) => x.kind === 'verifier_escalation')
+        || `all ${esc} escalations were launched at a price nothing had paid`
+    }))
 }
 {
   // Region probes are a multi-agent wave — recall-first opens three at once —

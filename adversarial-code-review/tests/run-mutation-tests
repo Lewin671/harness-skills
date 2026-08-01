@@ -177,7 +177,8 @@ mutate "changed_ranges must be an object" "  if (typeof A.changed_ranges !== 'ob
 mutate "changed_ranges entries are arrays" "    if (!Array.isArray(ranges)) {" "    if (false) {"
 mutate "range pair is an array" "!Array.isArray(r) || r.length !== 2" "false || r.length !== 2"
 mutate "range pair has exactly two ends" "r.length !== 2" "false"
-mutate "range ends are integers" "|| !Number.isInteger(r[0]) || !Number.isInteger(r[1])" "|| false"
+mutate "range start is an integer" "|| !Number.isInteger(r[0])" "|| false"
+mutate "range end is an integer" "|| !Number.isInteger(r[1])" "|| false"
 mutate "range ends are 1-indexed" "|| r[0] < 1 || r[1] < 1" "|| false"
 mutate "range start precedes end" "|| r[0] > r[1]) {" ") {"
 mutate "candidate line is 1-indexed" "  if (!Number.isInteger(c.line) || c.line < 1) {" "  if (false) {"
@@ -217,7 +218,7 @@ mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + es
 mutate "candidate probes repriced after the sample" "  if (admitTokens(verifyPendingWU + probeAdmitted.length * W.probe + W.probe)) { probeAdmitted.push(t); continue }" "  if (true) { probeAdmitted.push(t); continue }"
 mutate "region probes sample one first" "    if (admitTokens(probePendingWU + W.probe)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }" "    if (true) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }"
 mutate "tie-breaks are a total order" "const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)" "const cmp = (a, b) => String(a).localeCompare(String(b))"
-mutate "optional purchases respect tokens" "  if (!admitTokens(wu)) return false" "  " 2
+mutate "optional purchases respect tokens" "  if (!admitTokens(costWU + protectedWU)) return false" "  "
 mutate "remaining verifiers respect tokens" "  if (admitTokens(verifyPendingWU + v.wu)) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }" "  if (true) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }"
 mutate "ranking sees flagged regions" "  + (inKnownRegion(c) ? 50 : 0)" "  + (c.in_high_risk_region ? 50 : 0)"
 mutate "confidence ranks bounded selections" "  + (CONF_RANK[c.confidence] || 0) * 10" "  + 0"
@@ -227,6 +228,8 @@ mutate "checklist counts dropped candidates" "    candidates_dropped_invalid: le
 mutate "checklist counts terminal overrides" "    terminal_overrides: ledger.terminal_evidence_overrides.length," "    terminal_overrides: 0,"
 mutate "checklist counts rejections" "    rejected_candidates: results.filter((r) => r.state === 'refuted').length," "    rejected_candidates: 0,"
 mutate "under-tier findings are flagged" "    verified_below_final_severity: Boolean(state === 'substantiated' && v && v.final_severity" "    verified_below_final_severity: Boolean(false && v && v.final_severity"
+mutate "escalation wave is sampled" "    if (admitTokens(escPendingWU + W.criticalVerifierEscalated)) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }" "    if (true) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }"
+mutate "finder regions precede capping" "finderOut.forEach((res) => absorbRegions(res))" ""
 
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
@@ -255,7 +258,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=121
+EXPECTED_TOTAL=124
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1
