@@ -48,8 +48,17 @@ that can attack code but cannot produce a candidate can never report a
 finding, and is decoration.
 
 `proposed_severity` is deliberately named. Finders propose; the
-adjudicator assigns final severity. A finder cannot buy stronger
-verification by inflating a label.
+adjudicator assigns final severity.
+
+An honest caveat about that, because the obvious reading is wrong: the
+proposal *does* route verification effort, because before adjudication it
+is the only signal there is. A harness that spends more on proposed
+criticals gives a candidate the finder under-labelled cheaper scrutiny
+than its true severity deserves — and inflating a label buys the extra
+scrutiny it did not merit. Verifying everything at the top tier is the
+only way out, and it is rarely affordable. So the requirement is
+disclosure: when the final severity outruns the tier the verification was
+bought at, the report must say so for that finding.
 
 ### Evidence kinds
 

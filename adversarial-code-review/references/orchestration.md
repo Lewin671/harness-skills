@@ -107,9 +107,23 @@ everything="$( { git diff --name-only HEAD
 excluded="$(comm -23 <(printf '%s\n' "${everything}") <(printf '%s\n' "${included}"))"
 ```
 
-Pass **both** manifests to the script as `included_paths` and
-`excluded_paths`; it returns them in `run` so the report can state what
-was actually reviewed rather than what was intended.
+`included_paths` is **required** — the script refuses to start without a
+non-empty one. It is the only thing that keeps a finding inside the
+artifact the review claims to be about; absent, a finder can nominate
+any file in the repository and, if the verifier and adjudicator agree,
+that becomes a "verified finding" about code nobody reviewed.
+
+Better still, pass `changed_ranges` too — file-level binding still lets a
+candidate cite an untouched line in a reviewed file:
+
+```bash
+# {"pay.js": [[10,14],[40,41]], ...} — from the same filtered pathspecs
+git diff --unified=0 HEAD -- . "${excludes[@]}" |
+  awk '/^\+\+\+ b\//{f=substr($0,7)} /^@@/{split($3,a,","); s=substr(a[1],2); n=(a[2]==""?1:a[2]); if(n>0) print f, s, s+n-1}'
+```
+
+Both manifests are returned in `run`, so the report states what was
+actually reviewed rather than what was intended.
 A generated-code diff inflates cost estimates and floods the finders
 with noise — but exclusion is a judgement, not a reflex: when the
 dependency bump *is* the change under review, a lockfile is the review
@@ -531,8 +545,11 @@ Workflow({
     repo_root: "<abs path>",
     profile: "balanced",       // recall-first | precision-first
     budget_wu: 48,             // override only on request
-    included_paths: ["src/pay.js", "src/auth.js"],
+    included_paths: ["src/pay.js", "src/auth.js"],   // REQUIRED, non-empty
+    changed_ranges: { "src/pay.js": [[10, 14]] },     // optional, binds to hunks
     excluded_paths: ["package-lock.json", "vendor/"],
+    allow_execution: true,                            // false keeps the contract,
+                                                      // declines the execution half
     models: { cheap: "sonnet", strong: "opus", highEffort: "xhigh" }
   }
 })
@@ -541,8 +558,10 @@ Workflow({
 `models` carries the tiers resolved against the live schema in Phase 0.
 Omit it only when the defaults are known to be valid.
 
-The script owns schemas, model floors, exact-key grouping, weighted
-budgeting, wave reservation, and report completeness. It never judges
+The script owns schemas, weighted budgeting, wave reservation, and the
+disclosure checklist. It does **not** rank models: `args.models` is used
+as given and echoed back in `run.model_roles`, so a wrong tier is
+auditable after the fact but not prevented. It never judges
 prose: "weakly grounded" is a field an agent emits, never something the
 script infers.
 

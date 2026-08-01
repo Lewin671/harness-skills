@@ -132,9 +132,12 @@ Then call the `Workflow` tool with `scriptPath` set to
 args listed in orchestration.md §8. If that path does not exist, locate
 the script beside this SKILL.md rather than reconstructing it.
 
-The script enforces the schemas, the model floors, the weighted budget
-and the wave reservations. It never judges prose: anything requiring
-judgement is a field an agent emits.
+The script enforces the schemas, the weighted budget and the wave
+reservations, and it never judges prose: anything requiring judgement is
+a field an agent emits. It does **not** enforce the model floors — it
+cannot rank arbitrary model names — so it uses the roles you pass and
+returns them in `run.model_roles` for the report. Resolving them
+correctly is Phase 0's job, and the report states what actually ran.
 
 ## Reading the script's result
 

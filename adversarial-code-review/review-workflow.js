@@ -86,7 +86,10 @@ const CONF_RANK = { high: 3, medium: 2, low: 1 }
 // ---------------------------------------------------------------------------
 
 const A = args || {}
-const REQUIRED = ['scope', 'base_sha', 'patch_path', 'patch_sha256', 'repo_root']
+// included_paths is required, not optional. An empty or absent manifest
+// silently disables the only check that keeps a finding inside the artifact
+// the review claims to be about.
+const REQUIRED = ['scope', 'base_sha', 'patch_path', 'patch_sha256', 'repo_root', 'included_paths']
 const missingArgs = REQUIRED.filter((k) => !A[k])
 if (missingArgs.length) {
   return { status: 'invalid_args', missing: missingArgs }
@@ -115,7 +118,14 @@ const intent = A.intent || '(no intended behaviour supplied)'
 // in, so the substitution rule in orchestration.md section 3 is actually
 // implementable. Defaults apply when the caller says nothing.
 const M = Object.assign({ cheap: 'sonnet', strong: 'opus', highEffort: 'xhigh' }, A.models || {})
-const includedPaths = Array.isArray(A.included_paths) ? A.included_paths : []
+if (!Array.isArray(A.included_paths) || !A.included_paths.length) {
+  return { status: 'invalid_args', detail: 'included_paths must be a non-empty array; without it nothing binds a finding to the reviewed artifact' }
+}
+const includedPaths = A.included_paths
+// Optional but strongly preferred: the changed line ranges per file, from
+// `git diff --unified=0`. File-level binding still lets a candidate cite an
+// untouched line in a reviewed file; this closes that to the hunk.
+const changedRanges = (A.changed_ranges && typeof A.changed_ranges === 'object') ? A.changed_ranges : null
 // Stage 2 runs the artifact's own test command. A git worktree is a checkout,
 // not a sandbox: that command executes with the session's privileges. A caller
 // reviewing code they would not run should be able to keep the whole
@@ -801,8 +811,14 @@ function evidenceProblem(c) {
   if (e.anchor !== `${c.file}:${c.line}`) {
     return `anchor "${e.anchor}" does not match the candidate's own ${c.file}:${c.line}`
   }
-  if (includedPaths.length && !includedPaths.includes(c.file)) {
+  if (!includedPaths.includes(c.file)) {
     return `${c.file} is not among the reviewed paths`
+  }
+  if (changedRanges) {
+    const ranges = changedRanges[c.file]
+    if (!Array.isArray(ranges) || !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {
+      return `${c.file}:${c.line} is not inside a changed hunk of the reviewed patch`
+    }
   }
   if (c.evidence_kind === 'present_code') {
     return e.quoted_code && e.observed_behavior ? null : 'present_code evidence is incomplete'
@@ -1153,6 +1169,17 @@ log(`candidates: ${candidates.length} (${criticals.length}C ${majors.length}M ${
 const adjBatches = chunk(candidates, ADJ_BATCH_MAX)
 const adjReserveWU = sum(adjBatches, (b) => W.adjudicator(b.length))
 
+// Effort has to be routed by something, and before adjudication the only
+// signal available is the finder's proposal. That is a real limitation, not a
+// neutral choice: a candidate the finder under-labelled gets cheaper scrutiny
+// than its true severity deserves. It cannot be avoided without verifying
+// everything at the top tier, so it is disclosed instead — see
+// `verified_below_final_severity` in the result.
+const verificationTier = new Map()
+criticals.forEach((c) => verificationTier.set(c.id, 'critical'))
+majors.forEach((c) => verificationTier.set(c.id, 'major'))
+minors.forEach((c) => verificationTier.set(c.id, 'minor'))
+
 const verifyPlan = [
   ...criticals.map((c) => ({ kind: 'one', c, wu: W.criticalVerifier, model: M.strong })),
   ...majors.map((c) => ({ kind: 'one', c, wu: W.majorVerifier, model: M.cheap })),
@@ -1463,7 +1490,13 @@ const results = candidates.map((c) => {
   const citedAs = (r, k, verdict) => Boolean(r && r[k] && r[k].holds === verdict
     && typeof r[k].cited_code === 'string' && r[k].cited_code.trim())
   const groundedRefutation = Boolean(verifierRecord && verifierRecord.grounding === 'strong')
-  const canSubstantiate = groundedRefutation && PREDICATES.every((k) => citedAs(verifierRecord, k, 'supports_candidate'))
+  // A record cannot both support every predicate and report one unsettled.
+  // Contradictory evidence is not strong evidence, so it falls to unresolved.
+  const selfConsistent = Boolean(verifierRecord
+    && Array.isArray(verifierRecord.unsettled_predicates)
+    && verifierRecord.unsettled_predicates.length === 0)
+  const canSubstantiate = groundedRefutation && selfConsistent
+    && PREDICATES.every((k) => citedAs(verifierRecord, k, 'supports_candidate'))
   const canRefute = groundedRefutation && PREDICATES.some((k) => citedAs(verifierRecord, k, 'falsifies_candidate'))
   let state = v ? v.state : 'unresolved'
   const terminal = s.grade === 'reproduced' && s.execution_status === 'executed'
@@ -1478,7 +1511,9 @@ const results = candidates.map((c) => {
         ? 'no verifier completed and no controlled reproduction; substantiation would rest on the finder claim alone'
         : !groundedRefutation
           ? 'the only refutation was weakly grounded and there is no controlled reproduction'
-          : `not every predicate is affirmatively supported (${PREDICATES.map((k) => `${k}=${holdsOf(verifierRecord, k)}`).join(', ')})`,
+          : !selfConsistent
+            ? `the refutation supports every predicate while also listing ${JSON.stringify(verifierRecord.unsettled_predicates)} as unsettled; contradictory evidence is not support`
+            : `not every predicate is affirmatively supported (${PREDICATES.map((k) => `${k}=${holdsOf(verifierRecord, k)}`).join(', ')})`,
     })
     state = 'unresolved'
   }
@@ -1538,6 +1573,12 @@ const results = candidates.map((c) => {
     // "Completed" means a refutation that could ground itself. A returned but
     // weakly grounded one has settled nothing, and reporting it as completed
     // would overstate what this review actually checked.
+    verification_tier: verificationTier.get(c.id) || null,
+    // True when adjudication graded it more severe than the tier its
+    // verification was bought at — the finding is real, but it was scrutinised
+    // as something cheaper than it turned out to be.
+    verified_below_final_severity: Boolean(v && v.final_severity
+      && SEV_RANK[v.final_severity] > SEV_RANK[verificationTier.get(c.id) || 'minor']),
     verifier_completed: groundedRefutation,
     verifier_grounding: verifierRecord ? verifierRecord.grounding : null,
     verifier: verifierById.get(c.id) || null,
@@ -1592,6 +1633,8 @@ return {
   },
 
   search_breadth: {
+    lenses_available: LENSES,
+    lenses_not_selected: LENSES.filter((l) => !lensesRun.includes(l)),
     lenses_selected: lenses,
     lenses_run: lensesRun.filter((l) => !ledger.unrun_lenses.includes(l)),
     lenses_unrun: ledger.unrun_lenses,
@@ -1620,6 +1663,28 @@ return {
 
   regions: regionResults,
   ledger: { ...ledger, adjudication_failed: adjudicationFailed, adjudicator_batches: { attempted: adjBatchesAttempted, failed: adjBatchesFailed } },
+
+  // The script cannot render the report — the main agent does — so it cannot
+  // guarantee disclosure. What it can do is state, in machine-checkable form,
+  // exactly what a complete report must account for, so a reader can tell
+  // when something was dropped. Treat a mismatch as a defect in the report.
+  disclosure_checklist: {
+    verified_findings: results.filter((r) => r.state === 'substantiated').length,
+    unresolved_candidates: results.filter((r) => r.state === 'unresolved').length,
+    rejected_candidates: results.filter((r) => r.state === 'refuted').length,
+    lenses_not_selected: LENSES.filter((l) => !lensesRun.includes(l)).length,
+    lenses_selected_but_unrun: ledger.unrun_lenses.length,
+    regions_not_probed: regionResults.filter((r) => !r.probed).length,
+    attacks_not_executed: results.filter((r) => r.attack_grade !== 'reproduced' && r.attack_grade !== 'held').length,
+    candidates_dropped_invalid: ledger.invalid_candidates.length,
+    actions_deferred: ledger.deferred.length,
+    agent_failures: ledger.agent_failures.length,
+    malformed_results: ledger.malformed_results.length,
+    forced_unresolved: ledger.forced_unresolved.length,
+    terminal_overrides: ledger.terminal_evidence_overrides.length,
+    findings_verified_below_final_severity: results.filter((r) => r.verified_below_final_severity).length,
+    severity_unassigned: results.filter((r) => r.severity_unassigned && r.state === 'substantiated').length,
+  },
 
   // What the NEXT INCREMENT OF BUDGET buys — only ever something that ran out
   // of money. A target the profile declined is not bought by raising the

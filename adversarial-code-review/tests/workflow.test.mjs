@@ -149,6 +149,14 @@ function makeAgent(state, s) {
           contract_violation: blank(s.uncitedVerifier), strongest_refutation: 'no citation', unsettled_predicates: [], grounding: 'strong' })
         return l.includes('minors') ? { verdicts: ids.map(mk) } : mk(ids[0])
       }
+      // C: three supporting predicates while naming one unsettled — a record
+      // that contradicts itself must not be read as support.
+      if (s.verifierContradictory) {
+        const ids = expectedIds(prompt)
+        const mk = (id) => ({ candidate_id: id, semantics: predicate('supports_candidate'), reachability: predicate('supports_candidate'),
+          contract_violation: predicate('supports_candidate'), strongest_refutation: 'none', unsettled_predicates: ['reachability'], grounding: 'strong' })
+        return l.includes('minors') ? { verdicts: ids.map(mk) } : mk(ids[0])
+      }
       if (s.verifierAllUnsettled) {
         const ids = expectedIds(prompt)
         const mkU = (id) => ({ candidate_id: id, semantics: predicate('unsettled'), reachability: predicate('unsettled'),
@@ -300,6 +308,7 @@ async function run(name, argv, s = {}, budgetGlobal = { total: null, spent: () =
 const BASE = {
   scope: 'uncommitted changes', intent: 'no behaviour change', base_sha: 'abc123',
   patch_path: '/tmp/p.diff', patch_sha256: 'deadbeef', repo_root: '/repo',
+  included_paths: ['pay.js', 'auth.js', 'util.js', 'jobs.js', 'bulk.js', 'a.js', 'somewhere-else.js', 'extra-l.js', 'extra-b.js', 'extra-s.js', 'extra-c.js'],
 }
 
 const R = []
@@ -431,6 +440,16 @@ R.push(await run('infinite budget', { ...BASE, budget_wu: Infinity }, {
     (res) => res.status === 'ok'
       || `an optional supplemental lens ran and the review then failed with ${res.status}`))
 }
+R.push(await run('contradictory verifier record', { ...BASE }, { verifierContradictory: true, adjAlwaysSubstantiate: true, probeAlwaysFails: true,
+  expect: (res) => res.substantiated.every((x) => x.attack_grade === 'reproduced')
+    || 'a self-contradictory refutation was read as support' }))
+R.push(await run('no scope manifest', { scope: 's', intent: 'i', base_sha: 'a', patch_path: '/tmp/p', patch_sha256: 'h', repo_root: '/r' }, {
+  expect: (res) => res.status === 'invalid_args' || 'a review ran with nothing binding findings to the artifact' }))
+R.push(await run('empty scope manifest', { ...BASE, included_paths: [] }, {
+  expect: (res) => res.status === 'invalid_args' || 'an empty manifest silently disabled scope binding' }))
+R.push(await run('candidate outside changed hunks', { ...BASE, changed_ranges: { 'auth.js': [[1, 5]], 'pay.js': [[1, 5]], 'util.js': [[1, 5]], 'jobs.js': [[1, 5]] } }, {
+  expect: (res) => res.candidate_results.every((x) => x.origin === 'region_probe')
+    || 'a candidate citing an unchanged line inside a reviewed file became reportable' }))
 R.push(await run('anchor does not match file:line', { ...BASE }, { anchorMismatch: true,
   expect: (res) => res.ledger.invalid_candidates.some((x) => /anchor/.test(x.reason))
     || 'a candidate whose anchor names a different file was accepted' }))
@@ -557,6 +576,16 @@ for (const r of R) {
   if (r.expect) {
     const verdict = r.expect(r.res, r.state)
     if (verdict !== true) { fail++; problems.push(`${r.name}: ${verdict}`) }
+  }
+  const dc = r.res.disclosure_checklist
+  if (r.res.candidate_results && dc) {
+    if (dc.verified_findings !== r.res.substantiated.length
+        || dc.unresolved_candidates !== r.res.unresolved.length
+        || dc.rejected_candidates !== r.res.refuted.length) {
+      fail++; problems.push(`${r.name}: disclosure checklist disagrees with the classified results`)
+    }
+  } else if (r.res.candidate_results) {
+    fail++; problems.push(`${r.name}: completed without a disclosure checklist`)
   }
   const c = r.res.cost
   const over = c && c.committed_wu > c.budget_wu + 1e-9
