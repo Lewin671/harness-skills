@@ -107,6 +107,10 @@ everything="$( { git diff --name-only HEAD
 excluded="$(comm -23 <(printf '%s\n' "${everything}") <(printf '%s\n' "${included}"))"
 ```
 
+`allow_execution` is **required** too, with no default. Running the
+artifact's own test command with this session's privileges is a trust
+decision, and a decision nobody made is not one.
+
 `included_paths` is **required** — the script refuses to start without a
 non-empty one. It is the only thing that keeps a finding inside the
 artifact the review claims to be about; absent, a finder can nominate
@@ -181,9 +185,20 @@ fan-out afterwards.
   reserved adjudication capacity. Without it breadth produces
   candidates that can never become findings.
 
-If the budget cannot fund both floors, **do not run a degraded
-review**. Return the plan, say the budget is too small for this scope,
-and let the user narrow the scope or raise the budget.
+If the budget cannot fund the **coverage** floor, do not run: a review
+without breadth has nothing to say and its silence means nothing.
+
+The **accuracy** floor is different, and it took a hostile-artifact
+review to see why. Aborting when candidates outnumber the budget makes
+suppression cheap — anything that inflates the candidate count, a noisy
+diff or an artifact manufacturing decoys, deletes the whole review and
+the real findings with it. So the candidate set is trimmed from the
+least consequential end (minors, then majors, then criticals) until it
+fits, and everything trimmed is reported as **found but not verified**,
+with its anchor. Every *retained* candidate still gets a verifier; that
+part is not negotiable. What changed is that "we found this and could
+not afford to check it" is now a disclosed outcome rather than a reason
+to return nothing.
 
 ## 3. Model tiers
 

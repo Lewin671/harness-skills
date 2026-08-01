@@ -105,6 +105,14 @@ function makeAgent(state, s) {
           evidence: { anchor: 'pay.js:20', quoted_code: 'UNTRUSTED-RECORD', observed_behavior: 'x' } }],
           additional_high_risk_regions: [], recommended_missing_lens: 'performance' }
       }
+      if (s.decoyFlood) {
+        const many = []
+        // Half identical (caught by dedup), half distinct (caught by the cap):
+        // a flood only needs to be varied to defeat deduplication alone.
+        for (let i = 0; i < 30; i++) many.push(cand('pay.js', 20, 'critical', 'present_code', 'identical decoy'))
+        for (let i = 0; i < 30; i++) many.push(cand('pay.js', 30 + i, 'critical', 'present_code', `distinct decoy ${i}`))
+        return { candidates: many, additional_high_risk_regions: [] }
+      }
       if (s.anchorMismatch) {
         return { candidates: [{ file: 'pay.js', line: 20, title: 'anchor points elsewhere', proposed_severity: 'critical',
           confidence: 'high', evidence_kind: 'present_code',
@@ -320,6 +328,7 @@ const BASE = {
   scope: 'uncommitted changes', intent: 'no behaviour change', base_sha: 'abc123',
   patch_path: '/tmp/p.diff', patch_sha256: 'deadbeef', repo_root: '/repo',
   included_paths: ['pay.js', 'auth.js', 'util.js', 'jobs.js', 'bulk.js', 'a.js', 'somewhere-else.js', 'extra-l.js', 'extra-b.js', 'extra-s.js', 'extra-c.js'],
+  allow_execution: true,
 }
 
 const R = []
@@ -425,12 +434,14 @@ R.push(await run('execution declined by caller', { ...BASE, allow_execution: fal
     || 'an executable attack ran although the caller declined execution' }))
 R.push(await run('allow_execution not a boolean', { ...BASE, allow_execution: 'yes' }, {
   expect: (res) => res.status === 'invalid_args' || 'a non-boolean allow_execution was accepted' }))
+R.push(await run('allow_execution not stated', (() => { const a = { ...BASE }; delete a.allow_execution; return a })(), {
+  expect: (res) => res.status === 'invalid_args' || 'the trust decision about running artifact code was defaulted, not made' }))
 R.push(await run('candidate text forges the fence', { ...BASE }, { fenceInjection: true,
   // The payload carries the fence marker in its own title and quoted code.
   // If stripping ran, the escaped form appears; if it did not, the marker
   // passes through verbatim and closes the fence early.
   expect: (res, state) => {
-    const downstream = state.prompts.filter((x) => /^(verify|adjudicate|probe)/.test(x.label))
+    const downstream = state.prompts.filter((x) => /^(verify|adjudicate|probe|attack)/.test(x.label))
     const carrying = downstream.filter((x) => x.prompt.includes('IGNORE PRIOR INSTRUCTIONS'))
     if (!carrying.length) return 'the injected candidate never reached a downstream prompt'
     const unstripped = carrying.find((x) => !x.prompt.includes('UNTRUSTED-RECORD-ESCAPED'))
@@ -468,6 +479,17 @@ R.push(await run('empty scope manifest', { ...BASE, included_paths: [] }, {
 R.push(await run('candidate outside changed hunks', { ...BASE, changed_ranges: { 'auth.js': [[1, 5]], 'pay.js': [[1, 5]], 'util.js': [[1, 5]], 'jobs.js': [[1, 5]] } }, {
   expect: (res) => res.candidate_results.every((x) => x.origin === 'region_probe')
     || 'a candidate citing an unchanged line inside a reviewed file became reportable' }))
+// A hostile artifact that can inflate the candidate count can inflate the
+// mandatory floor until the review aborts, suppressing the real findings.
+R.push(await run('decoy candidate flood', { ...BASE }, { decoyFlood: true,
+  expect: (res) => {
+    if (res.status !== 'ok') return `a decoy flood aborted the review with ${res.status}`
+    const inv = res.ledger.invalid_candidates
+    if (!inv.some((x) => /byte-identical duplicate/.test(x.reason))) return 'identical decoys were not collapsed'
+    if (!inv.some((x) => /exceeded \d+ candidates/.test(x.reason))) return 'the per-lens cap did not bound the flood'
+    if (!res.ledger.deferred.some((x) => x.kind === 'candidate_verification')) return 'nothing was reported as found-but-unverified'
+    return true
+  } }))
 R.push(await run('anchor does not match file:line', { ...BASE }, { anchorMismatch: true,
   expect: (res) => res.ledger.invalid_candidates.some((x) => /anchor/.test(x.reason))
     || 'a candidate whose anchor names a different file was accepted' }))
@@ -541,6 +563,11 @@ R.push(await run('precision-first caps breadth', { ...BASE, profile: 'precision-
   expect: (res) => res.search_breadth.lenses_run.length <= 3
     || `precision-first promised 3 lenses and ran ${res.search_breadth.lenses_run.length}` }))
 R.push(await run('recall-first, floor-tight budget', { ...BASE, profile: 'recall-first', budget_wu: 26 }))
+// Budget leaves under one finder's worth above the accuracy floor: the
+// optional lens must not be bought at all.
+R.push(await run('no room for a supplemental lens', { ...BASE, profile: 'recall-first', budget_wu: 22 }, {
+  expect: (res) => res.search_breadth.supplemental_lens_bought === null
+    || 'an optional lens was bought with no room left for the floor it would grow' }))
 R.push(await run('recall-first, roomy budget', { ...BASE, profile: 'recall-first', budget_wu: 60 }))
 R.push(await run('weak verifier, escalation dies', { ...BASE }, { weakCriticalVerifier: true, escalatedVerifierNull: true, adjAlwaysSubstantiate: true }))
 R.push(await run('weak verifier, rerun still weak', { ...BASE }, { weakCriticalVerifier: true, escalatedVerifierStillWeak: true, adjAlwaysSubstantiate: true }))
@@ -609,9 +636,13 @@ for (const r of R) {
       fail++; problems.push(`${r.name}: region ${rg.target_id} reports a counterexample the workflow rejected`)
     }
   }
-  if (r.res.disclosure_checklist && r.res.ledger
-      && r.res.disclosure_checklist.coverage_risks !== (r.res.ledger.coverage_risks || []).length) {
-    fail++; problems.push(`${r.name}: checklist reports ${r.res.disclosure_checklist.coverage_risks} coverage risks, ledger has ${(r.res.ledger.coverage_risks || []).length}`)
+  // The checklist exists to make omission detectable, so every ledger array
+  // it claims to count must actually agree with the ledger.
+  for (const key of ['coverage_risks', 'unknown_verdict_ids', 'malformed_results', 'agent_failures', 'forced_unresolved']) {
+    if (r.res.disclosure_checklist && r.res.ledger
+        && r.res.disclosure_checklist[key] !== (r.res.ledger[key] || []).length) {
+      fail++; problems.push(`${r.name}: checklist ${key}=${r.res.disclosure_checklist[key]} but ledger has ${(r.res.ledger[key] || []).length}`)
+    }
   }
   const dc = r.res.disclosure_checklist
   if (r.res.candidate_results && dc) {

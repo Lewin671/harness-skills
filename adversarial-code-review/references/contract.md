@@ -268,7 +268,11 @@ nothing. Every section may be empty; none may be absent.
    original claim, the refuting evidence, and who refuted it. A one-line
    mention is not enough — a wrong rejection has to be recoverable by
    reading this section alone.
-4. **Coverage and Residual Risk** — lenses considered but not run;
+4. **Coverage and Residual Risk** — candidates found but not verified,
+   because the budget could not fund a verifier for all of them, each with
+   its anchor: these are the ones a reader most needs to see, since the
+   review is admitting it saw something and stopped;
+   lenses considered but not run;
    high-risk regions not probed or not executed, and why; every attack
    graded `held`, `blocked` or `inconclusive`, with reasons; every
    `plausible` with its `execution_status`; candidates dropped for
