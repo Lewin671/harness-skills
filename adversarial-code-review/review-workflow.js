@@ -70,6 +70,7 @@ const PROFILES = {
     lensGuidance: 'Favour breadth: choose up to 6 lenses, including any that is even plausibly relevant.',
   },
   'precision-first': {
+    maxLenses: 3,
     regionProbes: 1,
     supplementalLens: false,
     execUnprovenCriticals: true,
@@ -461,8 +462,14 @@ deadlock or crash on a reachable path), major (wrong behaviour on a reachable
 non-primary path, swallowed error, breaking interface change, realistic race,
 stale read), minor (contrived conditions, diagnostics). It is about impact IF
 the candidate is real, never your confidence that it is real — confidence is
-its own field, one of high, medium, low. Severity is a proposal: a separate
-adjudicator assigns the final one, so inflating it buys nothing.`
+its own field, one of high, medium, low.
+
+A separate adjudicator assigns the FINAL severity, so your proposal is not the
+verdict. It does, however, decide how much scrutiny this candidate is bought:
+a proposed critical gets a stronger verifier and may be executed, a proposed
+minor is checked in a cheap batch. Label by impact, honestly, in both
+directions — inflating one starves the others of budget, and under-labelling
+one means the review examines a serious defect as though it were trivial.`
 
 function triagePrompt() {
   return `${PREAMBLE}
@@ -816,8 +823,14 @@ function evidenceProblem(c) {
   }
   if (changedRanges) {
     const ranges = changedRanges[c.file]
-    if (!Array.isArray(ranges) || !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {
-      return `${c.file}:${c.line} is not inside a changed hunk of the reviewed patch`
+    // No entry for this file means the map does not KNOW about it — a new
+    // file, a deletion-only hunk, a caller that built the map from tracked
+    // changes alone. Falling back to file-level binding is right; rejecting
+    // would discard every finding about exactly the code most likely to be
+    // new. Only an explicit range set can rule a line out.
+    if (Array.isArray(ranges) && ranges.length
+        && !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {
+      return `${c.file}:${c.line} is not inside any changed hunk listed for that file`
     }
   }
   if (c.evidence_kind === 'present_code') {
@@ -987,7 +1000,19 @@ if (triage.confidence === 'low') {
 
 endWave()
 
-const lenses = triage.lenses
+// A profile that promises depth by naming a lens count has to hold triage to
+// it. Asking in the prompt is not enforcement — triage's schema allows three
+// through six whatever the profile said, and extra breadth eats the capacity
+// the profile promised to spend on depth.
+let lenses = triage.lenses
+if (P.maxLenses && lenses.length > P.maxLenses) {
+  const dropped = lenses.slice(P.maxLenses)
+  lenses = lenses.slice(0, P.maxLenses)
+  for (const l of dropped) {
+    defer({ target_id: `L:${l}`, kind: 'lens', anchor: l }, 'deferred_by_profile')
+  }
+  log(`${profileName} caps breadth at ${P.maxLenses} lenses — deferred ${dropped.join(', ')}`)
+}
 log(`profile=${profileName} budget=${budgetWU}wu lenses=${lenses.length} regions=${triage.high_risk_regions.length}`)
 
 // ---------------------------------------------------------------------------
@@ -1497,7 +1522,13 @@ const results = candidates.map((c) => {
     && verifierRecord.unsettled_predicates.length === 0)
   const canSubstantiate = groundedRefutation && selfConsistent
     && PREDICATES.every((k) => citedAs(verifierRecord, k, 'supports_candidate'))
-  const canRefute = groundedRefutation && PREDICATES.some((k) => citedAs(verifierRecord, k, 'falsifies_candidate'))
+  // A predicate cannot be both the thing that falsifies the candidate and a
+  // thing the verifier could not settle. Only an uncontested falsification
+  // rejects — otherwise conflicting evidence would eject a real defect.
+  const unsettledNames = (verifierRecord && Array.isArray(verifierRecord.unsettled_predicates))
+    ? verifierRecord.unsettled_predicates : []
+  const canRefute = groundedRefutation && PREDICATES.some((k) =>
+    citedAs(verifierRecord, k, 'falsifies_candidate') && !unsettledNames.includes(k))
   let state = v ? v.state : 'unresolved'
   const terminal = s.grade === 'reproduced' && s.execution_status === 'executed'
 
@@ -1598,7 +1629,11 @@ const regionResults = allRegions.map((r, i) => {
     anchor: `${r.file}:${r.start_line}-${r.end_line}`,
     why: r.why,
     probed: Boolean(p),
-    probe_outcome: p ? p.outcome : null,
+    // The NORMALISED verdict, not the agent's raw claim: a probe asserting a
+    // counterexample without the fields that constitute one is not one, and a
+    // renderer reading `outcome` would report it as though it were.
+    counterexample_constructed: Boolean(p && p.constructed),
+    probe_outcome_claimed: p ? p.outcome : null,
     emergent_candidate_id: emergent ? emergent.id : null,
     not_probed_because: p ? null : (
       deferralReason(id, 'region_probe')
@@ -1681,6 +1716,7 @@ return {
     agent_failures: ledger.agent_failures.length,
     malformed_results: ledger.malformed_results.length,
     forced_unresolved: ledger.forced_unresolved.length,
+    coverage_risks: ledger.coverage_risks.length,
     terminal_overrides: ledger.terminal_evidence_overrides.length,
     findings_verified_below_final_severity: results.filter((r) => r.verified_below_final_severity).length,
     severity_unassigned: results.filter((r) => r.severity_unassigned && r.state === 'substantiated').length,

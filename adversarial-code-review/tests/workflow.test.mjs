@@ -151,6 +151,14 @@ function makeAgent(state, s) {
       }
       // C: three supporting predicates while naming one unsettled — a record
       // that contradicts itself must not be read as support.
+      // D: falsifies AND lists that same predicate unsettled — conflicting
+      // evidence must not eject a candidate either.
+      if (s.verifierContradictoryRefute) {
+        const ids = expectedIds(prompt)
+        const mk = (id) => ({ candidate_id: id, semantics: predicate('falsifies_candidate'), reachability: predicate('unsettled'),
+          contract_violation: predicate('unsettled'), strongest_refutation: 'conflicting', unsettled_predicates: ['semantics'], grounding: 'strong' })
+        return l.includes('minors') ? { verdicts: ids.map(mk) } : mk(ids[0])
+      }
       if (s.verifierContradictory) {
         const ids = expectedIds(prompt)
         const mk = (id) => ({ candidate_id: id, semantics: predicate('supports_candidate'), reachability: predicate('supports_candidate'),
@@ -443,6 +451,13 @@ R.push(await run('infinite budget', { ...BASE, budget_wu: Infinity }, {
 R.push(await run('contradictory verifier record', { ...BASE }, { verifierContradictory: true, adjAlwaysSubstantiate: true, probeAlwaysFails: true,
   expect: (res) => res.substantiated.every((x) => x.attack_grade === 'reproduced')
     || 'a self-contradictory refutation was read as support' }))
+R.push(await run('contradictory falsification', { ...BASE }, { verifierContradictoryRefute: true, adjAlwaysRefute: true,
+  expect: (res) => res.refuted.length === 0
+    || `${res.refuted.length} candidate(s) rejected on a predicate the verifier also called unsettled` }))
+// D: a ranges map that does not know about a file must not delete its findings.
+R.push(await run('ranges map omits a file', { ...BASE, changed_ranges: { 'pay.js': [[1, 100]] } }, {
+  expect: (res) => res.candidate_results.some((x) => x.anchor.startsWith('auth.js'))
+    || 'a file absent from the ranges map lost every candidate' }))
 R.push(await run('no scope manifest', { scope: 's', intent: 'i', base_sha: 'a', patch_path: '/tmp/p', patch_sha256: 'h', repo_root: '/r' }, {
   expect: (res) => res.status === 'invalid_args' || 'a review ran with nothing binding findings to the artifact' }))
 R.push(await run('empty scope manifest', { ...BASE, included_paths: [] }, {
@@ -519,6 +534,9 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
     (res, state) => state.calls.every((k) => !k.label.endsWith(':escalated'))
       || 'an escrowed escalation was launched with no token headroom for it'))
 }
+R.push(await run('precision-first caps breadth', { ...BASE, profile: 'precision-first' }, {
+  expect: (res) => res.search_breadth.lenses_run.length <= 3
+    || `precision-first promised 3 lenses and ran ${res.search_breadth.lenses_run.length}` }))
 R.push(await run('recall-first, floor-tight budget', { ...BASE, profile: 'recall-first', budget_wu: 26 }))
 R.push(await run('recall-first, roomy budget', { ...BASE, profile: 'recall-first', budget_wu: 60 }))
 R.push(await run('weak verifier, escalation dies', { ...BASE }, { weakCriticalVerifier: true, escalatedVerifierNull: true, adjAlwaysSubstantiate: true }))
@@ -576,6 +594,21 @@ for (const r of R) {
   if (r.expect) {
     const verdict = r.expect(r.res, r.state)
     if (verdict !== true) { fail++; problems.push(`${r.name}: ${verdict}`) }
+  }
+  for (const rg of r.res.regions || []) {
+    // A probe the workflow rejected as malformed must not surface as a
+    // counterexample, whatever the agent claimed in `outcome`.
+    // Specifically a probe whose COUNTEREXAMPLE was rejected — not one that
+    // built a counterexample and then failed to attach an emergent candidate.
+    const rejected = (r.res.ledger.malformed_results || []).some((x) =>
+      x.role === 'probe' && x.target_id === rg.target_id && /claimed a counterexample without/.test(x.why))
+    if (rg.counterexample_constructed && rejected) {
+      fail++; problems.push(`${r.name}: region ${rg.target_id} reports a counterexample the workflow rejected`)
+    }
+  }
+  if (r.res.disclosure_checklist && r.res.ledger
+      && r.res.disclosure_checklist.coverage_risks !== (r.res.ledger.coverage_risks || []).length) {
+    fail++; problems.push(`${r.name}: checklist reports ${r.res.disclosure_checklist.coverage_risks} coverage risks, ledger has ${(r.res.ledger.coverage_risks || []).length}`)
   }
   const dc = r.res.disclosure_checklist
   if (r.res.candidate_results && dc) {

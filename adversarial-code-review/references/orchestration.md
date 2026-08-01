@@ -114,13 +114,28 @@ any file in the repository and, if the verifier and adjudicator agree,
 that becomes a "verified finding" about code nobody reviewed.
 
 Better still, pass `changed_ranges` too — file-level binding still lets a
-candidate cite an untouched line in a reviewed file:
+candidate cite an untouched line in a reviewed file. Build it from the
+same filtered pathspecs, and cover all three shapes of change:
 
 ```bash
-# {"pay.js": [[10,14],[40,41]], ...} — from the same filtered pathspecs
+# tracked hunks; a deletion-only hunk has new-side length 0, so anchor it at
+# the line the deletion sits against rather than dropping it
 git diff --unified=0 HEAD -- . "${excludes[@]}" |
-  awk '/^\+\+\+ b\//{f=substr($0,7)} /^@@/{split($3,a,","); s=substr(a[1],2); n=(a[2]==""?1:a[2]); if(n>0) print f, s, s+n-1}'
+  awk '/^\+\+\+ b\//{f=substr($0,7)}
+       /^@@/{split($3,a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2])+0;
+             if(n>0) print f, s, s+n-1; else print f, s, s}'
+
+# untracked files are changed in their entirety
+git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
+  while IFS= read -r -d '' f; do printf '%s 1 %s\n' "$f" "$(wc -l < "$f")"; done
 ```
+
+A file the map does not mention falls back to file-level binding rather
+than having all its candidates rejected. That is deliberate: an
+incomplete map is the likely case — new files, deletion-only hunks, a
+caller who built it from tracked changes alone — and rejecting on absence
+would silently discard findings about exactly the code most likely to be
+new. Only an explicit range list can rule a line out.
 
 Both manifests are returned in `run`, so the report states what was
 actually reviewed rather than what was intended.
