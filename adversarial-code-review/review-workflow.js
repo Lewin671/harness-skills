@@ -903,6 +903,13 @@ const chunk = (arr, n) => {
 
 const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0)
 
+// Code-unit comparison, not localeCompare: locale collation reports 0 for
+// distinct strings — composed "café" against decomposed "café" — and a
+// comparator that returns 0 for two different records leaves a stable sort
+// holding whatever order the finder emitted. Every tie-break here exists
+// precisely to not do that.
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+
 // The exact accuracy floor for a hypothetical candidate list: verifiers,
 // adjudication at real batch boundaries, and BOTH escalate-once escrows.
 // Used for the real set and for "what if this probe finds one more", so the
@@ -1295,7 +1302,7 @@ function absorb(res, lens) {
   // Ties break on the record's own text so two runs given the same claims in
   // different orders keep the same ones.
   const ordered = [...(res.candidates || [])].sort((a, b) =>
-    consequence(b) - consequence(a) || JSON.stringify(a).localeCompare(JSON.stringify(b)))
+    consequence(b) - consequence(a) || cmp(JSON.stringify(a), JSON.stringify(b)))
   for (const c of ordered) addCandidate(c, lens, 'finder')
 }
 
@@ -1390,10 +1397,27 @@ for (const t of regionTargets) {
 
 const probeByTarget = new Map()
 if (acceptedRegionProbes.length) {
-  const out = await parallel(acceptedRegionProbes.map((t) => () =>
-    agent(probePrompt(t), { label: `probe:${t.target_id}`, phase: 'Probe', schema: PROBE_SCHEMA, model: M.cheap })
-      .then((r) => ({ t, r }), () => ({ t, r: null }))))
-  acceptedRegionProbes.forEach((t) => launched(`probe:${t.target_id}`, W.probe))
+  // Region probes are a multi-agent wave like the finders and the verifiers,
+  // and recall-first can open three at once. Unsampled, 20x drift in this
+  // role alone spent 1.99x the token target — so the same rule applies: one
+  // goes first and prices the rest, and whatever no longer fits is deferred
+  // with its reason rather than launched at a price nothing has paid.
+  const runProbe = (t) => agent(probePrompt(t), { label: `probe:${t.target_id}`, phase: 'Probe', schema: PROBE_SCHEMA, model: M.cheap })
+    .then((r) => ({ t, r }), () => ({ t, r: null }))
+  const probeSample = acceptedRegionProbes.length > 1 ? acceptedRegionProbes.slice(0, 1) : []
+  const probeRest = acceptedRegionProbes.length > 1 ? acceptedRegionProbes.slice(1) : acceptedRegionProbes
+  const probeSampleOut = probeSample.length ? await parallel(probeSample.map((t) => () => runProbe(t))) : []
+  probeSample.forEach((t) => launched(`probe:${t.target_id}`, W.probe))
+  if (probeSample.length) endWave()
+
+  const probeRestAdmitted = []
+  let probePendingWU = 0
+  for (const t of probeRest) {
+    if (admitTokens(probePendingWU + W.probe)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }
+    defer({ target_id: t.target_id, kind: 'region_probe', anchor: t.label }, 'deferred_by_budget')
+  }
+  const out = [...probeSampleOut, ...await parallel(probeRestAdmitted.map((t) => () => runProbe(t)))]
+  probeRestAdmitted.forEach((t) => launched(`probe:${t.target_id}`, W.probe))
   for (const o of out) {
     if (!o) continue
     if (!o.r) { failed('probe', o.t.target_id, 'region probe did not return'); continue }
@@ -1434,8 +1458,8 @@ const rank = (c) => (c.in_high_risk_region ? 0 : 1) * 100 - CONF_RANK[c.confiden
 // file, line and rank, and without it the order they are funded in is just the
 // order the finders happened to return them.
 const byRank = (a, b) => rank(a) - rank(b)
-  || `${a.file}:${a.line}`.localeCompare(`${b.file}:${b.line}`)
-  || String(a.fingerprint).localeCompare(String(b.fingerprint))
+  || cmp(`${a.file}:${a.line}`, `${b.file}:${b.line}`)
+  || cmp(String(a.fingerprint), String(b.fingerprint))
 
 // ---------------------------------------------------------------------------
 // Trim to what the budget can actually verify — BEFORE anything is derived
@@ -1597,6 +1621,13 @@ const sampleOut = verifySample.length ? await parallel(verifySample.map((v) => (
 verifySample.forEach((v) => launched(v.kind === 'one' ? `verify:${v.c.id}` : 'verify:minors', v.wu))
 if (verifySample.length) endWave()
 
+// Adjudication's tokens are owed from here on, and the repricing below is an
+// admission like any other: without this the remaining verifiers and the
+// already-approved candidate probes are admitted against capacity that
+// adjudication has a prior claim on, and the run ends adjudication_failed
+// having spent the budget on verifiers whose verdicts nobody can assign.
+prepaidDebtWU = adjReserveWU + escrow.adjudicator
+
 // Priced at the observed rate now. Anything that no longer fits is deferred
 // with its reason rather than launched and paid for — the accuracy floor is
 // the last thing to give up, but overrunning the user's hard token target
@@ -1622,20 +1653,27 @@ if (verifyDeferred.length) {
   log(`token cost outran its estimate; ${verifyDeferred.length} verifier(s) deferred`)
 }
 
+// The probes were admitted before the sample told us what this wave costs.
+const probeAdmitted = []
+for (const t of candidateProbeTargets) {
+  if (admitTokens(verifyPendingWU + probeAdmitted.length * W.probe + W.probe)) { probeAdmitted.push(t); continue }
+  defer({ target_id: t.target_id, kind: 'candidate_probe', anchor: t.label }, 'deferred_by_budget')
+}
+
 const wave4 = [...sampleOut, ...await parallel([
   ...verifyAdmitted.map((v) => () => runVerify(v)),
-  ...candidateProbeTargets.map((t) => () =>
+  ...probeAdmitted.map((t) => () =>
     agent(probePrompt(t), { label: `probe:${t.target_id}`, phase: 'Verify', schema: PROBE_SCHEMA, model: M.cheap })
       .then((r) => ({ kind: 'probe', t, r }), () => ({ kind: 'probe', t, r: null }))),
 ])]
 verifyAdmitted.forEach((v) => launched(v.kind === 'one' ? `verify:${v.c.id}` : 'verify:minors', v.wu))
-candidateProbeTargets.forEach((t) => launched(`probe:${t.target_id}`, W.probe))
+probeAdmitted.forEach((t) => launched(`probe:${t.target_id}`, W.probe))
 endWave()
 // Adjudication's weighted units were committed with the floors, but its
-// tokens are spent two waves from here. From this point until it runs, every
-// admission — the verifier escalation and every execution — must leave room
-// for it and for its escalation escrow.
-prepaidDebtWU = adjReserveWU + escrow.adjudicator
+// tokens are spent two waves from here. The debt was declared before the
+// verify wave was repriced, above; from here until it runs, every admission —
+// the verifier escalation and every execution — must leave room for it and
+// for its escalation escrow.
 
 const verifierById = new Map()
 for (const o of wave4) {

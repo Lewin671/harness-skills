@@ -272,10 +272,18 @@ at 4.42x the token target. Pricing takes the worst of prior, cumulative and
 most-recent-wave, and a rate once observed is never forgotten.
 
 **The bound is not a single number, and it would be dishonest to quote one.**
-What is bounded is exposure to a *wave*: the two largest — finders and
-verifiers — launch one agent first, and the rest are admitted only at what
-that one actually cost, cumulatively rather than item by item. Those shapes
-now hold at 1.35x, against 1.57x, 1.92x, 3.35x and 4.42x before.
+What is bounded is exposure to a *wave*: every multi-agent wave — finders,
+region probes, verifiers — launches one agent first, and the rest are
+admitted only at what that one actually cost, cumulatively rather than item
+by item. Candidate probes are repriced too, because they were admitted
+before the sample existed. Those shapes now hold at 1.35x, against 1.57x,
+1.92x, 1.99x, 3.35x and 4.42x before.
+
+Adjudication's debt is declared *before* that repricing, not after. It is
+owed tokens from the moment the floors are committed, and repricing a wave
+against capacity adjudication has a prior claim on spends exactly the
+reserve that lets the run assign verdicts at all — the failure mode is a
+review that pays for every verifier and can then adjudicate none of them.
 
 What is **not** bounded is a role whose entire wave is one or two agents. A
 single executable attack costs ten weighted units, an adjudication batch is

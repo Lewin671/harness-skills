@@ -344,6 +344,12 @@ things that were actually counted.
 
 ## 7. What This Contract Assumes
 
+**Comparisons that break ties must be total.** Locale collation reports two
+distinct strings as equal — a composed accent against a decomposed one — and
+a comparator that returns zero for different records hands the decision back
+to whatever order they arrived in. Tie-breaks here compare code units, not
+locale order, because their entire purpose is to not do that.
+
 **Order must never decide what gets examined.** A finder controls the order
 it emits claims in, so anything that keeps "the first N" hands that finder —
 or whatever wrote the code it read — a way to push a real defect out of the

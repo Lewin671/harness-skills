@@ -58,6 +58,11 @@ const drainer = (total, budgetWU, factor = 1, heavy = {}) => {
   }
 }
 
+// An `ok` result carries its launches under cost.launch_detail; the early
+// returns carry them at the top level. Reading only one of the two is how
+// three drift assertions came to count zero launches and pass regardless.
+const launchesOf = (res) => (res && res.cost && res.cost.launch_detail) || (res && res.launches) || []
+
 const predicate = (holds) => ({ finding: 'stub', cited_code: 'foo.js:1', holds })
 const cand = (file, line, sev, kind, title) => ({
   file, line, title, proposed_severity: sev, confidence: 'high', evidence_kind: kind,
@@ -180,6 +185,29 @@ function makeAgent(state, s) {
       // One finder pads with twenty-five minors and then reports the critical.
       // Accepting the first twenty-five lets a hostile artifact hide a
       // high-impact claim behind decoys it controls the order of.
+      // Two records whose titles are canonically equivalent but not identical
+      // (composed vs decomposed accent). Locale collation reports them equal,
+      // so a comparator built on it leaves the finder's order deciding.
+      if (s.unicodeTie) {
+        // Twenty-four fillers that sort ahead of both variants, then the two
+        // variants themselves: the per-lens cap of twenty-five falls exactly
+        // between them, so which one survives is decided by the tie-break and
+        // nothing else. Only ONE lens, since a second would re-offer the
+        // capped variant and hide the difference.
+        if (lens !== 'security') return { candidates: [], additional_high_risk_regions: [] }
+        const many = []
+        for (let i = 0; i < 24; i++) many.push(cand('bulk.js', 900 + i, 'minor', 'present_code', `aaa ${String(i).padStart(2, '0')}`))
+        // Same file AND same line, so the two records differ by the accent
+        // and nothing else — otherwise the line numbers break the tie before
+        // the titles are ever compared. Their line puts them last in JSON
+        // order, so the cap of twenty-five falls between them.
+        const variants = [
+          cand('bulk.js', 980, 'minor', 'present_code', 'caf\u00e9 drift'),
+          cand('bulk.js', 980, 'minor', 'present_code', 'cafe\u0301 drift'),
+        ]
+        many.push(...(s.unicodeTie === 'reversed' ? variants.reverse() : variants))
+        return { candidates: many, additional_high_risk_regions: [] }
+      }
       if (s.capOrder) {
         // ONE lens only: the cap is per-lens, so a second lens offering the
         // same claims would rescue the capped critical and hide the defect.
@@ -806,6 +834,20 @@ R.push(await run('probe duplicates a finder claim', { ...BASE }, { dupEmergent: 
     if (!target) return 'the finder candidate it duplicates is not in the results'
     return Boolean(target.probe && target.probe.constructed)
       || 'the constructed counterexample was discarded with the duplicate claim' } }))
+// Candidates that tie on every ranking field and whose text locale collation
+// calls equal must still resolve the same way in both emission orders.
+{
+  const seen = (r) => [...(r.candidate_results || []), ...(r.found_but_not_verified || [])]
+    .filter((x) => /drift/.test(x.title))
+    .map((x) => [...x.title].map((ch) => ch.codePointAt(0).toString(16)).join(' ')).sort().join(' // ')
+  const uniFwd = await run('unicode tie (forward)', { ...BASE, budget_wu: 200 }, { unicodeTie: 'forward' })
+  R.push(uniFwd)
+  R.push({ ...await run('unicode tie (reversed)', { ...BASE, budget_wu: 200 }, { unicodeTie: 'reversed' }),
+    expect: (res) => {
+      if (!(res.ledger.invalid_candidates || []).some((x) => /exceeded/.test(x.reason))) return 'the cap never fired, so the tie-break is untested'
+      return seen(res) === seen(uniFwd.res)
+        || `locale-equal titles let emission order decide which survived the cap: ${seen(uniFwd.res)} vs ${seen(res)}` } })
+}
 R.push(await run('anchor does not match file:line', { ...BASE }, { anchorMismatch: true,
   expect: (res) => res.ledger.invalid_candidates.some((x) => /anchor/.test(x.reason))
     || 'a candidate whose anchor names a different file was accepted' }))
@@ -884,9 +926,37 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
     const d = drainer(48000, 48, 1, { 'verify:': mult })
     R.push(await run(`verifier-only drift ${mult}x`, { ...BASE }, { onCall: d.onCall, drift: true }, d.budget,
       (res) => {
-        const verifiers = (res.launches || []).filter((x) => x.label.startsWith('verify:')).length
-        return verifiers <= 1 || (res.ledger.deferred || []).some((x) => x.kind === 'candidate_verifier')
+        const verifiers = launchesOf(res).filter((x) => x.label.startsWith('verify:')).length
+        if (!verifiers) return 'no verifier ran at all, so the sample never happened'
+        // The sample runs; everything the observed rate cannot pay for is
+        // deferred with a reason. Admitting the whole plan anyway is the bug.
+        return (res.ledger.deferred || []).some((x) => x.kind === 'candidate_verifier')
           || `all ${verifiers} verifiers were admitted despite ${mult}x drift in that role`
+      }))
+  }
+}
+{
+  // Candidate probes are admitted before the verify sample prices the wave.
+  // Repricing them afterwards is what keeps adjudication's owed tokens: at 4x
+  // verifier drift, launching them anyway consumes exactly that reserve and
+  // the run ends with verdicts nobody could assign.
+  const d = drainer(48000, 48, 1, { 'verify:': 4 })
+  R.push(await run('candidate probes yield to adjudication', { ...BASE },
+    { onCall: d.onCall, drift: true }, d.budget,
+    (res) => res.status !== 'adjudication_failed'
+      || 'probes were launched at the pre-sample price and adjudication starved on the tokens they spent'))
+}
+{
+  // Region probes are a multi-agent wave — recall-first opens three at once —
+  // so they sample one first like the finders and verifiers. Unsampled, 20x
+  // drift in this role alone spent 1.99x the target.
+  for (const prof of ['balanced', 'recall-first']) {
+    const d = drainer(48000, 48, 1, { 'probe:': 20 })
+    R.push(await run(`probe-only drift (${prof})`, { ...BASE, profile: prof },
+      { onCall: d.onCall, drift: true }, d.budget,
+      (res) => {
+        const probes = launchesOf(res).filter((x) => x.label.startsWith('probe:')).length
+        return probes >= 1 || 'no probe ran, so the sampling is untested'
       }))
   }
 }
@@ -916,7 +986,7 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
   R.push(await run('drift arrives with the finder wave', { ...BASE },
     { onCall: d.onCall, drift: true }, d.budget,
     (res) => {
-      const finders = (res.launches || []).filter((x) => x.label.startsWith('find:')).length
+      const finders = launchesOf(res).filter((x) => x.label.startsWith('find:')).length
       if (finders > 1 && res.status !== 'budget_too_small') return `all ${finders} finders were launched at the prior rate despite 20x drift`
       return true
     }))
@@ -932,7 +1002,7 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
       if (res.status !== 'budget_too_small') return `the coverage floor did not fit in tokens and the run proceeded as ${res.status}`
       // Not merely the right verdict: no finder may have been launched to
       // reach it. Sampling one and then refusing is a different, costlier bug.
-      const finders = (res.launches || []).filter((x) => x.label.startsWith('find:')).length
+      const finders = launchesOf(res).filter((x) => x.label.startsWith('find:')).length
       return finders === 0 || `refused correctly but had already launched ${finders} finder(s)`
     }))
 }

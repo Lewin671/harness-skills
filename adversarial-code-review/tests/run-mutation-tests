@@ -207,8 +207,16 @@ mutate "attack target location is fenced" "\${fenced(target.label)}" "\${target.
 mutate "adjudicator heading carries no raw path" "=== candidate \${e.candidate.id}" "=== candidate \${e.candidate.id} at \${e.candidate.file}:\${e.candidate.line}"
 mutate "first lens is sampled alone" "if (restLenses.length && !admitTokens(restLenses.length * W.finder)) {" "if (false) {"
 mutate "lens cap keeps the consequential" "  const ordered = [...(res.candidates || [])].sort((a, b) =>
-    consequence(b) - consequence(a) || JSON.stringify(a).localeCompare(JSON.stringify(b)))" "  const ordered = [...(res.candidates || [])]"
+    consequence(b) - consequence(a) || cmp(JSON.stringify(a), JSON.stringify(b)))" "  const ordered = [...(res.candidates || [])]"
 mutate "duplicate probe keeps its evidence" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))" "          const existing = null"
+mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + escrow.adjudicator
+
+// Priced at the observed rate now." "prepaidDebtWU = 0
+
+// Priced at the observed rate now."
+mutate "candidate probes repriced after the sample" "  if (admitTokens(verifyPendingWU + probeAdmitted.length * W.probe + W.probe)) { probeAdmitted.push(t); continue }" "  if (true) { probeAdmitted.push(t); continue }"
+mutate "region probes sample one first" "    if (admitTokens(probePendingWU + W.probe)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }" "    if (true) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }"
+mutate "tie-breaks are a total order" "const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)" "const cmp = (a, b) => String(a).localeCompare(String(b))"
 
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
@@ -237,7 +245,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=107
+EXPECTED_TOTAL=111
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1
