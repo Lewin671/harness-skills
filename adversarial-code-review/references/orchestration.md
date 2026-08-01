@@ -264,10 +264,27 @@ the exposure to that one sample; if the rest of the coverage floor no longer
 fits at the observed rate, the run stops, because a review without breadth
 has nothing to say.
 
-What remains is a single agent drifting inside its own open wave — an
-executable attack costs ten weighted units and cannot be re-checked once
-launched. Measured worst case is 1.25x the target, and the suite holds it
-there. The promise is bounded overshoot, not none.
+The rate is also tracked **per wave**, not only cumulatively, because a
+cumulative mean is dominated by whatever ran first. Triage and the finders
+are cheap, so a verifier costing twenty times its estimate barely moves the
+average and the next wave is priced as though nothing had changed — measured
+at 4.42x the token target. Pricing takes the worst of prior, cumulative and
+most-recent-wave, and a rate once observed is never forgotten.
+
+**The bound is not a single number, and it would be dishonest to quote one.**
+What is bounded is exposure to a *wave*: the two largest — finders and
+verifiers — launch one agent first, and the rest are admitted only at what
+that one actually cost, cumulatively rather than item by item. Those shapes
+now hold at 1.35x, against 1.57x, 1.92x, 3.35x and 4.42x before.
+
+What is **not** bounded is a role whose entire wave is one or two agents. A
+single executable attack costs ten weighted units, an adjudication batch is
+one call; there is nothing to sample first, and a 20x drift there runs to
+4.63x with nothing able to intervene. The suite carries those shapes too,
+marked as unpriced rather than quietly exempted, and asserts what still has
+to hold: the run ends honestly rather than reporting findings it could not
+pay to establish. Say this in the report rather than implying a ceiling that
+only some shapes respect.
 
 If the budget cannot fund the **coverage** floor, do not run: a review
 without breadth has nothing to say and its silence means nothing.

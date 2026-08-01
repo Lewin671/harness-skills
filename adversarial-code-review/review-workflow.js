@@ -252,8 +252,8 @@ function ratePerWU() {
   // prior, and at 20x drift that alone put 95,000 tokens against a 48,000
   // target. Triage is a real sample; use it.
   const launchedWU = launches.reduce((t, x) => t + x.wu, 0)
-  if (launchedWU <= 0 || spent <= 0) return tokensPerWU
-  return Math.max(tokensPerWU, spent / launchedWU)
+  if (launchedWU <= 0 || spent <= 0) return Math.max(tokensPerWU, lastWaveRate)
+  return Math.max(tokensPerWU, spent / launchedWU, lastWaveRate)
 }
 
 function admitTokens(wu) {
@@ -294,7 +294,30 @@ function admitPrepaid(wu) {
 }
 
 function launched(label, wu) { launches.push({ label, wu }) }
-function endWave() { waveEstimateWU = 0 }
+
+// A cumulative average is dominated by whatever ran first. Triage and the
+// finders are cheap, so a verifier costing twenty times its estimate barely
+// moves the mean and the next wave is still priced as though nothing had
+// changed — measured at 4.42x the token target. The rate of the most recent
+// completed wave is what notices a role becoming expensive, so it is tracked
+// alongside, and pricing takes the worst of the three. Monotonic: a rate once
+// observed is never forgotten, because the cheap wave after an expensive one
+// must not make the run optimistic again.
+let lastWaveRate = 0
+let waveMarkSpent = 0
+let waveMarkLaunchedWU = 0
+function endWave() {
+  if (hasTokenTarget) {
+    const spentNow = budget.total - budget.remaining()
+    const launchedNow = launches.reduce((t, x) => t + x.wu, 0)
+    const dSpent = spentNow - waveMarkSpent
+    const dWU = launchedNow - waveMarkLaunchedWU
+    if (dWU > 0 && dSpent > 0) lastWaveRate = Math.max(lastWaveRate, dSpent / dWU)
+    waveMarkSpent = spentNow
+    waveMarkLaunchedWU = launchedNow
+  }
+  waveEstimateWU = 0
+}
 
 // Escalate-once is a promise, so its capacity is escrowed with the floors
 // rather than competing with optional purchases. Without this the rule reads
@@ -1181,6 +1204,8 @@ let nextId = 0
 const MAX_CANDIDATES_PER_LENS = 25
 const perLensCount = new Map()
 
+const fingerprintOf = (c) => JSON.stringify([c && c.file, c && c.line, c && c.title, c && c.evidence_kind, c && c.evidence, c && c.proposed_severity, c && c.confidence])
+
 function addCandidate(c, lens, origin) {
   // Identical records are noise, and a hostile artifact can manufacture them
   // in bulk: every duplicate raises the mandatory accuracy floor, so enough of
@@ -1192,7 +1217,7 @@ function addCandidate(c, lens, origin) {
   // a later identical claim filed as critical, and the survivor keeps the
   // minor tier: cheap batch verification and no execution. That turns
   // deduplication into a downgrade channel.
-  const fingerprint = JSON.stringify([c && c.file, c && c.line, c && c.title, c && c.evidence_kind, c && c.evidence, c && c.proposed_severity, c && c.confidence])
+  const fingerprint = fingerprintOf(c)
   // Checked against the LIVE candidate set, not a side index. A separate
   // index has to be evicted when a candidate is rolled back for budget, and
   // an eviction that never runs is a guard nothing can test; asking the array
@@ -1380,6 +1405,18 @@ if (acceptedRegionProbes.length) {
       if (o.r.emergent_candidate) {
         const rec = addCandidate(o.r.emergent_candidate, `region probe (${o.t.label})`, 'region_probe')
         if (rec) { rec.from_region = o.t.target_id; probeByTarget.set(rec.id, { ...norm, target_id: rec.id, constructed, target: { kind: 'candidate', target_id: rec.id } }) }
+        else {
+          // Dedup refused it because a finder already reported the same claim.
+          // The CLAIM is a duplicate; the constructed counterexample is not —
+          // it is the only executable evidence anyone produced for it, and
+          // dropping it here loses the attack that evidence would have earned.
+          // Attached to the existing candidate, not claimed as emergent: a
+          // finder found it first, and the breadth count should say so.
+          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))
+          if (existing && !probeByTarget.has(existing.id)) {
+            probeByTarget.set(existing.id, { ...norm, target_id: existing.id, constructed, target: { kind: 'candidate', target_id: existing.id } })
+          }
+        }
       } else {
         malformed('probe', o.t.target_id, 'constructed a counterexample but returned no emergent_candidate, so it cannot be adjudicated')
       }
@@ -1543,17 +1580,55 @@ for (const c of [...criticals, ...majors]) {
   }
 }
 
-const wave4 = await parallel([
-  ...verifyPlan.map((v) => () => (v.kind === 'one'
-    ? agent(verifierPrompt(v.c), { label: `verify:${v.c.id}`, phase: 'Verify', schema: VERIFIER_SCHEMA, model: v.model })
-      .then((r) => ({ kind: 'one', ids: [v.c.id], r }), () => ({ kind: 'one', ids: [v.c.id], r: null }))
-    : agent(batchVerifierPrompt(v.batch), { label: `verify:minors(${v.batch.length})`, phase: 'Verify', schema: BATCH_VERIFIER_SCHEMA, model: v.model })
-      .then((r) => ({ kind: 'batch', ids: v.batch.map((c) => c.id), r }), () => ({ kind: 'batch', ids: v.batch.map((c) => c.id), r: null })))),
+// Verification is the largest parallel wave in the run, and the first time
+// this role's real cost is observable. The cumulative rate up to here is
+// dominated by triage and the finders, so a verifier that costs 20x its
+// estimate is invisible until the whole wave has already been launched and
+// paid for — measured at 4.42x the token target. One verifier goes first, at
+// whatever it actually costs, and prices the rest.
+const verifySample = verifyPlan.length > 1 ? verifyPlan.slice(0, 1) : []
+const verifyRest = verifyPlan.length > 1 ? verifyPlan.slice(1) : verifyPlan
+const runVerify = (v) => (v.kind === 'one'
+  ? agent(verifierPrompt(v.c), { label: `verify:${v.c.id}`, phase: 'Verify', schema: VERIFIER_SCHEMA, model: v.model })
+    .then((r) => ({ kind: 'one', ids: [v.c.id], r }), () => ({ kind: 'one', ids: [v.c.id], r: null }))
+  : agent(batchVerifierPrompt(v.batch), { label: `verify:minors(${v.batch.length})`, phase: 'Verify', schema: BATCH_VERIFIER_SCHEMA, model: v.model })
+    .then((r) => ({ kind: 'batch', ids: v.batch.map((c) => c.id), r }), () => ({ kind: 'batch', ids: v.batch.map((c) => c.id), r: null })))
+const sampleOut = verifySample.length ? await parallel(verifySample.map((v) => () => runVerify(v))) : []
+verifySample.forEach((v) => launched(v.kind === 'one' ? `verify:${v.c.id}` : 'verify:minors', v.wu))
+if (verifySample.length) endWave()
+
+// Priced at the observed rate now. Anything that no longer fits is deferred
+// with its reason rather than launched and paid for — the accuracy floor is
+// the last thing to give up, but overrunning the user's hard token target
+// while claiming a bounded overshoot is worse than saying so.
+const verifyDeferred = []
+const verifyAdmitted = []
+// Cumulative, not per item: these all launch together, so judging each one
+// against an empty wave admits the whole set whenever any single one fits.
+let verifyPendingWU = 0
+for (const v of verifyRest) {
+  if (admitTokens(verifyPendingWU + v.wu)) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }
+  verifyDeferred.push(v)
+  for (const c of v.kind === 'one' ? [v.c] : v.batch) {
+    // A DIFFERENT kind from the trim's `candidate_verification`, deliberately.
+    // These candidates are still reported — they simply arrive with no
+    // verifier, and `verifier_completed` says so. Reusing the trim's kind
+    // would put them in `found_but_not_verified`, which promises the opposite:
+    // that the candidate is absent from the results entirely.
+    defer({ target_id: c.id, kind: 'candidate_verifier', anchor: `${c.file}:${c.line}`, title: c.title }, 'deferred_by_budget')
+  }
+}
+if (verifyDeferred.length) {
+  log(`token cost outran its estimate; ${verifyDeferred.length} verifier(s) deferred`)
+}
+
+const wave4 = [...sampleOut, ...await parallel([
+  ...verifyAdmitted.map((v) => () => runVerify(v)),
   ...candidateProbeTargets.map((t) => () =>
     agent(probePrompt(t), { label: `probe:${t.target_id}`, phase: 'Verify', schema: PROBE_SCHEMA, model: M.cheap })
       .then((r) => ({ kind: 'probe', t, r }), () => ({ kind: 'probe', t, r: null }))),
-])
-verifyPlan.forEach((v) => launched(v.kind === 'one' ? `verify:${v.c.id}` : 'verify:minors', v.wu))
+])]
+verifyAdmitted.forEach((v) => launched(v.kind === 'one' ? `verify:${v.c.id}` : 'verify:minors', v.wu))
 candidateProbeTargets.forEach((t) => launched(`probe:${t.target_id}`, W.probe))
 endWave()
 // Adjudication's weighted units were committed with the floors, but its

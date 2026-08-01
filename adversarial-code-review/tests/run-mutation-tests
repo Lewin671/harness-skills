@@ -45,6 +45,21 @@ PY
     survived=$((survived + 1))
     return
   fi
+  # A mutant that does not PARSE kills the suite no matter what it changed:
+  # every scenario crashes in the harness's Function() wrapper and the run
+  # goes red for a reason no assertion had anything to do with. Counting that
+  # as a kill is the same manufactured confidence this file exists to catch,
+  # so compile it the way the harness does before believing any verdict.
+  if ! node --input-type=module -e '
+    import fs from "node:fs"
+    const src = fs.readFileSync(process.argv[1], "utf8").replace(/^export const meta/m, "const meta")
+    new Function("args", "budget", "agent", "parallel", "pipeline", "phase", "log", "workflow",
+      `"use strict"; return (async () => {\n${src}\n})()`)
+  ' "${TMP}/m.js" 2>/dev/null; then
+    printf '%-44s %s\n' "$name" "INVALID (mutant does not parse — it would kill the suite for the wrong reason)"
+    survived=$((survived + 1))
+    return
+  fi
   if ACR_WORKFLOW="${TMP}/m.js" "${HERE}/run-tests" >/dev/null 2>&1; then
     printf '%-44s %s\n' "$name" "SURVIVED"
     survived=$((survived + 1))
@@ -81,7 +96,7 @@ mutate "grounded-refutation guard" "  if (state === 'substantiated' && !canSubst
 mutate "refutation grounding must be strong" "verifierRecord && verifierRecord.grounding === 'strong'" "verifierRecord"
 mutate "terminal evidence override" "  if (terminal && state !== 'substantiated') {" "  if (false) {"
 mutate "region-probe floor escrow" "  if (admitOptional(W.probe, floorsFor([...candidates, ...syntheticCriticals(acceptedRegionProbes.length + 1)]))) acceptedRegionProbes.push(t)" "  if (admitOptional(W.probe, 0)) acceptedRegionProbes.push(t)"
-mutate "weak verdict replacement" "        if (v.grounding === 'strong') verdictById.set(id, v)" "        verdictById.set(id, v)"
+mutate "weak verdict replacement" "        if (v.grounding === 'strong') verdictById.set(id, v)" "        if (true) verdictById.set(id, v)"
 mutate "unknown-verdict-id rejection" "    if (!expected.has(id)) { ledger.unknown_verdict_ids.push({ role, id }); continue }" "    if (false) { continue }"
 mutate "duplicate-verdict rejection" "    if (seen.has(id)) { malformed(role, id, 'duplicate record in one batch — first kept'); continue }" "    if (false) { continue }"
 mutate "low-confidence coverage risk" "  ledger.coverage_risks.push({" "  if (false) ledger.coverage_risks.push({"
@@ -181,7 +196,7 @@ mutate "frontier names the accuracy floor first" "    const paid = byBudget.find
 
 mutate "probe evidence is fenced" "\${fenced(\`input: " "\${(\`input: "
 mutate "triage commands are fenced" "? fenced((triage." "? ((triage."
-mutate "token rate learns from actual spend" "  return Math.max(tokensPerWU, spent / launchedWU)" "  return tokensPerWU"
+mutate "token rate learns from actual spend" "  return Math.max(tokensPerWU, spent / launchedWU, lastWaveRate)" "  return tokensPerWU"
 mutate "verified file-level findings counted" "    verified_findings_file_level_only: results.filter((r) => r.state === 'substantiated' && r.scope_binding && r.scope_binding.level === 'file_level_only').length," "    verified_findings_file_level_only: 0,"
 
 mutate "verifier heading carries no raw path" "Candidate \${c.id} — its file and line are inside the fenced record below," "Candidate \${c.id} at \${c.file}:\${c.line}"
@@ -190,21 +205,29 @@ why: \${target.why}\`)}" "\${target.file}:\${target.start_line}-\${target.end_li
 why: \${target.why}"
 mutate "attack target location is fenced" "\${fenced(target.label)}" "\${target.label}"
 mutate "adjudicator heading carries no raw path" "=== candidate \${e.candidate.id}" "=== candidate \${e.candidate.id} at \${e.candidate.file}:\${e.candidate.line}"
-mutate "rate divides by launched units" "  const launchedWU = launches.reduce((t, x) => t + x.wu, 0)" "  const launchedWU = committedWU"
 mutate "first lens is sampled alone" "if (restLenses.length && !admitTokens(restLenses.length * W.finder)) {" "if (false) {"
 mutate "lens cap keeps the consequential" "  const ordered = [...(res.candidates || [])].sort((a, b) =>
     consequence(b) - consequence(a) || JSON.stringify(a).localeCompare(JSON.stringify(b)))" "  const ordered = [...(res.candidates || [])]"
+mutate "duplicate probe keeps its evidence" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))" "          const existing = null"
 
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
 #   rollback drops by rank          (pickVictim vs the array tail)
 #   victim tie-break is deterministic (the fingerprint tail in pickVictim)
 #   funding order is total          (the fingerprint tail in byRank)
+#   rate divides by launched units  (launchedWU vs committedWU in ratePerWU)
 #
 # absorb() now sorts each finder's candidates by consequence before they are
 # ever accepted, so by the time these three run the array is already ordered
 # and none of them can produce a different result. They are kept in the script
-# as defence in depth — the normalisation is one edit away from being removed,
+# The rate one is the same story with a different cause: the per-wave rate
+# added this round dominates the cumulative term, so which denominator the
+# cumulative term uses can no longer change an admission. It stays because it
+# is the correct denominator — reservations run ahead of spending — and
+# because the per-wave rate is one edit away from being removed too.
+#
+# All four are kept in the script as defence in depth — the normalisation is
+# one edit away from being removed,
 # and these are what would still be right if it were — but a mutant for them
 # would survive by construction, and a suite that tolerates that is the thing
 # this file exists to prevent. If absorb() ever stops sorting, restore them.
