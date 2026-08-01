@@ -507,6 +507,13 @@ const ATTACK_SCHEMA = {
     patched_result: { type: 'string' },
     predicted_signature: { type: 'string' },
     signature_matched: { type: 'boolean' },
+    // The attacker's OWN counterexample, for the case the prompt asks for:
+    // an unproven critical goes straight to execution, and if the environment
+    // cannot run anything the reasoning it did is the only evidence there is.
+    // Same field names as the probe's, so there is one vocabulary.
+    input: { type: 'string' },
+    trace: { type: 'string' },
+    expected_vs_actual: { type: 'string' },
     test_code: { type: 'string' },
     command: { type: 'string' },
     vectors_attempted: { type: 'array', items: { type: 'string' } },
@@ -877,7 +884,11 @@ ${(triage.probe_candidates || []).length
      Anything missing is downgraded automatically, so do not claim it without
      the evidence.
    - plausible: a concrete counterexample exists but was not executed. Set
-     execution_status to "unavailable".
+     execution_status to "unavailable". If YOU constructed it — because no
+     prober had been aimed here — return it with the record: input, trace,
+     expected_vs_actual and predicted_signature, all non-empty. Without those
+     four there is nothing to grade and the result is downgraded to
+     inconclusive, which says only that nobody managed anything.
    - held: you executed and the code did NOT break — patch_applied true and
      patched_failed false. List vectors_attempted, and record the same
      step-2 probe_command and probe_result. Only use this if execution
@@ -1132,10 +1143,16 @@ function normalizeAttack(raw, id, hasConcreteCounterexample) {
     return { ...blockedAttack(id, `claimed held without: ${missing.join(', ')}`), downgraded_from: 'held' }
   }
 
-  // `plausible` rests entirely on a concrete counterexample existing.
+  // `plausible` rests entirely on a concrete counterexample existing — from a
+  // probe, or built by this attacker when no probe was aimed here. The second
+  // case is the one the prompt explicitly asks for and the schema had no room
+  // for, so the documented environment-unavailable path threw the reasoning
+  // away and graded itself inconclusive.
+  const attackerBuilt = ['input', 'trace', 'expected_vs_actual', 'predicted_signature']
+    .every((k) => nonblank(a[k]))
   if (a.grade === 'plausible') {
-    if (!hasConcreteCounterexample) {
-      malformed('attack', id, 'claimed plausible with no validated counterexample — downgraded to inconclusive')
+    if (!hasConcreteCounterexample && !attackerBuilt) {
+      malformed('attack', id, 'claimed plausible with no validated counterexample, from a probe or its own — downgraded to inconclusive')
       return { ...a, grade: 'inconclusive', execution_status: 'unavailable', downgraded_from: 'plausible' }
     }
     return { ...a, execution_status: unexecutedStatus(a, id) }
@@ -1191,7 +1208,7 @@ function normalizeAttack(raw, id, hasConcreteCounterexample) {
   malformed('attack', id, `claimed reproduced without: ${missing.join(', ')} — downgraded`)
   return {
     ...a,
-    grade: hasConcreteCounterexample ? 'plausible' : 'inconclusive',
+    grade: (hasConcreteCounterexample || attackerBuilt) ? 'plausible' : 'inconclusive',
     execution_status: 'unavailable',
     downgraded_from: 'reproduced',
     downgrade_reason: missing.join(', '),
@@ -1703,6 +1720,13 @@ if (acceptedRegionProbes.length) {
           const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))
           if (existing && !probeByTarget.has(existing.id)) {
             probeByTarget.set(existing.id, { ...norm, target_id: existing.id, constructed, target: { kind: 'candidate', target_id: existing.id } })
+          } else if (existing) {
+            // Two regions independently built a counterexample for the same
+            // claim. The one already attached stays — it came from the
+            // higher-ranked region, and triage was told that ranking is the
+            // funding order — but the other is real work and is disclosed
+            // rather than dropped without trace.
+            malformed('probe', o.t.target_id, `constructed a second counterexample for ${existing.id}, which already carries one from a higher-ranked region — this one is recorded here and not used`)
           }
         }
       } else {

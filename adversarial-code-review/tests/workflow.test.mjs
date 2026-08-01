@@ -524,6 +524,8 @@ function makeAgent(state, s) {
         // The preflight run that justifies test_capability=ready. `ready` is
         // a word the attacker chooses; these two are what make it checkable.
         probe_command: 'npm test -- near-change', probe_result: '1 passing',
+        // The attacker's own counterexample, which a downgrade falls back to.
+        input: 'x=-1', trace: 'through the changed branch', expected_vs_actual: 'expected 0, got -1',
         patch_applied: true, patched_failed: true,
         patched_result: 'failed', predicted_signature: 'AssertionError', signature_matched: true,
         test_code: 'test(...)', command: 'npm test -- x',
@@ -588,6 +590,12 @@ function makeAgent(state, s) {
       if (s.bareReproduced) return { target_id: id, grade: 'reproduced', test_capability: 'ready', execution_status: 'executed' }
       if (s.bareHeld) return { target_id: id, grade: 'held', test_capability: 'unavailable', execution_status: 'executed' }
       if (s.barePlausible) return { target_id: id, grade: 'plausible', test_capability: 'unavailable', execution_status: 'unavailable' }
+      // The attacker's OWN counterexample, for the case the prompt asks for:
+      // no prober was aimed here and the environment cannot run anything.
+      if (s.attackerBuiltCounterexample) {
+        return { target_id: id, grade: 'plausible', test_capability: 'unavailable', execution_status: 'unavailable',
+          input: 'x=-1', trace: 'through the changed branch', expected_vs_actual: 'expected 0, got -1', predicted_signature: 'AssertionError' }
+      }
       if (s.attackWrongId) return { target_id: 'WRONG', grade: 'reproduced', test_capability: 'ready', execution_status: 'executed', bound_to_base_sha: true, patch_hash_verified: true, control_passed: true, patched_result: 'failed', predicted_signature: 'E', signature_matched: true, test_code: 't', command: 'c' }
       return fullReproduced
     }
@@ -1221,6 +1229,33 @@ for (const forged of ['deferred_by_budget', 'deferred_by_profile']) {
         || 'a forged deferral was normalised without a ledger entry'
     } }))
 }
+// The attack agent is told to construct a counterexample when no probe did,
+// and to grade `plausible` when the environment cannot run it. Both halves
+// have to be reachable, or that instruction describes a path that always
+// throws the reasoning away.
+R.push(await run('attacker constructs its own counterexample', { ...BASE },
+  { probeAlwaysFails: true, attackerBuiltCounterexample: true,
+    expect: (res) => {
+      const attacked = res.candidate_results.filter((r) => r.attack)
+      if (!attacked.length) return 'no attack ran, so the path is untested'
+      const kept = attacked.filter((r) => r.attack_grade === 'plausible')
+      return kept.length > 0
+        || `the attacker's own counterexample was discarded (grades: ${attacked.map((r) => r.attack_grade).join(', ')})`
+    } }))
+R.push(await run('a downgraded reproduction keeps the attacker evidence', { ...BASE },
+  { probeAlwaysFails: true, attackOmit: 'control',
+    expect: (res) => {
+      const downgraded = res.candidate_results.filter((r) => r.attack && r.attack.downgraded_from === 'reproduced')
+      if (!downgraded.length) return 'nothing was downgraded, so the fallback is untested'
+      const lost = downgraded.find((r) => r.attack_grade === 'inconclusive')
+      return !lost || `${lost.candidate_id} lost the counterexample it had constructed itself`
+    } }))
+R.push(await run('attacker claims plausible with nothing behind it', { ...BASE },
+  { probeAlwaysFails: true, barePlausible: true,
+    expect: (res) => {
+      const kept = res.candidate_results.filter((r) => r.attack_grade === 'plausible')
+      return kept.length === 0 || `${kept[0].candidate_id} kept grade plausible with no counterexample at all`
+    } }))
 R.push(await run('blocked with a blank reason', { ...BASE }, { blockedBlankReason: true,
   expect: (res) => {
     const blocked = res.candidate_results.filter((r) => r.attack && r.attack.grade === 'blocked')
@@ -2025,7 +2060,13 @@ for (const r of R) {
     if (x.attack_grade === 'inconclusive' && !x.probe && !x.attack) {
       fail++; problems.push(`${r.name}: ${x.candidate_id} graded inconclusive with neither a probe nor an attack`)
     }
-    if (a && a.grade === 'plausible' && !(x.probe && x.probe.constructed)) {
+    // A counterexample from a probe, OR one the attacker built itself when no
+    // probe was aimed here — the prompt asks for the second and the schema
+    // now has room for it. What is still forbidden is `plausible` with
+    // neither.
+    const builtByAttacker = a && ['input', 'trace', 'expected_vs_actual', 'predicted_signature']
+      .every((k) => typeof a[k] === 'string' && a[k].trim())
+    if (a && a.grade === 'plausible' && !(x.probe && x.probe.constructed) && !builtByAttacker) {
       fail++; problems.push(`${r.name}: ${x.candidate_id} graded plausible with no validated counterexample`)
     }
   }

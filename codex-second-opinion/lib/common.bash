@@ -193,6 +193,11 @@ mcp_enabled_ids() {
             }
             i = j
           } else {
+            # A value at entry level with no key in front of it means the
+            # colon is missing: `{"name":"github","enabled" true}` balances,
+            # spells its boolean fine, and has no `"enabled":` for the value
+            # counter to find either — so this is the only check that sees it.
+            if (depth == 1 && key == "") garbage = 1
             if (depth == 1) { just_opened = 0; pending_comma = 0 }
             if (depth == 1 && key == "name") name = val
             key = ""

@@ -47,12 +47,14 @@ Three layered documents, and you need all three:
 
 `tests/run-tests` holds the contract tests; `tests/run-mutation-tests`
 breaks each protection in turn, on a copy, and requires the suite to go
-red for it; `tests/run-snapshot-tests` covers the one protection that
-lives in prose, extracting the write-safety snapshot straight out of
-orchestration.md so the doc stays its only source of truth. Run all
-three after editing either — a green suite proves nothing on its own,
-which is the same reason this skill refuses to call an unrefuted
-candidate verified.
+red for it. Two more cover the protections that live in prose, extracting
+the recipes straight out of orchestration.md so the doc stays their only
+source of truth: `tests/run-snapshot-tests` for the write-safety
+snapshot, `tests/run-capture-tests` for the Phase 0 patch capture — both
+found runtime defects that `bash -n` cannot see. Run all four after
+editing any of them: a green suite proves nothing on its own, which is
+the same reason this skill refuses to call an unrefuted candidate
+verified.
 
 ## Positioning
 

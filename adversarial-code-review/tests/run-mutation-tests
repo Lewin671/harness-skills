@@ -82,9 +82,9 @@ mutate "held: patch binding" "    if (!bound) missing.push('bound_to_base_sha + 
 mutate "held: ready capability" "    if (a.test_capability !== 'ready') missing.push('test_capability=ready')" "    "
 mutate "held: patched_result" "    if (!nonblank(a.patched_result)) missing.push('patched_result')" "    "
 mutate "held: vectors_attempted" "    if (!(Array.isArray(a.vectors_attempted) && a.vectors_attempted.some(nonblank))) missing.push('vectors_attempted')" "    "
-mutate "plausible needs counterexample" "    if (!hasConcreteCounterexample) {" "    if (false) {"
+mutate "plausible needs counterexample" "    if (!hasConcreteCounterexample && !attackerBuilt) {" "    if (false) {"
 mutate "plausible cannot claim execution" "  if (a.execution_status === 'unavailable') return 'unavailable'" "  if (a.execution_status === 'executed') return 'executed'"
-mutate "probe completeness fields" "['input', 'trace', 'expected_vs_actual', 'predicted_signature']" "['trace']"
+mutate "probe completeness fields" "  const missing = ['input', 'trace', 'expected_vs_actual', 'predicted_signature'].filter((k) => !nonblank(p[k]))" "  const missing = ['trace'].filter((k) => !nonblank(p[k]))"
 mutate "probe target-id reconciliation" "  if (raw.target_id !== id) {" "  if (false) {" 2
 mutate "attack target-id reconciliation" "  if (raw.target_id !== id) {" "  if (false) {"
 mutate "not_attempted vs inconclusive" "    : (probeFailed ? 'blocked' : 'not_attempted')" "    : 'inconclusive'"
@@ -309,6 +309,15 @@ mutate "canonical order leads with severity" "const rank = (c) => -(SEV_WEIGHT[c
   + (c.in_high_risk_region ? 0 : 1) * 100" "const rank = (c) => 0 * 1000
   + (c.in_high_risk_region ? 0 : 1) * 100"
 
+# The attacker's own counterexample, for the path the prompt asks for and the
+# schema had no room for.
+mutate "attacker counterexamples are kept" "  if (a.grade === 'plausible') {
+    if (!hasConcreteCounterexample && !attackerBuilt) {" "  if (a.grade === 'plausible') {
+    if (!hasConcreteCounterexample) {"
+mutate "attacker counterexamples are complete" "  const attackerBuilt = ['input', 'trace', 'expected_vs_actual', 'predicted_signature']
+    .every((k) => nonblank(a[k]))" "  const attackerBuilt = true"
+mutate "downgrade keeps the attacker's evidence" "    grade: (hasConcreteCounterexample || attackerBuilt) ? 'plausible' : 'inconclusive'," "    grade: hasConcreteCounterexample ? 'plausible' : 'inconclusive',"
+
 # A reviewed path may legitimately be named __proto__.
 mutate "path map has a null prototype" "const scopeBindingByPath = Object.create(null)" "const scopeBindingByPath = {}"
 
@@ -369,11 +378,25 @@ mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.finger
 # therefore be killed by the same assertion, for the same reason, and naming
 # it after the split would be the overstatement this file exists to avoid.
 #
+# UNREACHED, which is NOT the same as equivalent and must not be filed as it:
+#
+#   probe floor counts the sample   (probeSample.length in floorAfter)
+#
+# The sampled probe's emergent candidate is not absorbed until after the
+# remaining probes are admitted, so the floor those admissions price has to
+# include it. The term is right and it DOES change the floor — by about three
+# weighted units on a single admission — so a scenario that put an admission
+# on that boundary would kill a mutant for it. None does: sweeps at 30-72wu
+# and 1.0-2.0x drift move the probe-count threshold identically with and
+# without the term. It is listed here rather than among the equivalents
+# because the honest statement is "no scenario reaches this", not "no scenario
+# could".
+#
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
 #   rate divides by launched units  (launchedWU vs committedWU in ratePerWU)
 #   escrow draw token gate          (admitTokens inside drawOrReserve)
-#   probe floor counts the sample   (probeSample.length in floorAfter)
+
 #
 # Three others used to sit here on the strength of absorb() sorting each
 # finder's candidates. That argument was wrong: absorb sorts each finder's OWN
@@ -390,16 +413,6 @@ mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.finger
 # makes an already dominated term smaller still. Measured as well: triage
 # drift from 15x to 40x returns the same verdict either way, because the
 # per-wave rate already carries it.
-#
-# The probe-floor one is correct and unreachable, which is a different thing
-# from unnecessary. The sampled probe's emergent candidate is not absorbed
-# until after the remaining probes are admitted, so the floor those admissions
-# price has to include it — the term is right. It is worth about three
-# weighted units on a single admission, and no combination of budget and drift
-# in this suite's range makes three units decide one: sweeps at 30-72wu and
-# 1.0-2.0x drift move the probe-count threshold identically with and without
-# it. Kept because the arithmetic is right and the margin it needs is one
-# candidate away; excluded because a mutant for it survives by construction.
 #
 # The escrow one needs two cases, not the one the note used to claim. It is
 # NOT true that every draw is re-checked at launch: the first item of a
@@ -422,7 +435,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=182
+EXPECTED_TOTAL=185
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

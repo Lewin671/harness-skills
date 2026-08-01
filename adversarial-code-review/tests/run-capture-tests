@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Does the Phase 0 capture recipe actually run?
+#
+# The other prose protection. Two review rounds found runtime defects in this
+# block that `bash -n` cannot see — `|| true` swallowing a hard failure, a
+# `return` outside any function, a manifest group whose last command is a
+# false test and so fails under pipefail. Syntax checking proves none of that.
+#
+# The block is EXTRACTED from orchestration.md, not copied, for the same
+# reason as the snapshot recipe: a copy is a second source of truth and the
+# wrong one gets fixed. It is not runnable verbatim — the recipe lists the
+# scope alternatives in sequence for a human to choose between — so the
+# harness supplies the scope and runs everything after it.
+#
+# Exit 0 when the recipe captures what it claims to. 1 otherwise.
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+DOC="${HERE}/../references/orchestration.md"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/acr-cap-XXXXXX")"
+trap 'rm -rf "${WORK}"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+
+pass=0 fail=0
+ok()  { pass=$((pass + 1)); printf 'ok   - %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf 'FAIL - %s%s\n' "$1" "${2:+ ($2)}"; }
+
+# The unfiltered capture block: the one that ends by building `included`.
+python3 - "$DOC" "${WORK}/capture.sh" <<'PY'
+import re, sys, pathlib
+doc = pathlib.Path(sys.argv[1]).read_text()
+blocks = re.findall(r'```bash\n(.*?)```', doc, re.S)
+picked = [b for b in blocks if 'patch_sha256=' in b and 'acr_manifest()' in b]
+if len(picked) != 1:
+    sys.exit(f"expected exactly one unfiltered capture block, found {len(picked)}")
+out = []
+for line in picked[0].splitlines():
+    # The scope alternatives are a menu, not a sequence: each assignment
+    # overwrites the last and two of them name variables a real caller sets.
+    # The harness picks one and prepends it.
+    if re.match(r'\s*(paths|diff_args)=\(', line):
+        continue
+    out.append(line)
+pathlib.Path(sys.argv[2]).write_text('\n'.join(out) + '\n')
+PY
+[ $? -eq 0 ] || { echo "could not extract the capture block from ${DOC}"; exit 1; }
+
+# Run the recipe in $1 with the scope prelude in $2. Echoes the exit status;
+# leaves the recipe's own variables in ${WORK}/vars for the caller to read.
+run_capture() {
+  local dir="$1" prelude="$2" status=0
+  (
+    cd "$dir" || exit 1
+    set -euo pipefail
+    eval "$prelude"
+    # shellcheck source=/dev/null
+    . "${WORK}/capture.sh"
+    printf 'tmp=%s\npatch_sha256=%s\nbase_sha=%s\n' "$tmp" "$patch_sha256" "$base_sha" > "${WORK}/vars"
+    printf '%s\n' "$included" > "${WORK}/included"
+  ) || status=$?
+  printf '%s' "$status"
+}
+
+new_repo() {
+  local d="${WORK}/$1"
+  git init -q "$d"
+  printf 'one\n' > "$d/tracked.txt"
+  git -C "$d" add -A
+  git -C "$d" -c user.email=t@t -c user.name=t commit -q -m base
+  printf 'two\n' >> "$d/tracked.txt"
+  printf 'new\n' > "$d/untracked.txt"
+  printf '%s' "$d"
+}
+
+# --- the uncommitted scope, end to end -------------------------------------
+
+repo="$(new_repo plain)"
+status="$(run_capture "$repo" 'diff_args=(HEAD); untracked=1')"
+if [ "$status" = 0 ]; then
+  ok "the uncommitted capture recipe runs under set -euo pipefail"
+else
+  bad "the uncommitted capture recipe runs under set -euo pipefail" "exit $status"
+fi
+
+# shellcheck source=/dev/null
+[ -f "${WORK}/vars" ] && . "${WORK}/vars"
+if [ -s "${tmp:-/nonexistent}/patch.diff" ]; then
+  ok "the captured patch is non-empty"
+else
+  bad "the captured patch is non-empty"
+fi
+
+# The patch has to APPLY at base_sha — that binding is the whole reason the
+# attack phase can trust what it is testing.
+applied="${WORK}/applied"
+git clone -q "$repo" "$applied" 2>/dev/null
+if git -C "$applied" checkout -q --detach "${base_sha:-HEAD}" 2>/dev/null &&
+   git -C "$applied" apply --check "${tmp}/patch.diff" 2>/dev/null; then
+  ok "the captured patch applies cleanly at base_sha"
+else
+  bad "the captured patch applies cleanly at base_sha"
+fi
+
+if grep -qx 'tracked.txt' "${WORK}/included" && grep -qx 'untracked.txt' "${WORK}/included"; then
+  ok "the manifest names both the tracked and the untracked change"
+else
+  bad "the manifest names both changes" "$(tr '\n' ' ' < "${WORK}/included")"
+fi
+
+# --- the branch scope, where untracked=0 -----------------------------------
+#
+# This is the combination that failed under pipefail: with no untracked files
+# the manifest group used to end in a false test.
+
+branch="$(new_repo branch)"
+git -C "$branch" add -A
+git -C "$branch" -c user.email=t@t -c user.name=t commit -q -m work
+base="$(git -C "$branch" rev-parse HEAD~1)"
+status="$(run_capture "$branch" "diff_args=(${base} HEAD); untracked=0")"
+if [ "$status" = 0 ]; then
+  ok "the branch capture recipe runs with untracked=0"
+else
+  bad "the branch capture recipe runs with untracked=0" "exit $status"
+fi
+
+# --- an untracked filename that begins with a dash -------------------------
+
+dashy="$(new_repo dashy)"
+printf 'leading dash\n' > "${dashy}/-weird.txt"
+status="$(run_capture "$dashy" 'diff_args=(HEAD); untracked=1')"
+# shellcheck source=/dev/null
+. "${WORK}/vars"
+if [ "$status" = 0 ] && grep -q -- '-weird.txt' "${tmp}/patch.diff"; then
+  ok "an untracked file whose name begins with a dash is captured"
+else
+  bad "an untracked file whose name begins with a dash is captured" "exit $status"
+fi
+
+# --- a tracked binary change has to arrive as an applicable delta ----------
+#
+# Without --binary a binary change becomes "Binary files ... differ", which
+# `git apply` refuses — so the attack phase would bind a patch it cannot use.
+
+binrepo="$(new_repo binary)"
+printf '\000\001\002bin\000' > "${binrepo}/blob.bin"
+git -C "$binrepo" add blob.bin
+git -C "$binrepo" -c user.email=t@t -c user.name=t commit -q -m blob
+printf '\000\003\004changed\000' > "${binrepo}/blob.bin"
+status="$(run_capture "$binrepo" 'diff_args=(HEAD); untracked=1')"
+# shellcheck source=/dev/null
+. "${WORK}/vars"
+binapplied="${WORK}/bin-applied"
+git clone -q "$binrepo" "$binapplied" 2>/dev/null
+if [ "$status" = 0 ] &&
+   git -C "$binapplied" checkout -q --detach "${base_sha}" 2>/dev/null &&
+   git -C "$binapplied" apply --check "${tmp}/patch.diff" 2>/dev/null; then
+  ok "a tracked binary change is captured as an applicable delta"
+else
+  bad "a tracked binary change is captured as an applicable delta" "exit $status"
+fi
+
+# --- a capture failure must stop the run -----------------------------------
+#
+# `git diff --no-index` exits 1 for "they differ", which is the ordinary case,
+# and above 1 for a real failure. Swallowing both dropped a file from the
+# patch while the manifest still named it.
+
+unreadable="$(new_repo unreadable)"
+printf 'secret\n' > "${unreadable}/locked.txt"
+chmod 000 "${unreadable}/locked.txt"
+status="$(run_capture "$unreadable" 'diff_args=(HEAD); untracked=1')"
+chmod 644 "${unreadable}/locked.txt"
+if [ "$status" != 0 ]; then
+  ok "an uncapturable untracked file stops the capture"
+else
+  bad "an uncapturable untracked file stops the capture" "exit 0, the file was dropped silently"
+fi
+
+# --- scratch never lands inside the repository -----------------------------
+
+inside="$(new_repo inside)"
+mkdir -p "${inside}/scratch"
+status="$(TMPDIR="${inside}/scratch" run_capture "$inside" 'diff_args=(HEAD); untracked=1')"
+# shellcheck source=/dev/null
+. "${WORK}/vars"
+# BOTH sides resolved with pwd -P. On macOS mktemp hands back /var/folders/...
+# while the recipe reports /private/var/folders/... — comparing the two raw
+# strings never matches, so this check passed with the relocation removed.
+inside_real="$(cd "$inside" && pwd -P)"
+tmp_real="$(cd "$tmp" 2>/dev/null && pwd -P)" || tmp_real="$tmp"
+case "${tmp_real}/" in
+  "${inside_real}"/*) inside_repo=yes ;;
+  *) inside_repo=no ;;
+esac
+if [ "$status" = 0 ] && [ "$inside_repo" = no ]; then
+  ok "a repo-local TMPDIR is relocated before anything is written"
+else
+  bad "a repo-local TMPDIR is relocated before anything is written" "exit $status, tmp=${tmp}"
+fi
+
+echo
+echo "${pass} passed, ${fail} failed"
+[ "$fail" -eq 0 ]

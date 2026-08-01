@@ -863,7 +863,7 @@ fi
 
 # Balanced, boolean-correct, and still not JSON. Neither shape can be trusted
 # to be the whole listing.
-for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]'; do
+for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]'; do
   stderr="${workdir}/mcp-badjson.err"
   argv_log="${workdir}/argv-mcp-badjson.log"
   FAKE_MCP_LIST="$bad_json" FAKE_ARGV_LOG="$argv_log" \

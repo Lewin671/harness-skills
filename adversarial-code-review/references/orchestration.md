@@ -25,7 +25,23 @@ checkout of a commit, so without an explicit patch to carry, the attack
 phase reads different code than the review phase.
 
 ```bash
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-XXXXXX")"
+# Everything Phase 0 writes goes under this: the index copy, the patch, both
+# snapshots. A TMPDIR inside the worktree — or inside its git storage, which a
+# linked worktree keeps elsewhere — would put all of it in the tree being
+# reviewed, before the baseline that could disclose it exists. Relocate, and
+# refuse if there is nowhere left.
+acr_root="${TMPDIR:-/tmp}"
+acr_root="$(cd "$acr_root" 2>/dev/null && pwd -P)" || acr_root=/tmp
+for acr_repo in "$(git rev-parse --show-toplevel)" \
+                "$(git rev-parse --absolute-git-dir)" \
+                "$(git rev-parse --path-format=absolute --git-common-dir)"; do
+  acr_repo="$(cd "$acr_repo" 2>/dev/null && pwd -P)" || continue
+  case "${acr_root}/" in "${acr_repo}"/*|"${acr_repo}/") acr_root=/tmp ;; esac
+  case "$(cd /tmp && pwd -P)/" in "${acr_repo}"/*|"${acr_repo}/")
+    echo "no scratch directory outside the repository; set TMPDIR elsewhere" >&2; exit 1 ;;
+  esac
+done
+tmp="$(mktemp -d "${acr_root}/acr-XXXXXX")"
 
 # Read git without letting it write the repository. A diff against the WORKING
 # TREE refreshes stale stat data and rewrites .git/index — with or without
@@ -68,14 +84,21 @@ git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" > "${tmp}/patch.
 # Untracked files exist only in the working tree, so they belong to the
 # uncommitted scope alone. Added without touching the index.
 if [ "${untracked}" = 1 ]; then
-  git ls-files --others --exclude-standard -z | while IFS= read -r -d '' f; do
-    # Exit 1 means "they differ", which is the whole point; anything above it
-    # is a real failure. `|| true` swallowed both, so an unreadable or
-    # vanished file was dropped from the patch while the manifest below still
-    # named it — included_paths would then describe something the bound patch
-    # does not contain.
-    git diff --no-ext-diff --no-textconv --no-index --binary -- /dev/null "${f}" >> "${tmp}/patch.diff"
-    [ "$?" -le 1 ] || { echo "capture failed on ${f}" >&2; return 1; }
+  # Read the list FIRST, then loop. A `while` on the right of a pipe runs in a
+  # subshell, so nothing it does can stop the outer shell; and the status has
+  # to be captured with `|| st=$?` because exit 1 here is the ordinary case —
+  # `--no-index` reports "they differ" that way, and under `set -e` a bare
+  # invocation aborts on it. Anything ABOVE 1 is a real failure, and
+  # swallowing it drops a file from the patch while the manifest still names
+  # it: included_paths would then describe something the bound patch lacks.
+  acr_untracked=()
+  while IFS= read -r -d '' f; do acr_untracked+=("$f"); done \
+    < <(git ls-files --others --exclude-standard -z)
+  for f in ${acr_untracked[@]+"${acr_untracked[@]}"}; do
+    st=0
+    git diff --no-ext-diff --no-textconv --no-index --binary -- /dev/null "${f}" \
+      >> "${tmp}/patch.diff" || st=$?
+    [ "${st}" -le 1 ] || { echo "capture failed on ${f}" >&2; exit 1; }
   done
 fi
 
@@ -83,8 +106,19 @@ patch_sha256="$(shasum -a 256 "${tmp}/patch.diff" | cut -d' ' -f1)"
 
 # included_paths is REQUIRED and the script refuses to start without it, so it
 # belongs here and not only in the filtered recipe below. Same endpoints again.
-included="$( { git diff --name-only "${diff_args[@]}"
-               [ "${untracked}" = 1 ] && git ls-files --others --exclude-standard; } | sort -u)"
+#
+# An `if`, not `&&`: with `untracked=0` the group's last command is a FALSE
+# test, so under `set -o pipefail` this otherwise perfect pipeline reports
+# failure. And each producer propagates explicitly, because `sort` succeeding
+# would otherwise hide a `git diff` that did not.
+acr_manifest() {                       # $1.. = extra pathspec arguments
+  { git diff --name-only "${diff_args[@]}" ${1+"$@"} || exit 1
+    if [ "${untracked}" = 1 ]; then
+      git ls-files --others --exclude-standard ${1+"$@"} || exit 1
+    fi
+  } | sort -u
+}
+included="$(acr_manifest)" || { echo "manifest capture failed" >&2; exit 1; }
 excluded=""
 ```
 
@@ -212,20 +246,23 @@ git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" -- . "${excludes
 # knows about .gitignore, so it will happily let an untracked vendor/ path or
 # lockfile through the exclusion list.
 if [ "${untracked}" = 1 ]; then
-  git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
-    while IFS= read -r -d '' f; do
-      git diff --no-ext-diff --no-textconv --no-index --binary -- /dev/null "${f}" >> "${tmp}/patch.diff"
-      [ "$?" -le 1 ] || { echo "capture failed on ${f}" >&2; return 1; }
-    done
+  acr_untracked=()
+  while IFS= read -r -d '' f; do acr_untracked+=("$f"); done \
+    < <(git ls-files --others --exclude-standard -z -- . "${excludes[@]}")
+  for f in ${acr_untracked[@]+"${acr_untracked[@]}"}; do
+    st=0
+    git diff --no-ext-diff --no-textconv --no-index --binary -- /dev/null "${f}" \
+      >> "${tmp}/patch.diff" || st=$?
+    [ "${st}" -le 1 ] || { echo "capture failed on ${f}" >&2; exit 1; }
+  done
 fi
 
 patch_sha256="$(shasum -a 256 "${tmp}/patch.diff" | cut -d' ' -f1)"
 
-# Both manifests, from the same pathspecs that produced the patch.
-included="$( { git diff --name-only "${diff_args[@]}" -- . "${excludes[@]}"
-               [ "${untracked}" = 1 ] && git ls-files --others --exclude-standard -- . "${excludes[@]}"; } | sort -u)"
-everything="$( { git diff --name-only "${diff_args[@]}"
-                 [ "${untracked}" = 1 ] && git ls-files --others --exclude-standard; } | sort -u)"
+# Both manifests, from the same pathspecs that produced the patch, through the
+# same helper — same pipefail and propagation reasoning as above.
+included="$(acr_manifest -- . "${excludes[@]}")" || { echo "manifest capture failed" >&2; exit 1; }
+everything="$(acr_manifest)" || { echo "manifest capture failed" >&2; exit 1; }
 excluded="$(comm -23 <(printf '%s\n' "${everything}") <(printf '%s\n' "${included}"))"
 ```
 
