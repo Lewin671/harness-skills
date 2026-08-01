@@ -211,6 +211,18 @@ function makeAgent(state, s) {
       // Twenty-five candidates outside any region, then one inside a region
       // triage flagged before any finder ran. Equal severity and confidence,
       // so only the high-risk term can save it from the cap.
+      // Twenty-five LOW-confidence candidates that sort ahead of one HIGH
+      // confidence candidate. Same severity, none in a region: only the
+      // confidence term can save the last one from the cap.
+      if (s.confidenceCap) {
+        if (lens !== 'security') return { candidates: [], additional_high_risk_regions: [] }
+        const many = []
+        for (let i = 0; i < 25; i++) {
+          many.push({ ...cand('bulk.js', 100 + i, 'minor', 'present_code', `low ${String(i).padStart(2, '0')}`), confidence: 'low' })
+        }
+        many.push({ ...cand('bulk.js', 200, 'minor', 'present_code', 'the confident one'), confidence: 'high' })
+        return { candidates: many, additional_high_risk_regions: [] }
+      }
       if (s.regionCap) {
         if (lens !== 'security') return { candidates: [], additional_high_risk_regions: [] }
         const many = []
@@ -303,6 +315,17 @@ function makeAgent(state, s) {
         const mk = (id) => ({ candidate_id: id, semantics: predicate('supports_candidate'), reachability: predicate('supports_candidate'),
           contract_violation: predicate('supports_candidate'), strongest_refutation: 'none', unsettled_predicates: ['reachability'], grounding: 'strong' })
         return l.includes('minors') ? { verdicts: ids.map(mk) } : mk(ids[0])
+      }
+      // A clean, uncontested falsification: one predicate falsified with cited
+      // code, nothing left unsettled, strongly grounded. Without this nothing
+      // in the suite ever reaches state `refuted`, so every assertion about
+      // rejected candidates was counting zero against zero.
+      if (s.verifierCleanRefute) {
+        const ids = expectedIds(prompt)
+        const mkR = (id) => ({ candidate_id: id, semantics: predicate('falsifies_candidate'),
+          reachability: predicate('supports_candidate'), contract_violation: predicate('supports_candidate'),
+          strongest_refutation: 'the guard runs before this path', unsettled_predicates: [], grounding: 'strong' })
+        return l.includes('minors') ? { verdicts: ids.map(mkR) } : mkR(ids[0])
       }
       if (s.verifierAllUnsettled) {
         const ids = expectedIds(prompt)
@@ -443,6 +466,14 @@ function makeAgent(state, s) {
           { candidate_id: ids[0], state: 'substantiated', final_severity: 'critical', decisive_evidence: 'first', grounding: 'strong' },
           { candidate_id: ids[0], state: 'refuted', final_severity: 'minor', decisive_evidence: 'duplicate', grounding: 'strong' },
         ] }
+      }
+      // Substantiated AND graded critical, whatever tier the candidate was
+      // verified at. A minor is verified in the cheap batch, so this is the
+      // positive case for "verified below its final severity" — which nothing
+      // else in the suite produced.
+      if (s.adjAllCritical) {
+        return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'substantiated', final_severity: 'critical',
+          decisive_evidence: 'stub', grounding: 'strong' })) }
       }
       // Unresolved, but graded above the tier its verification was bought at.
       // Nothing here is a finding, so nothing may be counted as one.
@@ -867,6 +898,27 @@ R.push(await run('cap keeps the candidate inside a flagged region', { ...BASE, b
     const all = [...(res.candidate_results || []), ...(res.found_but_not_verified || [])]
     return all.some((x) => x.anchor === 'pay.js:20')
       || 'the cap dropped the candidate inside a high-risk region and kept ones outside it' } }))
+// Confidence is the third ranking term and the only one separating these.
+R.push(await run('cap keeps the more confident candidate', { ...BASE, budget_wu: 200 }, { confidenceCap: true,
+  expect: (res) => {
+    if (!(res.ledger.invalid_candidates || []).some((x) => /exceeded/.test(x.reason))) return 'the cap never fired, so the ranking is untested'
+    const all = [...(res.candidate_results || []), ...(res.found_but_not_verified || [])]
+    return all.some((x) => x.anchor === 'bulk.js:200')
+      || 'the cap dropped the high-confidence candidate and kept low-confidence ones' } }))
+// Something must actually reach `refuted`, or every assertion about rejected
+// candidates compares zero to zero.
+R.push(await run('a candidate is genuinely refuted', { ...BASE }, { verifierCleanRefute: true, adjAlwaysRefute: true,
+  expect: (res) => {
+    if (!res.refuted.length) return 'no candidate reached refuted, so the rejection path is untested'
+    return res.disclosure_checklist.rejected_candidates === res.refuted.length
+      || `checklist says ${res.disclosure_checklist.rejected_candidates} rejected, results say ${res.refuted.length}` } }))
+// And something must actually be verified BELOW its final severity.
+R.push(await run('finding graded above its verification tier', { ...BASE }, { adjAllCritical: true,
+  expect: (res) => {
+    const below = (res.candidate_results || []).filter((x) => x.verified_below_final_severity)
+    if (!below.length) return 'no finding was graded above its tier, so the positive path is untested'
+    return res.disclosure_checklist.findings_verified_below_final_severity === below.length
+      || `checklist says ${res.disclosure_checklist.findings_verified_below_final_severity}, results say ${below.length}` } }))
 R.push(await run('anchor does not match file:line', { ...BASE }, { anchorMismatch: true,
   expect: (res) => res.ledger.invalid_candidates.some((x) => /anchor/.test(x.reason))
     || 'a candidate whose anchor names a different file was accepted' }))
@@ -1165,10 +1217,26 @@ for (const r of R) {
   }
   // The checklist exists to make omission detectable, so every ledger array
   // it claims to count must actually agree with the ledger.
-  for (const key of ['coverage_risks', 'unknown_verdict_ids', 'malformed_results', 'agent_failures', 'forced_unresolved']) {
+  // Every checklist key that mirrors a ledger array, including the three whose
+  // names differ from the array they count — those were omitted, and zeroing
+  // any of them left the suite green.
+  const CHECKLIST_TO_LEDGER = {
+    coverage_risks: 'coverage_risks', unknown_verdict_ids: 'unknown_verdict_ids',
+    malformed_results: 'malformed_results', agent_failures: 'agent_failures',
+    forced_unresolved: 'forced_unresolved', actions_deferred: 'deferred',
+    candidates_dropped_invalid: 'invalid_candidates',
+    terminal_overrides: 'terminal_evidence_overrides',
+  }
+  // The depth block carries its own copy of the deferral count; zeroing that
+  // one is invisible to the checklist comparison below.
+  if (r.res.verification_depth && r.res.ledger
+      && r.res.verification_depth.actions_deferred !== (r.res.ledger.deferred || []).length) {
+    fail++; problems.push(`${r.name}: verification_depth.actions_deferred=${r.res.verification_depth.actions_deferred} but ledger.deferred has ${(r.res.ledger.deferred || []).length}`)
+  }
+  for (const [key, arr] of Object.entries(CHECKLIST_TO_LEDGER)) {
     if (r.res.disclosure_checklist && r.res.ledger
-        && r.res.disclosure_checklist[key] !== (r.res.ledger[key] || []).length) {
-      fail++; problems.push(`${r.name}: checklist ${key}=${r.res.disclosure_checklist[key]} but ledger has ${(r.res.ledger[key] || []).length}`)
+        && r.res.disclosure_checklist[key] !== (r.res.ledger[arr] || []).length) {
+      fail++; problems.push(`${r.name}: checklist ${key}=${r.res.disclosure_checklist[key]} but ledger.${arr} has ${(r.res.ledger[arr] || []).length}`)
     }
   }
   const dc0 = r.res.disclosure_checklist

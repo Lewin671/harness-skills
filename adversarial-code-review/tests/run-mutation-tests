@@ -220,6 +220,13 @@ mutate "tie-breaks are a total order" "const cmp = (a, b) => (a < b ? -1 : a > b
 mutate "optional purchases respect tokens" "  if (!admitTokens(wu)) return false" "  " 2
 mutate "remaining verifiers respect tokens" "  if (admitTokens(verifyPendingWU + v.wu)) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }" "  if (true) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }"
 mutate "ranking sees flagged regions" "  + (inKnownRegion(c) ? 50 : 0)" "  + (c.in_high_risk_region ? 50 : 0)"
+mutate "confidence ranks bounded selections" "  + (CONF_RANK[c.confidence] || 0) * 10" "  + 0"
+mutate "depth counts deferrals" "    actions_deferred: ledger.deferred.length," "    actions_deferred: 0,"
+mutate "checklist counts deferrals" "    actions_deferred: ledger.deferred.length," "    actions_deferred: 0," 2
+mutate "checklist counts dropped candidates" "    candidates_dropped_invalid: ledger.invalid_candidates.length," "    candidates_dropped_invalid: 0,"
+mutate "checklist counts terminal overrides" "    terminal_overrides: ledger.terminal_evidence_overrides.length," "    terminal_overrides: 0,"
+mutate "checklist counts rejections" "    rejected_candidates: results.filter((r) => r.state === 'refuted').length," "    rejected_candidates: 0,"
+mutate "under-tier findings are flagged" "    verified_below_final_severity: Boolean(state === 'substantiated' && v && v.final_severity" "    verified_below_final_severity: Boolean(false && v && v.final_severity"
 
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
@@ -248,7 +255,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=114
+EXPECTED_TOTAL=121
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1
