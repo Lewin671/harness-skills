@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Contract tests for review-workflow.js.
+#
+# Stubs the Workflow globals (agent, parallel, phase, log, args, budget) and
+# runs the script's deterministic logic end to end. It does not judge agent
+# output quality — it checks what must hold no matter what the agents say:
+# control flow, budget arithmetic, fail-closed evidence handling, identity
+# reconciliation and result shape. Wrapping the script in an async function
+# body, the way the real harness does, makes it a parse check too.
+#
+# Exit 0 clean, 1 on any failed invariant.
+set -euo pipefail
+exec node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/workflow.test.mjs"

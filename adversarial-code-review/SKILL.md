@@ -4,241 +4,168 @@ description: >-
   Claude Code ONLY — requires the Workflow and Agent tools; do not use
   in Codex or any other harness. Use only when the user explicitly
   names adversarial-code-review or explicitly asks for its
-  falsification contract: severity-tiered skeptic refutation, red-team
-  counterexamples or executable failing tests in throwaway worktrees,
-  and a residual-risk ledger that records killed findings. For
-  ordinary, quick, thorough, deep, or high-effort code review, use
-  Claude Code's native /code-review flow instead, including its
-  deepest tier when appropriate. Pure review — it outputs a findings
-  report and never modifies the working tree; do not use when fixes
-  are wanted.
+  falsification contract: candidates that must survive adversarial
+  refutation, a separate adjudicator that assigns substantiated /
+  refuted / unresolved, selective executable counterexamples run in
+  throwaway worktrees against the exact reviewed patch, and a ledger
+  that discloses rejected candidates, unverified targets and the
+  coverage-accuracy-cost tradeoff the run actually made. For ordinary,
+  quick, thorough, deep, or high-effort code review, use Claude Code's
+  native /code-review flow instead, including its deepest tier when
+  appropriate. Pure review — it produces a report and applies no fixes:
+  it issues no write instructions, executable attacks run in throwaway
+  worktrees, and changes to the parent tree are detected and disclosed
+  rather than prevented. Do not use when fixes are wanted.
 harnesses: [claude-code]
 ---
 
 # Adversarial Code Review
 
-**Harness gate — read first.** This skill runs ONLY in Claude Code
-with the Workflow and Agent tools available. If you are any other
-agent, or those tools are missing, abort now: tell the user this
-skill cannot run in this harness, and stop. Do not substitute a
-degraded single-agent review, do not execute any phase below, and do
-not run or modify anything in the user's working tree as a fallback.
+**Harness gate — read first.** This skill runs ONLY in Claude Code with
+the Workflow and Agent tools available. If you are any other agent, or
+those tools are missing, abort now: tell the user this skill cannot run
+in this harness, and stop. Do not substitute a degraded single-agent
+review, do not execute any phase below, and do not run or modify
+anything in the user's working tree as a fallback.
 
-Review a code change with two opposing adversarial mechanisms layered
-on top of a multi-lens finder pass:
+A code review built around one idea: **nothing is a finding until
+something tried to kill it and failed on the evidence.**
 
-- **Skeptic refutation** raises precision: every finding must survive
-  agents whose only job is to prove it wrong.
-- **Red-team attack** raises recall: agents try to construct concrete
-  inputs, call sequences, or timings that break the new code — with a
-  real failing test when the repo supports it.
+Three layered documents, and you need all three:
 
-The deliverable is a report of verified findings plus explicit
-residual risks. Never apply fixes; fixing is a separate task the user
-must request afterwards.
+- [references/contract.md](./references/contract.md) — what a candidate
+  must contain, what refuting one requires, how attacks are graded,
+  what the report must disclose. Harness-neutral.
+- [references/orchestration.md](./references/orchestration.md) — how
+  Claude Code executes that contract: patch capture, profiles, the cost
+  model, model tiers, the attack protocol.
+- [review-workflow.js](./review-workflow.js) — the bundled Workflow
+  script that runs it. **Invoke this file; do not rebuild the pipeline
+  from prose.** A procedure regenerated on every run is not auditable,
+  and auditability is what this skill sells.
 
 ## Positioning
 
-This skill is an explicit opt-in, not the default deep review. Reach
-for it only when the user names it or asks for its falsification
-contract in their own words; do not infer invocation from "thorough",
-"deep", "verified", or "high effort" — those route to the native
-/code-review flow. What this skill guarantees beyond that flow is an
-auditable falsification *procedure*: every reported finding either
-survived named skeptics or carries a graded red-team counterexample
-(`reproduced` or `plausible`), red-team attacks are graded and
-reported even when they fail, and killed findings stay visible in the
-residual-risk ledger.
+An explicit opt-in, not the default deep review. Reach for it only when
+the user names it or asks for its falsification contract in their own
+words. Do not infer invocation from "thorough", "deep", "verified", or
+"high effort" — those route to the native `/code-review` flow.
+
+What it guarantees beyond that flow:
+
+- Finders propose candidates; a separate **adjudicator** assigns state.
+  No agent grades its own work, and "we could not refute it" never
+  silently becomes "verified".
+- **Three states**, not two: `substantiated`, `refuted`, `unresolved`.
+  The third is the honest home for everything under-specified or
+  external, which a two-state pipeline has to either inflate or hide.
+- Executable counterexamples are **bound to the exact reviewed patch**,
+  preflighted, and run against a control — so `reproduced` means
+  reproduced.
+- Rejected candidates, unprobed regions, unfunded targets and the
+  achieved coverage/accuracy/cost tradeoff are all **disclosed**.
 
 ## Hard Requirements
 
-- Claude Code with the Workflow and Agent tools available — otherwise
-  abort per the harness gate above. This skill explicitly instructs
-  you to call Workflow — the user invoking this skill is the
+- Claude Code with the Workflow and Agent tools. This skill explicitly
+  instructs you to call Workflow — the user invoking it is the
   multi-agent opt-in.
-- Never modify the user's working tree or index. Red-team tests run
-  only in throwaway git worktrees (`isolation: 'worktree'` — both the
-  Agent tool and Workflow `agent()` accept it, whichever launches the
-  red-team agent), discarded after the run.
-- Tier every subagent's `model` per the defaults below. The tier
-  names (`haiku`/`sonnet`/`opus`) are rolling aliases and role
-  *defaults*, not permanent model identities: pass only values the
-  live Workflow/Agent schema declares, map a missing alias to the
-  nearest declared tier, and announce that substitution before
-  launching. Two rules override habit: the *verification floor* — an agent that judges or
-  refutes another agent's findings runs at least the tier that
-  produced them, higher when its verdict is final — and *escalate
-  once* — a weak or uncertain result is rerun exactly one tier up,
-  never retried at the same settings and never silently accepted.
+- **No write instructions outside throwaway worktrees**, and the
+  parent tree's state is recorded before and after so any unexpected
+  change is disclosed. That is detection, not enforcement — Claude Code
+  has no tool-restriction knob on `agent()`. Say it that way;
+  orchestration.md §7 has the exact wording and why a stronger claim
+  would be false.
+- **Review only.** Output a report; never apply a fix. Fixing is a
+  separate task the user must ask for afterwards.
+- Three quantities trade off in every run — **coverage** (defects seen
+  at all), **accuracy** (claims that survive scrutiny), and **token
+  cost**. Choose deliberately, announce the choice, and report what it
+  actually bought.
 
-## Phase 0 — Scope and Effort
+## Phase 0 — Before spawning anything
 
-Resolve the review target in this priority order, and state the chosen
-target before spawning anything:
+Do this in the main agent; the Workflow script cannot run commands.
 
-1. A range, PR, or paths the user named explicitly.
-2. Uncommitted changes (staged + unstaged) if any exist.
-3. Current branch vs `merge-base` with the default branch.
+1. **Resolve the target**: paths or a range the user named → uncommitted
+   changes → branch versus merge-base. State the choice. Empty diff →
+   stop and ask.
+2. **Capture and bind the patch** — write it outside the repo, record
+   `base_sha` and its sha256. This is not bookkeeping: a git worktree is
+   a clean checkout that carries neither uncommitted changes nor
+   gitignored dependencies, so without an explicit patch the attack
+   phase would read different code than the review phase. Exact
+   commands, including the read-only way to include untracked files, in
+   orchestration.md §1.
+3. **Exclude and partition**: drop lockfiles, `vendor/`, generated
+   clients, snapshots and build output, and name the exclusions. Beyond
+   roughly 1,500 changed lines or eight modules, partition or ask the
+   user to narrow.
+4. **Record the pre-run tree state** for the write-safety check.
+5. **Pick a profile and budget** — `balanced` (default), `recall-first`,
+   or `precision-first`; default budget 48 weighted units. Changed-line
+   count does not choose the profile; it only estimates cost.
+6. **Announce** the target, profile, budget, model roles and the
+   estimated launch count before spending anything. A typical run lands
+   around 16–19 subagent launches, above this session's default
+   workflow-size guideline — say so.
 
-If none of these yields a non-empty diff, stop and ask.
+Then call the `Workflow` tool with `scriptPath` set to
+`review-workflow.js` beside this file (usually
+`~/.claude/skills/adversarial-code-review/review-workflow.js`) and the
+args listed in orchestration.md §8. If that path does not exist, locate
+the script beside this SKILL.md rather than reconstructing it.
 
-Size the diff and pick an effort tier. An explicit user request
-("compact pass" / "maximum coverage") overrides line counts. Announce
-the chosen tier, the model role assignments, and the planned fan-out
-before spawning anything; broadening coverage beyond the tier's
-definition requires the user's approval — never silently escalate.
+The script enforces the schemas, the model floors, the weighted budget
+and the wave reservations. It never judges prose: anything requiring
+judgement is a field an agent emits.
 
-| Tier | Trigger | Pipeline | Relative spend |
-|------|---------|----------|------|
-| small | < ~200 changed lines | Compact contract, no workflow: one finder (default: sonnet) via the Agent tool, then one skeptic (default: sonnet) over its findings; red team runs only if a critical finding survives the skeptic. The Residual Risks ledger is still mandatory. If the finder flags the change as high-risk (auth, concurrency, money, data loss), recommend the full pipeline in the report. | low |
-| medium | default | Full pipeline; red team attacks only surviving critical findings. | medium |
-| large | > ~800 lines, or user asked for maximum coverage | Full pipeline; red team also attacks surviving major findings and every triage-flagged high-risk region. | high |
+## Reading the script's result
 
-The spend column is deliberately relative: per-run cost varies with
-model pricing, diff size, findings, and red-team test loops, so a
-fixed currency estimate would only go stale. The concrete cost driver
-is the fan-out you announce up front.
+It returns structured data with a `status`, and three of those statuses
+mean **stop and report, do not improvise**:
 
-For medium and large, orchestrate phases 1–3 as a single Workflow
-invocation (`meta.phases`: Triage, Find, Refute, Attack). Triage is a
-barrier (it selects the lenses); finders run parallel; the cross-lens
-dedup before refutation is a justified barrier. There is NO barrier
-between refutation and attack: each finding's red-team agent launches
-as soon as that finding survives its skeptics (pipeline per finding).
-On the large tier, high-risk-region red-team agents depend only on
-triage — launch them immediately after triage, in parallel with the
-finders.
-
-## Phase 1 — Triage (one agent, default: haiku)
-
-One cheap agent reads the diff and returns structured output:
-
-- `change_kind`: bug fix / feature / refactor / config / perf / mixed.
-- `lenses`: 3–6 entries from the menu below, chosen for this change —
-  not the whole menu. A refactor needs behavior-equivalence lenses; a
-  config change needs environment-difference lenses.
-- `high_risk_regions`: file/line ranges where a defect would be severe
-  (changed locking order, boundary arithmetic, auth checks, retry or
-  pagination logic…). These are later red-team targets and are
-  independent of whether any finding lands there.
-- `fast_tests`: whether the repo has test infrastructure a subagent
-  could run a single new test in within ~2 minutes (look for test
-  dirs, runner config, lockfiles — do not run the full suite).
-
-Lens menu: logic correctness · boundary & error handling ·
-concurrency/async · security · performance · API & backward
-compatibility · test adequacy · data migration & config.
-
-## Phase 2 — Finders (one agent per lens, parallel, default: sonnet)
-
-Each finder reviews the diff through exactly one lens and may read any
-file in the repo for context. Prompt requirements:
-
-- **Coverage, not filtering**: report everything found, including
-  uncertain or low-severity items, with confidence marked —
-  downstream verification does the filtering. Do not self-censor.
-- **Evidence required**: every finding must cite `file:line` in the
-  diff and quote the actual code. A finding without a concrete anchor
-  is invalid output.
-- Structured output, one record per finding:
-  `{file, line, title, severity: critical|major|minor,
-  confidence: high|medium|low, evidence, lens}`.
-
-After all finders return, dedup in plain code in the script: findings
-on the same root cause at the same location collapse to one record,
-keeping the highest severity and merging evidence.
-
-## Phase 3a — Skeptic Refutation (every finding)
-
-Skeptics get one finding (or batch) plus repo access. The prompt is
-unidirectional — never "is this finding correct?" but:
-
-> Try to prove this finding wrong. Read the implementations, callers,
-> and tests it depends on. Every refutation must be grounded in code
-> you actually read and cited. If the finding itself lacks concrete
-> code evidence, refute it by default. If you cannot refute it with
-> evidence, it survives.
-
-Tiered by severity:
-
-- **minor** — batch all minor findings to one skeptic (default:
-  sonnet), which returns a per-finding verdict list.
-- **major** — one skeptic (default: sonnet) per finding. If its
-  verdict is uncertain or weakly grounded in cited code, escalate
-  that one finding to a skeptic one tier up (default: opus; escalate
-  once); if that verdict is still weak, surface the uncertainty. On
-  the large tier, majors go straight to the critical panel below.
-- **critical** — three skeptics (default: sonnet) per finding, each with
-  a distinct lens: *code semantics* (does the implementation actually
-  behave as claimed), *reachability* (can this path trigger under
-  real conditions), *author intent* (do diff context and tests show
-  this is deliberate). Majority refute → the finding is killed.
-
-Verdict schema: `{finding_id, refuted: bool, reasoning, evidence}`.
-Killed findings are not discarded silently — they go to the report's
-residual-risks section as one-liners.
-
-## Phase 3b — Red Team
-
-Targets: (a) every surviving critical finding on the medium tier;
-surviving critical and major findings on the large tier; (b) on the
-large tier only, additionally every triage `high_risk_region` —
-**even regions with zero findings**.
-Channel (b) is what catches bugs no finder saw; it is the reason the
-large tier costs more. One agent per target, at a declared tier above
-the finders (default: opus, or the highest tier the live schema
-declares) — these verdicts are final, and the verification floor
-requires them to outrank the agents that produced the findings. If
-the finders already ran at the schema's ceiling, run the red team at
-that same ceiling with raised effort where the launcher supports it,
-and note in the report that the floor was met at equal tier.
-
-The task is to construct a concrete counterexample — an input, call
-sequence, or interleaving that makes the new code misbehave:
-
-- When the repository supports it (triage reported `fast_tests`), the
-  agent **must** create and run a focused failing test in an isolated
-  worktree (`isolation: 'worktree'`) and report the result. Never
-  write into the user's tree.
-- Only when executable reproduction is unavailable, produce a
-  reasoning counterexample: exact input, the step-by-step trace
-  through the new code, and expected vs actual behavior.
-
-Output grade: `reproduced` (test actually fails — attach the test
-code) · `plausible` (concrete counterexample, not executed — valid
-only where executable reproduction was unavailable) · `held` (tried,
-could not break it — name the attack vectors attempted). A failed
-attack is reported as `held`, never silently dropped.
-A `reproduced` result is terminal evidence: it enters the report at
-the top regardless of any skeptic verdict on the same code.
+| `status` | Meaning | What to do |
+|----------|---------|------------|
+| `ok` | The pipeline completed | Write the report — including when it found nothing. A zero-finding run still probes the high-risk regions and still owes the full ledger; silence only means something alongside the coverage that produced it. |
+| `invalid_args` | The patch was not captured or bound | Redo Phase 0. |
+| `budget_too_small` | A floor does not fit — the coverage floor, or verifying and adjudicating every candidate | Report the shortfall. Do **not** run a degraded review. |
+| `scope_too_large` | Those floors cost over twice the budget | Narrowing the scope is the fix, not a bigger budget. Report the plan and ask. |
+| `triage_failed` / `adjudication_failed` | A load-bearing role did not return | Say so plainly. Never promote candidates on finder output alone. |
 
 ## Phase 4 — Report
 
-Write the report as terminal markdown in your final message. Order:
-`reproduced` findings first, then by severity. Each finding shows:
+Write it as terminal markdown in your final message, using the four
+sections of contract.md §6, headed by the three tradeoff lines and the
+frontier sentence from that same section, plus scope, `base_sha`, short
+patch hash, profile and model roles.
 
-- severity, `file:line`, title, one-paragraph explanation;
-- verification status — *reproduced by failing test* (include the
-  test code), *survived 3-skeptic panel (N refute votes)*, or
-  *survived single-skeptic check*; include *escalated a tier,
-  unresolved* when an escalated major remains uncertain;
-- a suggested direction for the fix (one sentence, not a patch).
+Then run the post-run write-safety check and disclose any unexpected
+difference in the user's tree. Never silently revert it.
 
-End with a mandatory **Residual Risks** section — on every tier,
-including a zero-finding review: lenses not run;
-killed findings (one line each, so a wrong kill is recoverable);
-high-risk regions the red team did not attack and why; red-team
-targets graded `held`; anything truncated or skipped. No silent caps.
+Two things the report may never say: a defect-coverage percentage — the
+denominator is unknown — and "verified" for anything the adjudicator
+did not mark `substantiated`. contract.md §7 lists the rest.
 
 If the user then asks to fix the findings, that is a new task outside
-this skill — re-read the relevant code fresh rather than trusting the
+this skill: re-read the relevant code fresh rather than trusting the
 report's snippets.
 
-## Cost Levers
+## Boundaries
 
-The red team dominates both cost and wall-clock (each target is an
-agentic loop that may build and run a test). Keep it pointed only at
-the targets defined above, and never put a barrier in front of it
-that the data flow doesn't require. The triage and skeptic defaults
-(haiku/sonnet) are deliberate — do not silently upgrade them;
-escalate a single weak verdict one tier up (escalate once) instead.
+- **Complementary to `codex-second-opinion`, not a substitute.** That
+  skill buys model-family diversity from a single strong external
+  reviewer; this one buys adversarial depth within one family. Running
+  both on a high-stakes change is reasonable — but launch them from the
+  same neutral scope before either sees the other's output, or the
+  second one is a cross-check, not an independent opinion.
+- **The expensive half is bought selectively.** Executable attacks cost
+  roughly ten times a finder. They are spent on evidence — a
+  constructed counterexample, or a critical candidate where terminal
+  evidence changes a decision — never sprayed across every target.
+- **Poor fit** for changes whose correctness lives outside the
+  repository (IaC, deployment ordering, third-party behaviour), for
+  performance, numerical or flakiness regressions where one failing
+  test is the wrong evidence model, and for frontend visual or
+  accessibility work, which has no lens here. Say so rather than
+  producing a confident-sounding reasoning-only report.
