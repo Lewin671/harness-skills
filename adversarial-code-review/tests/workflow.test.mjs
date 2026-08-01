@@ -1113,7 +1113,11 @@ R.push(await run('emergent candidate outside its region', { ...BASE }, { emergen
     if (!em) return 'the emergent candidate was discarded instead of kept'
     if (em.from_region) return `bulk.js:3 was credited to ${em.from_region}, which covers pay.js:10-40`
     const claiming = res.regions.find((r) => r.emergent_candidate_id === em.candidate_id)
-    return !claiming || `region ${claiming.target_id} still claims ${em.candidate_id}`
+    if (claiming) return `region ${claiming.target_id} still claims ${em.candidate_id}`
+    const b = res.search_breadth
+    if (b.emergent_candidates !== 0) return `the breadth line credits ${b.emergent_candidates} emergent candidate(s) to a region that found none there`
+    return b.emergent_candidates_outside_their_region === 1
+      || `the out-of-region candidate is counted ${b.emergent_candidates_outside_their_region} time(s), not once`
   } }))
 // Which supplemental lens gets bought must not depend on which finder
 // answered first. Same votes, different speakers, same purchase.
@@ -1129,6 +1133,41 @@ R.push(await run('emergent candidate outside its region', { ...BASE }, { emergen
         if (pick !== flippedPick) return `finder order changed the purchase: "${pick}" vs "${flippedPick}"`
         return pick === 'performance' || `both runs bought "${pick}", but the lens two finders asked for was "performance"`
       } }))
+}
+// patch_path reaches the attack agent as a literal command to run, and Phase
+// 0 derives it from TMPDIR, which the caller controls. Fencing cannot help —
+// the point of the value is to be executed — so it is quoted.
+{
+  // The embedded single quote is the part a naive `'` + v + `'` gets wrong:
+  // it closes the quote and hands the rest to the shell.
+  const nasty = "/tmp/acr dir;touch /tmp/pwn/$(id)/`whoami`/it's/p.diff"
+  const safe = `'${nasty.split("'").join("'\\''")}'`
+  R.push(await run('patch path carries shell syntax', { ...BASE, patch_path: nasty }, {
+    expect: (res, state) => {
+      const attacks = state.prompts.filter((x) => x.label && x.label.startsWith('attack:'))
+      if (!attacks.length) return 'no attack prompt was built, so the quoting is untested'
+      // Both sites: the sha256 check in step 1 and `git apply` in step 4.
+      for (const site of [`git apply ${nasty}`, `${nasty} equals`]) {
+        const bare = attacks.find((x) => x.prompt.includes(site))
+        if (bare) return `${bare.label} handed the attacker an unquoted patch path at "${site}"`
+      }
+      for (const site of [`git apply ${safe}`, `${safe} equals`]) {
+        const missing = attacks.find((x) => !x.prompt.includes(site))
+        if (missing) return `${missing.label} did not carry the patch path safely quoted at "${site}"`
+      }
+      return true
+    } }))
+}
+// Every REQUIRED binding on its own. One scenario that omits several keys at
+// once cannot regress: drop any single key from REQUIRED and the others still
+// make that scenario return invalid_args.
+for (const key of ['scope', 'base_sha', 'patch_path', 'patch_sha256', 'repo_root', 'included_paths']) {
+  R.push(await run(`missing ${key} alone`, (() => { const a = { ...BASE }; delete a[key]; return a })(), {
+    expect: (res) => {
+      if (res.status !== 'invalid_args') return `omitting ${key} returned ${res.status}`
+      return (res.missing || []).includes(key)
+        || `${key} was not reported as a missing required argument (${JSON.stringify(res.missing || res.detail)})`
+    } }))
 }
 // A reviewed path may legitimately be named `__proto__`. On a plain object
 // that key sets the prototype instead of creating an own property, so the
@@ -1319,6 +1358,24 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
       return attacks <= 1 || `all ${attacks} executable attacks were launched at the prior rate despite 20x drift`
     }))
 
+  // The frontier must name MANDATORY accuracy work over optional coverage
+  // even when the ledger recorded the optional deferral first. At 46wu with
+  // 4x verifier drift a region probe is deferred in wave 3 and a verifier in
+  // wave 4, and nothing was trimmed — so ledger order alone would offer the
+  // probe, which is the one thing the next increment does not buy.
+  {
+    const df = drainer(46000, 46, 1, { 'verify:': 4 })
+    R.push(await run('frontier prefers owed accuracy work', { ...BASE, budget_wu: 46 },
+      { manyCandidates: true, onCall: df.onCall, drift: true, unpriced: true }, df.budget,
+      (res) => {
+        const byBudget = res.ledger.deferred.filter((d) => d.reason === 'deferred_by_budget')
+        if (!byBudget.length) return 'nothing was deferred for budget, so the frontier is untested here'
+        if (byBudget[0].kind !== 'region_probe') return `expected the optional region probe first in the ledger, got ${byBudget[0].kind}`
+        if (!byBudget.some((d) => d.kind === 'candidate_verifier')) return 'no verifier was deferred, so the priority is untested'
+        return /candidate verifier/.test(res.frontier)
+          || `a verifier is owed but the frontier offers "${res.frontier}"`
+      }))
+  }
   R.push(await run('adjudication spans several batches', { ...BASE, budget_wu: 90 }, { manyCandidates: true,
     expect: (res) => launchesOf(res).filter((x) => x.label.startsWith('adjudicate')).length >= 2
       || 'the adjudication-drift scenario below would assert nothing: adjudication was a single batch' }))
@@ -1342,7 +1399,15 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
     (res) => {
       const batches = launchesOf(res).filter((x) => x.label.startsWith('adjudicate')).length
       if (res.status === 'adjudication_failed') return 'the whole adjudication wave was refused although one batch still fitted'
-      return batches >= 1 || 'no adjudication batch ran at all'
+      if (batches < 1) return 'no adjudication batch ran at all'
+      // Same run, second contract: when mandatory accuracy work was deferred,
+      // the frontier must name it rather than whichever optional probe the
+      // ledger happens to list first.
+      const owed = res.ledger.deferred.filter((d) => d.reason === 'deferred_by_budget'
+        && ['candidate_verification', 'supplemental_candidate', 'candidate_verifier', 'adjudication_batch'].includes(d.kind))
+      if (!owed.length) return true
+      return /candidate verifier|candidate verification|supplemental candidate|adjudication batch/.test(res.frontier)
+        || `accuracy work was deferred but the frontier offers "${res.frontier}"`
     }))
 }
 {

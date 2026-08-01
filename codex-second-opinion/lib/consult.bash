@@ -22,9 +22,12 @@ Options:
   --continue <SESSION> resume this session UUID with a follow-up
                        QUESTION instead of starting fresh
   --model <MODEL>      override the pinned high-capability model
-  --effort <LEVEL>     low|medium|high|xhigh|max (default: high). Must
-                       be given together with --model — a weaker model
-                       may not accept the pinned effort.
+  --effort <LEVEL>     default: high. codex 0.146.0 takes low, medium,
+                       high, xhigh, max; the value is passed through
+                       rather than checked here, so a newer tier works
+                       and an unknown one fails as exit 4. Must be given
+                       together with --model — a weaker model may not
+                       accept the pinned effort.
   --inherit            use the model and effort from your codex config
                        instead of the pinned defaults; cannot be
                        combined with --model or --effort
@@ -157,6 +160,7 @@ mode_main() {
 
   common_check_model_flags
   common_env_checks
+  common_resolve_scratch
   common_setup_scratch
   run_with_fallback
 

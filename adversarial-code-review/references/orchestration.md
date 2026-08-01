@@ -85,8 +85,30 @@ acr_snapshot() {
   git status --porcelain=v1
   { git ls-files -z; git ls-files --others --exclude-standard -z; } |
     xargs -0 shasum -a 256 2>/dev/null | sort | shasum -a 256
+  # Content hashes miss a mode change, and so does status: a tracked file
+  # already reported ` M` reports ` M` after its executable bit flips, and its
+  # bytes never moved. Both snapshots would match while the repository
+  # changed. `test -x` / `test -L` are POSIX, unlike stat's format flags.
+  { git ls-files -z; git ls-files --others --exclude-standard -z; } |
+    while IFS= read -r -d '' f; do
+      printf '%s%s %s\n' "$([ -x "$f" ] && echo x || echo -)" \
+                          "$([ -L "$f" ] && echo l || echo -)" "$f"
+    done | sort | shasum -a 256
 }
 acr_snapshot > "${tmp}/tree-before"
+```
+
+The same function produces the after-state, and the comparison is the whole
+point of having taken the first one. Define and run it in **one** Bash call:
+a shell function does not survive between separate tool invocations, and an
+agent that finds it gone tends to fall back to `git status` alone — the
+status-only check this recipe exists to replace.
+
+```bash
+acr_snapshot > "${tmp}/tree-after"       # same definition, same call
+if ! diff -q "${tmp}/tree-before" "${tmp}/tree-after" >/dev/null; then
+  diff -u "${tmp}/tree-before" "${tmp}/tree-after"   # disclose, never revert
+fi
 ```
 
 Even this does not cover gitignored paths — build output, `node_modules`,
@@ -337,9 +359,18 @@ the real findings with it. So the candidate set is trimmed from the
 least consequential end (minors, then majors, then criticals) until it
 fits, and everything trimmed is reported as **found but not verified**,
 with its anchor, in the top-level `found_but_not_verified` array. Every
-*retained* candidate still gets a verifier; that part is not negotiable.
-What changed is that "we found this and could not afford to check it" is
-now a disclosed outcome rather than a reason to return nothing.
+*retained* candidate is scheduled a verifier, and nothing optional may take
+that capacity — that part is not negotiable.
+
+One thing still outranks it, and pretending otherwise would be the
+overclaim this file exists to avoid: the user's own token target. When the
+sampled verifier reveals a rate the priors under-stated, the remaining
+verifiers are deferred rather than launched past a hard ceiling that would
+throw mid-wave and lose them anyway. Those candidates stay in the results —
+deferred with kind `candidate_verifier`, distinct from the trim's
+`candidate_verification`, and reported with `verifier_completed: false` —
+because "reported without a refutation attempt" and "not reported at all"
+are different admissions and the ledger owes the reader both.
 
 The trim checks **both** ceilings — weighted units and the token target
 — because the reservation it precedes checks both. Trimming on units

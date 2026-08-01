@@ -25,9 +25,12 @@ Options:
                        Not for Claude's suspected findings, and not
                        combinable with --custom.
   --model <MODEL>      override the pinned high-capability model
-  --effort <LEVEL>     low|medium|high|xhigh|max (default: high). Must
-                       be given together with --model — a weaker model
-                       may not accept the pinned effort.
+  --effort <LEVEL>     default: high. codex 0.146.0 takes low, medium,
+                       high, xhigh, max; the value is passed through
+                       rather than checked here, so a newer tier works
+                       and an unknown one fails as exit 4. Must be given
+                       together with --model — a weaker model may not
+                       accept the pinned effort.
   --inherit            use the model and effort from your codex config
                        instead of the pinned defaults; cannot be
                        combined with --model or --effort
@@ -87,9 +90,8 @@ check_scope_nonempty() {
       # --no-optional-locks so the precheck cannot write the repository it
       # promises only to read: a plain `git status` refreshes stale stat info
       # and rewrites .git/index (measured). The flag suppresses exactly that
-      # write. It is not a blanket cure — `git diff` below refreshes the index
-      # regardless — which is why internals.md states the residual instead of
-      # claiming the prechecks touch nothing.
+      # write here; the working-tree diff below needs the heavier
+      # git_readonly_index, which no flag substitutes for.
       local status_out
       status_out="$(git --no-optional-locks status --porcelain --untracked-files=normal)" || {
         echo "error: git status failed in ${repo}" >&2; exit 3; }
@@ -117,8 +119,11 @@ check_scope_nonempty() {
       # --quiet means exit 0 for no changes, 1 for changes, >1 for a
       # hard failure. Collapsing the last two would review on a broken
       # diff.
+      # Under a throwaway index: this diff runs against the WORKING TREE, so
+      # git refreshes stale stat data and rewrites .git/index — with or
+      # without --no-optional-locks (measured). See git_readonly_index.
       diff_status=0
-      git diff --quiet "$merge_base" || diff_status=$?
+      git_readonly_index git --no-optional-locks diff --quiet "$merge_base" || diff_status=$?
       if [ "$diff_status" -eq 0 ]; then
         echo "nothing to review: no changes since the merge base with ${scope_value}" >&2
         exit 2
@@ -289,6 +294,10 @@ mode_main() {
 
   common_check_model_flags
   common_env_checks
+  # Before the precheck: it needs somewhere outside the repo for the
+  # throwaway index, and a CODEX_HOME inside the tree is an environment
+  # problem that outranks an empty scope either way.
+  common_resolve_scratch
   check_scope_nonempty
   common_setup_scratch
   run_with_fallback

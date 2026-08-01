@@ -396,7 +396,18 @@ EOF
     # same blind spot and no better excuse.
     case "$mcp_out" in
       '[]'|'{}') : ;;             # empty config: nothing to disclose
-      *'"enabled"'*) : ;;         # recognized shape, none enabled
+      *'"enabled"'*)
+        # Recognized shape, nothing enabled *in the part that arrived*. That
+        # last clause is the whole point: a listing cut off after a complete
+        # DISABLED entry — `[{"name":"off","enabled":false},` — contains
+        # `"enabled"`, matches this arm, and says nothing at all about the
+        # servers in the suffix that never printed. The grep above cannot
+        # catch it either, since it looks for `true`. Only the balance check
+        # can, so run the parser here too and refuse on `!`.
+        case "$(mcp_enabled_ids <<< "$mcp_out")" in
+          *'!'*)
+            mcp_problem="the standalone MCP listing is incomplete, so its enabled servers cannot be identified" ;;
+        esac ;;
       *)
         mcp_problem="could not verify standalone MCP exposure (unrecognized 'codex mcp list --json' output)" ;;
     esac
@@ -425,31 +436,55 @@ EOF
   fi
 }
 
+# Resolve where this run may write, and refuse the placements that would
+# put those writes inside the repository under review. Split out of
+# common_setup_scratch and called EARLIER, because the empty-scope
+# prechecks need somewhere outside the repo to keep a throwaway index.
+#
 # Place the output and log outside the repo: a file written inside it
 # gets picked up by Codex's own file sweeps and pollutes the result. A
 # relative or repo-local TMPDIR would quietly break that invariant, so
 # resolve it and fall back to /tmp when it lands inside the worktree.
-common_setup_scratch() {
+common_resolve_scratch() {
   scratch="${TMPDIR:-/tmp}"
   scratch="$(cd "$scratch" 2>/dev/null && pwd -P)" || scratch="/tmp"
   local worktree_root
   worktree_root="$(git rev-parse --show-toplevel)"
   worktree_root="$(cd "$worktree_root" && pwd -P)"
 
-  # Codex persists every run's session under CODEX_HOME/sessions. That write
-  # is disclosed, and it is harmless only while the path sits outside the
-  # repository. Inside it, the run writes session files into the very tree it
-  # is reading: they dirty git status and Codex's own file sweeps pick them
-  # up. Unlike the scratch files there is nowhere to relocate them to —
-  # moving CODEX_HOME would orphan every earlier session and break
-  # --continue — so this is a disclosure, not a substitution and not a
-  # refusal.
-  local codex_home resolved_home
+  # Codex persists every run's session under CODEX_HOME/sessions. Inside the
+  # worktree that write lands in the very tree being read: it dirties git
+  # status, and Codex's own file sweeps pick the session files up, so a
+  # previous run's prompt and answer become input to this one. Unlike the
+  # scratch files there is nothing to substitute — relocating CODEX_HOME
+  # orphans every earlier session and breaks --continue — so the only
+  # honest options are to refuse or to break the read-only claim, and the
+  # repo-local TMPDIR case a few lines up already settles which of those
+  # this script picks. The caller's remedy is one variable.
+  #
+  # Resolved through the nearest EXISTING ancestor: codex creates
+  # CODEX_HOME on first use, so a directory that does not exist yet is
+  # about to, exactly where its parent says.
+  local codex_home probe parent resolved_home=""
   codex_home="${CODEX_HOME:-${HOME:-}/.codex}"
-  resolved_home="$(cd "$codex_home" 2>/dev/null && pwd -P)" || resolved_home=""
+  case "$codex_home" in
+    /*) probe="$codex_home" ;;
+    # A relative CODEX_HOME resolves against the current directory, which is
+    # the repository — inside it by construction.
+    *)  probe="${PWD}/${codex_home}" ;;
+  esac
+  while [ -n "$probe" ] && [ ! -d "$probe" ]; do
+    parent="${probe%/*}"
+    [ "$parent" = "$probe" ] && parent=""
+    probe="$parent"
+  done
+  [ -n "$probe" ] && resolved_home="$(cd "$probe" 2>/dev/null && pwd -P)"
   if [ -n "$resolved_home" ] && { [ "$resolved_home" = "$worktree_root" ] ||
      case "$resolved_home/" in "$worktree_root"/*) true ;; *) false ;; esac; }; then
-    echo "warning: CODEX_HOME (${resolved_home}) is inside ${worktree_root}; this ${run_noun}'s session files are written into the repository it is reading" >&2
+    echo "error: CODEX_HOME (${codex_home}) resolves inside ${worktree_root}." >&2
+    echo "error: codex writes every session under CODEX_HOME/sessions, so this ${run_noun} would write the repository it is reading; refusing to start." >&2
+    echo "hint: point CODEX_HOME outside the repository for this run." >&2
+    exit 3
   fi
   if [ "$scratch" = "$worktree_root" ] || case "$scratch/" in "$worktree_root"/*) true ;; *) false ;; esac; then
     echo "warning: TMPDIR is inside the repo; using /tmp instead" >&2
@@ -464,7 +499,42 @@ common_setup_scratch() {
       exit 3
     fi
   fi
+}
 
+# Run a git command that would otherwise refresh — and therefore rewrite —
+# the repository's index.
+#
+# The empty-scope prechecks run before any sandbox exists, so they are the
+# one place this wrapper itself could write the tree it promises only to
+# read. `git status` is fixed by --no-optional-locks; `git diff` against the
+# working tree is not, with or without that flag (measured). Pointing
+# GIT_INDEX_FILE at a byte copy keeps the answer identical — same index
+# content, same diff — while the refresh lands on the copy, which is then
+# discarded. Falling back to a plain run when the copy cannot be made keeps
+# an unwritable TMPDIR from turning a scope check into a hard failure; the
+# only thing lost is the index-write protection, which is where it started.
+git_readonly_index() {
+  local real copy status=0
+  real="$(git rev-parse --git-path index 2>/dev/null)" || real=""
+  if [ -z "$real" ] || [ ! -f "$real" ] || [ -z "${scratch:-}" ]; then
+    "$@" || status=$?
+    return "$status"
+  fi
+  copy="$(mktemp "${scratch}/codex-idx-XXXXXX" 2>/dev/null)" || copy=""
+  if [ -z "$copy" ] || ! cat "$real" > "$copy" 2>/dev/null; then
+    [ -n "$copy" ] && rm -f "$copy"
+    "$@" || status=$?
+    return "$status"
+  fi
+  GIT_INDEX_FILE="$copy" "$@" || status=$?
+  rm -f "$copy"
+  return "$status"
+}
+
+# Create the result and log files. Split from common_resolve_scratch so the
+# prechecks can use $scratch without a `log:` line being printed for a run
+# that is about to exit 2 on an empty scope.
+common_setup_scratch() {
   # Guarded: under set -e a bare failing substitution would exit with
   # mktemp's own status, not the documented environment exit 3.
   out="$(mktemp "${scratch}/codex-${mode}-XXXXXX")" || {

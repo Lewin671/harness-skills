@@ -798,6 +798,23 @@ else
   bad "review: CDPATH cannot redirect --repo or pollute stdout"
 fi
 
+# The quiet truncation: cut after a complete DISABLED entry. Nothing in the
+# visible part is enabled, so the `true` grep never fires and a shape check
+# alone reads it as a clean listing — while every server in the suffix that
+# never printed stays reachable.
+stderr="${workdir}/mcp-trunc-disabled.err"
+argv_log="${workdir}/argv-mcp-trunc-disabled.log"
+FAKE_MCP_LIST='[{"name":"off","enabled":false},' \
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'listing is incomplete' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a listing truncated after a disabled entry fails closed"
+else
+  bad "review: a listing truncated after a disabled entry fails closed" "exit $status"
+fi
+
 # An empty first listing is not an empty config: verified on 0.146.0, a
 # config with no servers prints `[]`. A command that exits 0 having printed
 # nothing has failed to enumerate, and that is the one fail-open the whole
@@ -844,19 +861,76 @@ else
   bad "review: the empty-scope precheck does not rewrite .git/index" "exit $idx_status, index changed: $([ "$idx_before" = "$idx_after" ] && echo no || echo yes)"
 fi
 
+# The --base scope diffs the merge base against the WORKING TREE, which
+# refreshes the index with or without --no-optional-locks. Only the
+# throwaway-index path protects it, and the --uncommitted test above does
+# not exercise it.
+#
+# Its own repository, not the one above: sharing a tree with a run that had
+# already reviewed it made this check report success three times in four
+# while the protection was removed, and a test that passes most of the time
+# is worse than no test.
+blocks="${workdir}/blocks"
+git init -q "$blocks"
+printf 'one\n' > "$blocks/f.txt"
+printf 'a\n' > "$blocks/clean-one.txt"
+printf 'b\n' > "$blocks/clean-two.txt"
+git -C "$blocks" add -A
+git -C "$blocks" "${commit_env[@]}" commit -q -m tracked
+# The initial branch name is git's default, not a constant: capture it rather
+# than assuming master, or this silently becomes an exit-3 check.
+blocks_base="$(git -C "$blocks" rev-parse --abbrev-ref HEAD)"
+git -C "$blocks" checkout -q -b feat
+printf 'two\n' >> "$blocks/f.txt"
+git -C "$blocks" add -A
+git -C "$blocks" "${commit_env[@]}" commit -q -m feat
+# Stale stat data on files whose CONTENT still matches the index: that is
+# what a refresh has something to write about.
+touch -m -t 202001010101 "$blocks/f.txt" "$blocks/clean-one.txt" "$blocks/clean-two.txt"
+base_idx_before="$(shasum -a 256 "$blocks/.git/index" | cut -d' ' -f1)"
+"$wrapper" review --repo "$blocks" --base "$blocks_base" --timeout 30 >/dev/null 2>&1
+base_idx_status=$?
+base_idx_after="$(shasum -a 256 "$blocks/.git/index" | cut -d' ' -f1)"
+if [ "$base_idx_status" = 0 ] && [ "$base_idx_before" = "$base_idx_after" ]; then
+  ok "review: the --base precheck does not rewrite .git/index"
+else
+  bad "review: the --base precheck does not rewrite .git/index" "exit $base_idx_status, index changed: $([ "$base_idx_before" = "$base_idx_after" ] && echo no || echo yes)"
+fi
+
 # --- session writes land outside the repository, or are disclosed ------
 
+# Codex writes every session under CODEX_HOME/sessions, so a CODEX_HOME
+# inside the worktree means the run writes the tree it is reading — and
+# those session files then feed back into Codex's own file sweeps. There is
+# nothing to substitute (moving CODEX_HOME orphans earlier sessions), so
+# this fails closed, exactly as a TMPDIR with nowhere else to go does.
 home_in_repo="${dirty}/inner-codex-home"
 mkdir -p "$home_in_repo"
 stderr="${workdir}/codex-home.err"
-CODEX_HOME="$home_in_repo" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+argv_log="${workdir}/argv-codex-home.log"
+CODEX_HOME="$home_in_repo" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
 status=$?
-if [ "$status" = 0 ] && grep -q 'CODEX_HOME.*is inside' "$stderr"; then
-  ok "review: a CODEX_HOME inside the repo is disclosed"
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME.*resolves inside' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a CODEX_HOME inside the repo fails closed"
 else
-  bad "review: a CODEX_HOME inside the repo is disclosed" "exit $status"
+  bad "review: a CODEX_HOME inside the repo fails closed" "exit $status"
 fi
 rm -rf "$home_in_repo"
+
+# The same, for a CODEX_HOME that does not exist yet: codex creates it on
+# first use, exactly where its parent says. Resolving only existing
+# directories would wave this one through on the run that creates it.
+stderr="${workdir}/codex-home-new.err"
+CODEX_HOME="${dirty}/not-yet/created/home" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME.*resolves inside' "$stderr"; then
+  ok "review: a not-yet-created CODEX_HOME inside the repo fails closed"
+else
+  bad "review: a not-yet-created CODEX_HOME inside the repo fails closed" "exit $status"
+fi
 
 stderr="${workdir}/codex-home-outside.err"
 "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"

@@ -536,6 +536,17 @@ const FENCE = 'UNTRUSTED-RECORD'
 // A fence made of a fixed literal is only as good as the guarantee that the
 // fenced text cannot contain it. Strip it rather than trusting it not to
 // appear: the content is written by whoever wrote the code under review.
+// Render a value that will appear inside a command an agent is told to RUN.
+// Fencing cannot help there — the point of these values is to be executed —
+// and rejecting anything unusual would fail on a legitimate TMPDIR carrying a
+// space. Single quotes make the whole operand one word and neutralise `;`,
+// `$(...)`, backticks and globs; the embedded-quote escape is the portable
+// close-escape-reopen form. Only patch_path needs this today, and only
+// because Phase 0 derives it from TMPDIR, which the caller controls.
+function shellQuote(v) {
+  return `'${String(v === undefined || v === null ? '' : v).split("'").join("'\\''")}'`
+}
+
 function fenced(text) {
   const body = String(text === undefined || text === null ? '' : text).split(FENCE).join('UNTRUSTED-RECORD-ESCAPED')
   return `<<<${FENCE}\n${body}\n${FENCE}`
@@ -803,7 +814,7 @@ Run these steps in order and report what each returned:
 
 1. BIND. "git rev-parse HEAD". If it is not ${A.base_sha}, run
    "git checkout --detach ${A.base_sha}". Verify the sha256 of
-   ${A.patch_path} equals ${A.patch_sha256}. If it does not, stop and
+   ${shellQuote(A.patch_path)} equals ${A.patch_sha256}. If it does not, stop and
    return grade "blocked" — you cannot test an artifact you cannot verify.
    Set bound_to_base_sha and patch_hash_verified to true only if each
    actually succeeded.
@@ -833,7 +844,7 @@ ${(triage.probe_candidates || []).length
    attack. You may still cite the spec or documented contract in
    specification_citation; it accompanies a control, it never replaces one.
 
-4. ATTACK. "git apply ${A.patch_path}", confirm "git diff --stat" is
+4. ATTACK. "git apply ${shellQuote(A.patch_path)}", confirm "git diff --stat" is
    non-empty, then rerun the reproducer. Record:
    - patch_applied: true ONLY if git apply succeeded and the diff is non-empty
    - patched_failed: true if the reproducer FAILED against the patched code,
@@ -2360,7 +2371,14 @@ return {
     // trimmed emergent candidate unreachable — a probe is only bought when the
     // floor for one more critical still fits — but the count should not depend
     // on that holding.
-    emergent_candidates: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe').length,
+    //
+    // Split by whether the region actually earned the credit. A probe that
+    // returned a candidate anchored outside its own region did find something
+    // — dropping it from the tally would understate the recall channel — but
+    // counting it as that region's yield is the overstatement contract.md
+    // section 1 forbids. The two sum to what the channel produced.
+    emergent_candidates: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe' && c.from_region).length,
+    emergent_candidates_outside_their_region: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe' && !c.from_region).length,
   },
 
   verification_depth: {
@@ -2466,8 +2484,16 @@ return {
     // next increment demonstrably buys verification and not a region probe.
     // Ledger order alone put the probe first — it is deferred a wave earlier —
     // so the frontier named the one thing the next budget would NOT buy.
+    // Every kind here is accuracy work the run owed and could not fund:
+    // a candidate dropped before verification, one dropped by the
+    // supplemental rollback, a verifier deferred once the sample repriced the
+    // wave, an adjudication batch that no longer fitted. All four outrank any
+    // optional probe, which the ledger happens to record earlier — and
+    // reading ledger order alone is how the frontier once named the one thing
+    // the next budget would NOT buy.
+    const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate', 'candidate_verifier', 'adjudication_batch']
     const byBudget = ledger.deferred.filter((d) => d.reason === 'deferred_by_budget')
-    const paid = byBudget.find((d) => d.kind === 'candidate_verification' || d.kind === 'supplemental_candidate')
+    const paid = byBudget.find((d) => ACCURACY_KINDS.includes(d.kind))
       || byBudget[0]
     if (paid) return `next budget would ${paid.kind.replace(/_/g, ' ')} at ${paid.anchor}`
     const prof = ledger.deferred.find((d) => d.reason === 'deferred_by_profile')

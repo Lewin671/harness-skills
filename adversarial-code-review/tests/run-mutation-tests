@@ -185,7 +185,7 @@ mutate "trim respects tokens too" "       && (committedWU + floorsFor(candidates
            )) {"
 mutate "supplemental rollback is disclosed" "    trimmed.push(dropped)" "    "
 mutate "unsettled names must be predicates" "  const canRefute = groundedRefutation && unsettledNamesValid && PREDICATES.some((k) =>" "  const canRefute = groundedRefutation && PREDICATES.some((k) =>"
-mutate "frontier names the accuracy floor first" "    const paid = byBudget.find((d) => d.kind === 'candidate_verification' || d.kind === 'supplemental_candidate')
+mutate "frontier names the accuracy floor first" "    const paid = byBudget.find((d) => ACCURACY_KINDS.includes(d.kind))
       || byBudget[0]" "    const paid = byBudget[0]"
 
 mutate "probe evidence is fenced" "\${fenced(\`input: " "\${(\`input: "
@@ -279,6 +279,24 @@ mutate "oversized scope is disclosed" "  if (preTrimFloorsWU > 2 * budgetWU) {" 
 
 # Disclosure counters added with the protections above.
 mutate "checklist counts unusable regions" "    regions_dropped_invalid: ledger.invalid_regions.length," "    regions_dropped_invalid: 0,"
+# Values that reach an execution-privileged agent as literal commands.
+mutate "patch path is shell-quoted (hash check)" "   \${shellQuote(A.patch_path)} equals \${A.patch_sha256}" "   \${A.patch_path} equals \${A.patch_sha256}"
+mutate "patch path is shell-quoted (git apply)" "\"git apply \${shellQuote(A.patch_path)}\"" "\"git apply \${A.patch_path}\""
+mutate "shell quoting escapes quotes" "  return \`'\${String(v === undefined || v === null ? '' : v).split(\"'\").join(\"'\\\\''\")}'\`" "  return \`'\${String(v === undefined || v === null ? '' : v)}'\`"
+
+# Each REQUIRED binding, individually.
+mutate "scope is required" "const REQUIRED = ['scope', 'base_sha'" "const REQUIRED = ['base_sha'"
+mutate "base_sha is required" "'scope', 'base_sha', 'patch_path'" "'scope', 'patch_path'"
+mutate "patch_path is required" "'base_sha', 'patch_path', 'patch_sha256'" "'base_sha', 'patch_sha256'"
+mutate "patch_sha256 is required" "'patch_path', 'patch_sha256', 'repo_root'" "'patch_path', 'repo_root'"
+mutate "repo_root is required" "'patch_sha256', 'repo_root', 'included_paths']" "'patch_sha256', 'included_paths']"
+mutate "included_paths is required" "'repo_root', 'included_paths']" "'repo_root']"
+
+# The recall channel's tally and the frontier's priority.
+mutate "emergent count excludes uncredited" "    emergent_candidates: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe' && c.from_region).length," "    emergent_candidates: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe').length,"
+mutate "uncredited emergents are counted" "    emergent_candidates_outside_their_region: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe' && !c.from_region).length," "    emergent_candidates_outside_their_region: 0,"
+mutate "frontier ranks deferred verifiers" "    const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate', 'candidate_verifier', 'adjudication_batch']" "    const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate']"
+
 mutate "checklist counts unnamed predicates" "      r.adjudicated_state === 'unresolved' && !r.unsettled_predicate).length," "      false).length,"
 
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
@@ -315,7 +333,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=148
+EXPECTED_TOTAL=160
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1
