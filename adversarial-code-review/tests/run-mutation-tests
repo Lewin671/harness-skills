@@ -77,7 +77,7 @@ mutate "probe target-id reconciliation" "  if (raw.target_id !== id) {" "  if (f
 mutate "attack target-id reconciliation" "  if (raw.target_id !== id) {" "  if (false) {"
 mutate "not_attempted vs inconclusive" "    : (probeFailed ? 'blocked' : 'not_attempted')" "    : 'inconclusive'"
 mutate "prepaid token debt" "  return (waveEstimateWU + wu + prepaidDebtWU) * tokensPerWU <= budget.remaining()" "  return (waveEstimateWU + wu) * tokensPerWU <= budget.remaining()"
-mutate "grounded-refutation guard" "  if (state === 'substantiated' && !groundedRefutation && !terminal) {" "  if (false) {"
+mutate "grounded-refutation guard" "  if (state === 'substantiated' && !canSubstantiate && !terminal) {" "  if (false) {"
 mutate "refutation grounding must be strong" "verifierRecord && verifierRecord.grounding === 'strong'" "verifierRecord"
 mutate "terminal evidence override" "  if (terminal && state !== 'substantiated') {" "  if (false) {"
 mutate "region-probe floor escrow" "  if (admitOptional(W.probe, floorsFor([...candidates, ...syntheticCriticals(acceptedRegionProbes.length + 1)]))) acceptedRegionProbes.push(t)" "  if (admitOptional(W.probe, 0)) acceptedRegionProbes.push(t)"
@@ -85,7 +85,7 @@ mutate "weak verdict replacement" "        if (v.grounding === 'strong') verdict
 mutate "unknown-verdict-id rejection" "    if (!expected.has(id)) { ledger.unknown_verdict_ids.push({ role, id }); continue }" "    if (false) { continue }"
 mutate "duplicate-verdict rejection" "    if (seen.has(id)) { malformed(role, id, 'duplicate record in one batch — first kept'); continue }" "    if (false) { continue }"
 mutate "low-confidence coverage risk" "  ledger.coverage_risks.push({" "  if (false) ledger.coverage_risks.push({"
-mutate "finder evidence validation" "  if (!validEvidence(c)) {" "  if (false) {"
+mutate "finder evidence validation" "  const problem = evidenceProblem(c)" "  const problem = null"
 mutate "weighted-unit hard ceiling" "  if (committedWU + wu > budgetWU + EPS) return false" "  "
 mutate "optional protected-floor check" "  if (committedWU + costWU + protectedWU > budgetWU + EPS) return false" "  "
 mutate "token ceiling (generic)" "  if (!admitTokens(wu)) return false" "  "
@@ -104,6 +104,26 @@ mutate "probe outcome exactness" "  if (!p || p.outcome !== 'counterexample_cons
 mutate "escalated verifier identity" "    if (e.r && e.r.candidate_id === e.c.id && e.r.grounding === 'strong') verifierById.set(e.c.id, e.r)" "    if (e.r) verifierById.set(e.c.id, e.r)"
 mutate "null-finder coverage disclosure" "  if (!res) { ledger.unrun_lenses.push(lens); failed('finder', lens, 'finder did not return'); return }" "  if (!res) { return }"
 mutate "grounded refutation definition" "    verifier_completed: groundedRefutation," "    verifier_completed: verified,"
+mutate "predicates must support substantiation" "  const canSubstantiate = groundedRefutation && PREDICATES.every((k) => citedAs(verifierRecord, k, 'supports_candidate'))" "  const canSubstantiate = groundedRefutation"
+mutate "falsification must cite code" "    && typeof r[k].cited_code === 'string' && r[k].cited_code.trim())" "    )"
+mutate "caller can decline execution" "  if (!allowExecution) defer({ target_id: t.target_id, kind: 'executable_attack', anchor: t.label }, 'disabled_by_caller')" "  if (false) {}"
+mutate "reject non-boolean allow_execution" "if (A.allow_execution !== undefined && typeof A.allow_execution !== 'boolean') {" "if (false) {"
+mutate "rejection needs a falsified predicate" "  if (state === 'refuted' && !canRefute) {" "  if (false) {"
+mutate "anchor must match file:line" "  if (e.anchor !== \`\${c.file}:\${c.line}\`) {" "  if (false) {"
+mutate "candidate must be in reviewed paths" "  if (includedPaths.length && !includedPaths.includes(c.file)) {" "  if (false) {"
+mutate "reproduction: patch_applied" "  if (a.patch_applied !== true) missing.push('patch_applied=true')" "  " 1
+mutate "reproduction: patched_failed" "  if (a.patched_failed !== true) missing.push('patched_failed=true')" "  "
+mutate "held: patch_applied" "    if (a.patch_applied !== true) missing.push('patch_applied=true')" "    "
+mutate "reject unknown profile" "if (A.profile !== undefined && !Object.prototype.hasOwnProperty.call(PROFILES, A.profile)) {" "if (false) {"
+mutate "reject invalid budget" "if (A.budget_wu !== undefined && !(Number.isFinite(A.budget_wu) && A.budget_wu > 0)) {" "if (false) {"
+mutate "supplemental finder floor guard" "if (wantedLens && P.supplementalLens && admitOptional(W.finder, floorsFor(candidates))) {" "if (wantedLens && P.supplementalLens && admitOptional(W.finder, 0)) {"
+mutate "rollback respects tokens too" "             || !admitTokens(floorsFor(candidates)))) {" "             )) {"
+mutate "profile must be an own property" "if (A.profile !== undefined && !Object.prototype.hasOwnProperty.call(PROFILES, A.profile)) {" "if (A.profile !== undefined && !PROFILES[A.profile]) {"
+mutate "budget must be finite" "if (A.budget_wu !== undefined && !(Number.isFinite(A.budget_wu) && A.budget_wu > 0)) {" "if (A.budget_wu !== undefined && !(typeof A.budget_wu === 'number' && A.budget_wu > 0)) {"
+mutate "fence strips its own marker" "  const body = String(text === undefined || text === null ? '' : text).split(FENCE).join('UNTRUSTED-RECORD-ESCAPED')" "  const body = String(text === undefined || text === null ? '' : text)"
+mutate "supplemental candidate rollback" "  while (candidates.length > beforeSupplemental
+         && (committedWU + floorsFor(candidates) > budgetWU + EPS
+             || !admitTokens(floorsFor(candidates)))) {" "  while (false) {"
 
 echo
 if [ "${survived}" -eq 0 ]; then

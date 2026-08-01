@@ -51,11 +51,27 @@ actually receive.
 
 If the patch is empty, stop and ask — do not review an empty diff.
 
-Record the pre-run tree state for the write-safety check in §7:
+Record the pre-run tree state for the write-safety check in §7. Status
+alone is **not** enough, and this matters more than it looks: a tracked
+file that is already modified reports ` M path` before and after an
+agent overwrites it, and a file that is already untracked reports `??`
+either way. Both snapshots would be byte-identical while the contents
+changed underneath. Hash the contents:
 
 ```bash
-git rev-parse HEAD && git status --porcelain=v1
+acr_snapshot() {
+  git rev-parse HEAD
+  git status --porcelain=v1
+  { git ls-files -z; git ls-files --others --exclude-standard -z; } |
+    xargs -0 shasum -a 256 2>/dev/null | sort | shasum -a 256
+}
+acr_snapshot > "${tmp}/tree-before"
 ```
+
+Even this does not cover gitignored paths — build output, `node_modules`,
+local caches. Say that in the report rather than implying total coverage;
+"changes to tracked and untracked-but-visible files are detected" is true,
+"changes to the parent tree are detected" is not.
 
 ### Exclusions and partitioning
 
@@ -416,6 +432,21 @@ outcome decides whether stage 2 is worth buying.
 
 ### Stage 2 — executable attack (opus, `isolation: 'worktree'`)
 
+**`isolation: 'worktree'` is a checkout, not a sandbox.** It stops two
+agents colliding on files; it does not constrain what the commands they
+run can reach. This stage applies the reviewed patch and runs the
+artifact's own test command, so it executes code the artifact controls
+with whatever privileges the session has — network, credentials, paths
+outside the worktree. "No network, no dependency installation" is an
+instruction to the *agent*, not a restriction on the *code*.
+
+So `allow_execution: false` is a first-class argument, not a
+degradation. A caller reviewing code they would not run keeps triage,
+every lens, verification, probes and adjudication, and every execution
+is deferred with reason `disabled_by_caller` in the ledger. The report
+then says what a sandboxed rerun would buy. Point stage 2 at untrusted
+code only in an environment you would let that code run in.
+
 The worktree is a clean checkout at the parent's HEAD with **no
 gitignored artifacts and none of the parent's uncommitted changes** —
 measured behavior, not an assumption. So every attack begins by binding
@@ -462,9 +493,10 @@ The honest contract, and it is narrower than "never modifies":
 
 > Triage, finder, verifier, probe and adjudicator prompts issue no
 > write instructions. Executable attacks write only inside throwaway
-> worktrees holding the verified review patch. The launcher records the
-> parent tree's HEAD and `git status --porcelain=v1` before and after
-> the run and reports any unexpected difference.
+> worktrees holding the verified review patch. The launcher snapshots
+> the parent tree's HEAD, status, and a content hash of every tracked
+> and untracked-but-visible file before and after the run, and reports
+> any unexpected difference. Gitignored paths are outside that snapshot.
 
 That last part is **detection, not enforcement**. Claude Code exposes no
 tool-restriction knob on `agent()` — the options are `label`, `phase`,
