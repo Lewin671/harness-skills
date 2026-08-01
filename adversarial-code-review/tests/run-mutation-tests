@@ -199,7 +199,7 @@ why: \${target.why}\`)}" "\${target.file}:\${target.start_line}-\${target.end_li
 why: \${target.why}"
 mutate "attack target location is fenced" "\${fenced(target.label)}" "\${target.label}"
 mutate "adjudicator heading carries no raw path" "=== candidate \${e.candidate.id}" "=== candidate \${e.candidate.id} at \${e.candidate.file}:\${e.candidate.line}"
-mutate "first lens is sampled alone" "if (restLenses.length && !admitTokens(restLenses.length * W.finder)) {" "if (false) {"
+mutate "the finder sample reprices the rest" "if (restLenses.length && !admitTokens(restLenses.length * W.finder)) {" "if (false) {"
 mutate "lens cap keeps the consequential" "  const ordered = [...(res.candidates || [])].sort((a, b) =>
     consequence(b) - consequence(a) || cmp(JSON.stringify(a), JSON.stringify(b)))" "  const ordered = [...(res.candidates || [])]"
 mutate "duplicate probe keeps its evidence" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))" "          const existing = null"
@@ -209,7 +209,7 @@ mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + es
 
 // Priced at the observed rate now."
 mutate "candidate probes repriced after the sample" "  if (admitTokens(verifyPendingWU + probeAdmitted.length * W.probe + W.probe)) { probeAdmitted.push(t); continue }" "  if (true) { probeAdmitted.push(t); continue }"
-mutate "region probes sample one first" "    if (admitTokens(probePendingWU + W.probe + floorAfter)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }" "    if (true) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }"
+mutate "the probe sample reprices the rest" "    if (admitTokens(probePendingWU + W.probe + floorAfter)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }" "    if (true) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }"
 mutate "tie-breaks are a total order" "const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)" "const cmp = (a, b) => String(a).localeCompare(String(b))"
 mutate "optional purchases respect tokens" "  if (!admitTokens(costWU + protectedWU)) return false" "  "
 mutate "remaining verifiers respect tokens" "  if (admitTokens(verifyPendingWU + v.wu)) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }" "  if (true) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }"
@@ -221,7 +221,7 @@ mutate "checklist counts dropped candidates" "    candidates_dropped_invalid: le
 mutate "checklist counts terminal overrides" "    terminal_overrides: ledger.terminal_evidence_overrides.length," "    terminal_overrides: 0,"
 mutate "checklist counts rejections" "    rejected_candidates: results.filter((r) => r.state === 'refuted').length," "    rejected_candidates: 0,"
 mutate "under-tier findings are flagged" "    verified_below_final_severity: Boolean(state === 'substantiated' && v && v.final_severity" "    verified_below_final_severity: Boolean(false && v && v.final_severity"
-mutate "escalation wave is sampled" "    if (admitTokens(escPendingWU + W.criticalVerifierEscalated)) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }" "    if (true) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }"
+mutate "the escalation sample reprices the rest" "    if (admitTokens(escPendingWU + W.criticalVerifierEscalated)) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }" "    if (true) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }"
 mutate "finder regions precede capping" "finderOut.forEach((res) => absorbRegions(res))" ""
 
 # Arrival order must not pick between two records for the same candidate.
@@ -255,9 +255,9 @@ mutate "emergent candidate binds to its region" "          const inside = rec.fi
 mutate "supplemental lens ranks by tally" "    (tally.get(b) - tally.get(a)) || (LENSES.indexOf(a) - LENSES.indexOf(b)))[0]" "    0)[0]"
 
 # The two waves that used to launch every agent at an unpaid prior.
-mutate "attack wave is sampled" "    if (admitTokens(execPendingWU + W.execute)) { execPendingWU += W.execute; execAdmitted.push(t); continue }" "    if (true) { execPendingWU += W.execute; execAdmitted.push(t); continue }"
-mutate "adjudication wave is sampled" "      if (admitPrepaid(W.adjudicator(x.b.length))) { adjAdmitted.push(x); continue }" "      if (true) { adjAdmitted.push(x); continue }"
-mutate "re-adjudication wave is sampled" "        if (admitTokens(rePendingWU + W.adjudicator(x.b.length))) { rePendingWU += W.adjudicator(x.b.length); reAdmitted.push(x); continue }" "        if (true) { rePendingWU += W.adjudicator(x.b.length); reAdmitted.push(x); continue }"
+mutate "the attack sample reprices the rest" "    if (admitTokens(execPendingWU + W.execute)) { execPendingWU += W.execute; execAdmitted.push(t); continue }" "    if (true) { execPendingWU += W.execute; execAdmitted.push(t); continue }"
+mutate "the adjudication sample reprices the rest" "      if (admitPrepaid(W.adjudicator(x.b.length))) { adjAdmitted.push(x); continue }" "      if (true) { adjAdmitted.push(x); continue }"
+mutate "the re-adjudication sample reprices the rest" "        if (admitTokens(rePendingWU + W.adjudicator(x.b.length))) { rePendingWU += W.adjudicator(x.b.length); reAdmitted.push(x); continue }" "        if (true) { rePendingWU += W.adjudicator(x.b.length); reAdmitted.push(x); continue }"
 mutate "adjudication admits one batch first" "if (adjInput.length && !admitPrepaid(W.adjudicator(adjBatchList[0].length))) {" "if (adjInput.length && !admitPrepaid(adjReserveWU)) {"
 
 # The wave estimate must be cleared before a wave re-prices its own members,
@@ -320,6 +320,17 @@ mutate "rollback drops by rank" "    const dropped = pickVictim(candidates.slice
 mutate "victim tie-break is deterministic" "    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c" "    if (d < 0) worst = c"
 mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.fingerprint))" "  || 0"
 
+# A note on the six "sample reprices the rest" mutants above, because their
+# earlier names claimed more than they proved. Each removes the post-sample
+# admission guard, not the sequential split that feeds it. That is deliberate:
+# with the guard gone the split has no observable consequence here. It exists
+# only so the guard has a measurement to use, and this harness charges tokens
+# when an agent is INVOKED and never makes agent() throw past the target — the
+# one place a collapsed wave would otherwise differ, by losing the agents it
+# launched past the ceiling. A mutant that also collapsed the split would
+# therefore be killed by the same assertion, for the same reason, and naming
+# it after the split would be the overstatement this file exists to avoid.
+#
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
 #   rate divides by launched units  (launchedWU vs committedWU in ratePerWU)

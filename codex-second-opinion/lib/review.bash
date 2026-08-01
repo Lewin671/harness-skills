@@ -223,7 +223,18 @@ build_cmd() {
     prompt_label="context prompt"
   else
     cmd+=("$scope_flag")
-    [ -n "$scope_value" ] && cmd+=("$scope_value")
+    # The OBJECT NAME the precheck resolved, never the ref the caller typed.
+    # A branch can move between the precheck and the run — this repository
+    # expects concurrent agents (AGENTS.md) — and Codex would then review a
+    # different, possibly empty, scope than the one just verified as
+    # non-empty. `--base <merge-base sha>` is the same scope by construction:
+    # the merge base of an ancestor and HEAD is that ancestor. `--commit`
+    # pins for the same reason, and its precheck already resolved it.
+    case "$scope_flag" in
+      --base)   cmd+=("${resolved_base:-$scope_value}") ;;
+      --commit) cmd+=("${resolved_commit:-$scope_value}") ;;
+      *) [ -n "$scope_value" ] && cmd+=("$scope_value") ;;
+    esac
   fi
   append_safety_args "$1" "$2"
   diag="running: ${cmd[*]}"

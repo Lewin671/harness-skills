@@ -27,6 +27,15 @@ phase reads different code than the review phase.
 ```bash
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-XXXXXX")"
 
+# Read git without letting it write the repository. A diff against the WORKING
+# TREE refreshes stale stat data and rewrites .git/index — with or without
+# --no-optional-locks, measured — and the capture below runs before the
+# baseline snapshot exists, so that write could not even be disclosed. A byte
+# copy gives the same answer and absorbs the refresh. Export it in EVERY Bash
+# call that runs these commands: environment does not survive between calls.
+cp "$(git rev-parse --git-path index)" "${tmp}/index-copy"
+export GIT_INDEX_FILE="${tmp}/index-copy"
+
 # Fix the endpoints ONCE, here. Every command below — patch, manifests,
 # changed_ranges — must use these same ones. A branch review that captures
 # base..HEAD but builds its manifest from `git diff HEAD` yields an EMPTY
@@ -82,7 +91,10 @@ changed underneath. Hash the contents:
 ```bash
 acr_snapshot() {
   git rev-parse HEAD
-  git status --porcelain=v1
+  # --no-optional-locks, and under the same GIT_INDEX_FILE copy as the capture
+  # above: a plain status rewrites .git/index too, which would make the
+  # write-safety check itself a write.
+  git --no-optional-locks status --porcelain=v1
   # `./` on every operand. A tracked or untracked file literally named `-`
   # makes `shasum` read STDIN instead — it returns the hash of nothing,
   # identically before and after, while `git status` shows the same ` M` both
@@ -96,8 +108,13 @@ acr_snapshot() {
   # changed. `test -x` / `test -L` are POSIX, unlike stat's format flags.
   { git ls-files -z; git ls-files --others --exclude-standard -z; } |
     while IFS= read -r -d '' f; do
-      printf '%s%s %s\n' "$([ -x "./$f" ] && echo x || echo -)" \
-                          "$([ -L "./$f" ] && echo l || echo -)" "$f"
+      # The link TEXT, not what it points at. `shasum` follows a symlink, so
+      # retargeting one between two paths hashes the targets — and when a
+      # target does not exist it fails into 2>/dev/null and contributes
+      # nothing at all, identically before and after.
+      printf '%s%s %s %s\n' "$([ -x "./$f" ] && echo x || echo -)" \
+                             "$([ -L "./$f" ] && echo l || echo -)" \
+                             "$(readlink "./$f" 2>/dev/null || true)" "$f"
     done | sort | shasum -a 256
 }
 acr_snapshot > "${tmp}/tree-before"
@@ -654,9 +671,13 @@ rationed by design, and the surplus targets are deferred and disclosed.
 
 - Floors fit — run, and defer optional targets with
   `deferred_by_budget` in the ledger.
-- The **coverage** floor does not fit — `budget_too_small`. Nothing
-  runs. Raise the budget or narrow the scope; do **not** produce a
-  degraded review.
+- The **coverage** floor does not fit — `budget_too_small`. Nothing runs
+  when the shortfall is visible up front. It is not always visible up
+  front: the first lens is sampled precisely to price the rest, so the
+  same status can arrive with triage and one finder already run and
+  charged, at the rate those two revealed. Say that when reporting it —
+  the run cost something and produced no report. Raise the budget or
+  narrow the scope; do **not** produce a degraded review.
 - The **accuracy** floor does not fit — the trim runs, and the run
   continues over what the budget can verify. There is no
   `scope_too_large` status any more and there deliberately is not one:

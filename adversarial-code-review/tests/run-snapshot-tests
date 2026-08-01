@@ -65,6 +65,9 @@ new_repo() {
   printf 'already modified\n' >> "$d/script.sh"
   printf 'already modified\n' >> "$d/-"
   printf 'already here\n'      > "$d/untracked.txt"
+  # An untracked symlink that ALREADY dangles: status reports `??` for it
+  # before and after any retarget, and shasum cannot read either target.
+  ln -s missing-a "$d/dangling-link"
   printf '%s' "$d"
 }
 
@@ -97,6 +100,27 @@ detects "executable bit on an already-modified file"   chmod +x tracked.txt
 detects "executable bit on a second already-modified file" chmod +x script.sh
 detects "contents of an already-modified file named -" sh -c 'printf overwritten > ./-'
 detects "an untracked file replaced by a symlink"      sh -c 'rm untracked.txt && ln -s /etc/hosts untracked.txt'
+detects "a symlink retargeted to another missing path" sh -c 'ln -sf missing-b dangling-link'
+detects "a symlink retargeted to an existing path"     sh -c 'ln -sf tracked.txt dangling-link'
+
+# The snapshot must not itself write the repository it is checking. A plain
+# `git status` refreshes stale stat data and rewrites .git/index, which would
+# make the write-safety check a write — and one taken twice, so the before and
+# after snapshots would disagree for a reason that is not the agent's doing.
+writes="$(new_repo writes)"
+printf 'clean-a\n' > "${writes}/clean-a.txt"
+printf 'clean-b\n' > "${writes}/clean-b.txt"
+git -C "$writes" add clean-a.txt clean-b.txt
+git -C "$writes" -c user.email=t@t -c user.name=t commit -q -m clean
+touch -m -t 202001010101 "${writes}/clean-a.txt" "${writes}/clean-b.txt"
+idx_before="$(shasum -a 256 "${writes}/.git/index" | cut -d' ' -f1)"
+( cd "$writes" && acr_snapshot ) > /dev/null
+idx_after="$(shasum -a 256 "${writes}/.git/index" | cut -d' ' -f1)"
+if [ "$idx_before" = "$idx_after" ]; then
+  ok "the snapshot does not rewrite .git/index"
+else
+  bad "the snapshot does not rewrite .git/index" "taking the baseline was itself a write"
+fi
 
 # And the negative: an untouched tree must produce an identical snapshot, or
 # every case above passes for free.

@@ -112,6 +112,22 @@ shell_quote() {
   esac
 }
 
+# Collapse `.` and `..` in an absolute path without touching the filesystem.
+# Purely lexical, so it is wrong in the presence of symlinks — which is why
+# callers test it *alongside* a resolved path rather than instead of one.
+lexical_path() {
+  local path="$1" out="" part
+  local IFS=/
+  for part in $path; do
+    case "$part" in
+      ''|.) ;;
+      ..) out="${out%/*}" ;;
+      *) out="${out}/${part}" ;;
+    esac
+  done
+  printf '%s' "${out:-/}"
+}
+
 # Print one line per *enabled* server in a `codex mcp list --json`
 # payload read from stdin: its id, or `?` when the entry is enabled but
 # its name could not be read.
@@ -138,7 +154,7 @@ mcp_enabled_ids() {
   awk '
     function flush() {
       if (enabled == 1) print (name == "" ? "?" : name)
-      name = ""; enabled = 0; key = ""
+      name = ""; enabled = 0; key = ""; just_opened = 1; pending_comma = 0
     }
     {
       s = $0; n = length(s)
@@ -167,13 +183,34 @@ mcp_enabled_ids() {
           j = i + 1
           while (j <= n && substr(s, j, 1) ~ /[ \t\r]/) j++
           if (substr(s, j, 1) == ":") {
-            if (depth == 1) key = val
+            if (depth == 1) {
+              # A key must be the first thing in its entry or follow a comma.
+              # `{"name":"off" "enabled":false}` balances and spells its
+              # boolean correctly; only the missing separator gives it away.
+              if (!just_opened && !pending_comma) garbage = 1
+              just_opened = 0; pending_comma = 0
+              key = val
+            }
             i = j
           } else {
+            if (depth == 1) { just_opened = 0; pending_comma = 0 }
             if (depth == 1 && key == "name") name = val
             key = ""
           }
+          # A string is a significant token: it ends any pending comma, so
+          # the trailing-comma check below does not fire on `{"a":"b"}`.
+          trailing = 0
           continue
+        }
+        # A comma before a close is a trailing comma: `[{...},]`.
+        if (c == ",") {
+          if (depth == 1) pending_comma = 1
+          trailing = 1
+          continue
+        }
+        if (c !~ /[ \t\r]/) {
+          if ((c == "]" || c == "}") && trailing) garbage = 1
+          trailing = 0
         }
         if (c == "{") { depth++; if (depth == 1) flush(); continue }
         if (c == "}") { if (depth == 1) flush(); depth--; continue }
@@ -248,7 +285,28 @@ common_check_model_flags() {
 # Enter the repo and verify the environment. Called by mode_main after
 # argument parsing, before any codex invocation.
 common_env_checks() {
-  cd "$repo" || { echo "error: cannot enter ${repo}" >&2; exit 3; }
+  # `--` because `cd` is a builtin that parses its own options: `cd -` jumps to
+  # OLDPWD *and echoes the path to stdout*, which must carry nothing but the
+  # result, and `cd -P` is silently accepted as a flag — leaving the run
+  # pointed at whatever directory it was already in. Quoting does not stop
+  # either; the terminator does.
+  cd -- "$repo" || { echo "error: cannot enter ${repo}" >&2; exit 3; }
+
+  # A repository path carrying a line break would break out of the `resume:`
+  # descriptor — advertised as ready to run — and forge a later standalone
+  # `session:` marker than the wrapper's own, which is the value a follow-up
+  # feeds back to --continue. Rejected rather than sanitized, for the same
+  # reason as the model and effort values: silently rewriting a path would
+  # advertise a command that does not reproduce the run.
+  # Held in variables, exactly as common_check_model_flags does: `$(printf
+  # '\n')` strips the very newline it is meant to match, leaving a pattern of
+  # `**` that matches every path there is.
+  local lf=$'\n' cr=$'\r'
+  case "$PWD" in
+    *"$lf"*|*"$cr"*)
+      echo "error: the repository path contains a line break, which would forge marker lines in this script's output" >&2
+      exit 3 ;;
+  esac
 
   # The printed value matters, not just the exit status: in a bare
   # repository this command *succeeds* and prints "false", and trusting
@@ -531,13 +589,21 @@ common_resolve_scratch() {
     # the repository — inside it by construction.
     *)  probe="${PWD}/${codex_home}" ;;
   esac
+  # Collapse `.` and `..` textually FIRST. The ancestor walk below stops at
+  # the nearest directory that exists, and `..` after a component that does
+  # not exist yet sends it somewhere the finished path will never be:
+  # `/tmp/new/../../repo/home` with no `/tmp/new` walks up to `/tmp` and is
+  # approved, while mkdir -p lands it in `repo`. Lexical collapse is not
+  # symlink-aware, which is why both it and the resolved ancestor are checked
+  # below — either landing inside the repository is a refusal.
+  probe="$(lexical_path "$probe")"
   while [ -n "$probe" ] && [ ! -d "$probe" ]; do
     parent="${probe%/*}"
     [ "$parent" = "$probe" ] && parent=""
     probe="$parent"
   done
-  [ -n "$probe" ] && resolved_home="$(cd "$probe" 2>/dev/null && pwd -P)"
-  if [ -n "$resolved_home" ] && inside_repo "$resolved_home"; then
+  [ -n "$probe" ] && resolved_home="$(cd -- "$probe" 2>/dev/null && pwd -P)"
+  if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; } || inside_repo "$probe"; then
     echo "error: CODEX_HOME (${codex_home}) resolves inside ${worktree_root} or its git storage." >&2
     echo "error: codex writes every session under CODEX_HOME/sessions, so this ${run_noun} would write the repository it is reading; refusing to start." >&2
     echo "hint: point CODEX_HOME outside the repository for this run." >&2

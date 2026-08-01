@@ -163,7 +163,7 @@ mean **stop and report, do not improvise**:
 |----------|---------|------------|
 | `ok` | The pipeline completed, whether or not everything it planned was affordable — individual verifiers, probes and attacks can still be deferred inside an `ok` run, and the ledger says which | Write the report — including when it found nothing. A zero-finding run still probes the high-risk regions and still owes the full ledger; silence only means something alongside the coverage that produced it. |
 | `invalid_args` | The patch was not captured or bound, or a Phase 0 value is malformed — a non-hex `base_sha` or `patch_sha256`, a line break in `scope`, `intent`, `patch_path` or `repo_root` | Redo Phase 0. |
-| `budget_too_small` | A floor could not be **reserved at all** — triage, the coverage floor, or the accuracy floor plus its escrow | Report the shortfall. Do **not** run a degraded review. |
+| `budget_too_small` | A floor is unaffordable — triage, the coverage floor, or the accuracy floor plus its escrow. Reachable **after** the calibration sample too: triage and the first lens may already have run and been charged, at the rate they revealed | Report the shortfall, and that no report is coming despite the spend. Do **not** run a degraded review. |
 | `triage_failed` / `adjudication_failed` | A load-bearing role did not return | Say so plainly. Never promote candidates on finder output alone. |
 
 ## Phase 4 — Report

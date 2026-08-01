@@ -41,6 +41,13 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
     listing; output it cannot recognize — including nothing at all —
     is evidence of nothing and is refused rather than read as "all
     clear".
+  - The scanner also rejects two malformed shapes that balance and spell
+    their booleans correctly: a trailing comma before a close, and two
+    adjacent strings with no colon between them. It is deliberately not a
+    JSON validator — there is no parser to hand in a bash wrapper, and one
+    would be a dependency for a payload this script only needs to enumerate.
+    What it rejects is what it can name; the guarantee is structural, not
+    syntactic, and this sentence is the honest bound on it.
   - Every `"enabled"` field must be a bare `true` or `false`, checked by
     counting keys against well-formed values. The enumeration keys
     entirely on those literal bytes — the grep looks for `true`, the
