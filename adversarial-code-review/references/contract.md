@@ -227,7 +227,11 @@ convincing it sounds:
   the predicted signature, *and* the patch was actually applied and the
   patched run actually failed — both stated explicitly, not inferred
   from prose — *and* a control run shows the same test passing without
-  the reviewed patch applied. The control is not substitutable: a
+  the reviewed patch applied, with **what that control returned recorded**,
+  on the same footing as the patched result. A bare "the control passed"
+  is an assertion that it ran; the recorded output is what makes the
+  assertion checkable, and this is the one grade that can override a
+  refuting adjudicator. The control is not substitutable: a
   specification says what the code *ought* to do, only the control shows
   that this patch is what stopped it doing so. Accept a citation in its
   place and a defect that already existed at `base_sha` is reportable as
@@ -326,6 +330,12 @@ Verification depth: 9/12 candidates adjudicated; 2 executed, 4 probe-only, 3 unv
 Plus one frontier sentence naming what the next increment of budget
 would buy first — for example, "next budget would execute C7, then add
 the recommended security lens."
+
+When candidates were found and dropped unverified, that sentence names
+their verification, ahead of any optional coverage purchase. It has to:
+the two regimes do not overlap. A run tight enough to trim is nowhere
+near affording an extra region probe, so naming the probe would promise
+the one thing the next increment does not buy.
 
 Never report a defect-coverage percentage. The denominator is the set
 of defects that exist, which is unknown; a percentage against it is

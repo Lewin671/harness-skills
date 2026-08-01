@@ -111,7 +111,9 @@ mutate "disclosure checklist counts" "    verified_findings: results.filter((r) 
 mutate "predicates must support substantiation" "    && PREDICATES.every((k) => citedAs(verifierRecord, k, 'supports_candidate'))" "    "
 mutate "falsification must cite code" "    && typeof r[k].cited_code === 'string' && r[k].cited_code.trim())" "    )"
 mutate "caller can decline execution" "  if (!allowExecution) defer({ target_id: t.target_id, kind: 'executable_attack', anchor: t.label }, 'disabled_by_caller')" "  if (false) {}"
-mutate "trim instead of abort" "while (candidates.length && committedWU + floorsFor(candidates) > budgetWU + EPS) {" "while (false) {"
+mutate "trim instead of abort" "while (candidates.length
+       && (committedWU + floorsFor(candidates) > budgetWU + EPS
+           || !admitTokens(floorsFor(candidates)))) {" "while (false) {"
 mutate "duplicate candidates collapse" "  if (candidateFingerprints.has(fingerprint)) {" "  if (false) {"
 mutate "per-lens candidate cap" "  if (seen >= MAX_CANDIDATES_PER_LENS) {" "  if (false) {"
 mutate "execution decision must be stated" "if (typeof A.allow_execution !== 'boolean') {" "if (A.allow_execution !== undefined && typeof A.allow_execution !== 'boolean') {"
@@ -130,13 +132,11 @@ mutate "held: patch_applied" "    if (a.patch_applied !== true) missing.push('pa
 mutate "reject unknown profile" "if (A.profile !== undefined && !Object.prototype.hasOwnProperty.call(PROFILES, A.profile)) {" "if (false) {"
 mutate "reject invalid budget" "if (A.budget_wu !== undefined && !(Number.isFinite(A.budget_wu) && A.budget_wu > 0)) {" "if (false) {"
 mutate "supplemental finder floor guard" "if (wantedLens && P.supplementalLens && admitOptional(W.finder, floorsFor(candidates))) {" "if (wantedLens && P.supplementalLens && admitOptional(W.finder, 0)) {"
-mutate "rollback respects tokens too" "             || !admitTokens(floorsFor(candidates)))) {" "             )) {"
 mutate "profile must be an own property" "if (A.profile !== undefined && !Object.prototype.hasOwnProperty.call(PROFILES, A.profile)) {" "if (A.profile !== undefined && !PROFILES[A.profile]) {"
 mutate "budget must be finite" "if (A.budget_wu !== undefined && !(Number.isFinite(A.budget_wu) && A.budget_wu > 0)) {" "if (A.budget_wu !== undefined && !(typeof A.budget_wu === 'number' && A.budget_wu > 0)) {"
 mutate "fence strips its own marker" "  const body = String(text === undefined || text === null ? '' : text).split(FENCE).join('UNTRUSTED-RECORD-ESCAPED')" "  const body = String(text === undefined || text === null ? '' : text)"
 mutate "supplemental candidate rollback" "  while (candidates.length > beforeSupplemental
-         && (committedWU + floorsFor(candidates) > budgetWU + EPS
-             || !admitTokens(floorsFor(candidates)))) {" "  while (false) {"
+         && committedWU + floorsFor(candidates) > budgetWU + EPS) {" "  while (false) {"
 
 # Trimming, and everything that must be derived from the trimmed set.
 mutate "trim ranks rather than takes last" "const pool = candidates.filter((c) => c.proposed_severity === sev).sort(byRank)" "const pool = candidates.filter((c) => c.proposed_severity === sev)"
@@ -154,8 +154,7 @@ mutate "terminal-only substantiation split out" "    substantiated_by_terminal_e
 mutate "adjudicated substantiation gated on state" "    adjudicator_substantiated_findings: results.filter((r) => r.state === 'substantiated' && r.adjudicated_state === 'substantiated').length," "    adjudicator_substantiated_findings: results.filter((r) => r.adjudicated_state === 'substantiated').length,"
 mutate "file-level-only candidates counted" "    reported_candidates_file_level_only: results.filter((r) => r.scope_binding && r.scope_binding.level === 'file_level_only').length," "    reported_candidates_file_level_only: 0,"
 mutate "candidate carries its binding level" "  const scope_binding = matched
-    ? { level: 'hunk_level', matched_range: matched }" "  const scope_binding = matched
-    ? { level: 'hunk_level', matched_range: matched }
+    ? { level: 'hunk_level', matched_range: matched }" "  const scope_binding = false
     ? { level: 'hunk_level', matched_range: matched }"
 
 # Malformed range data is a caller bug, never read as absent coverage.
@@ -166,6 +165,14 @@ mutate "changed_ranges pairs are well formed" "      if (!Array.isArray(r) || r.
 
 # The attacker must not be invited to produce evidence the script rejects.
 mutate "attack prompt requires the control" "     AND control_passed is true. Requires test_code and command. Anything" "     AND either control_passed is true or specification_citation is given. Anything"
+mutate "reproduction: control_result" "  if (!a.control_result) missing.push('control_result')" "  "
+mutate "trim respects tokens too" "       && (committedWU + floorsFor(candidates) > budgetWU + EPS
+           || !admitTokens(floorsFor(candidates)))) {" "       && (committedWU + floorsFor(candidates) > budgetWU + EPS
+           )) {"
+mutate "supplemental rollback is disclosed" "    trimmed.push(dropped)" "    "
+mutate "unsettled names must be predicates" "  const canRefute = groundedRefutation && unsettledNamesValid && PREDICATES.some((k) =>" "  const canRefute = groundedRefutation && PREDICATES.some((k) =>"
+mutate "frontier names the accuracy floor first" "    const paid = byBudget.find((d) => d.kind === 'candidate_verification' || d.kind === 'supplemental_candidate')
+      || byBudget[0]" "    const paid = byBudget[0]"
 
 echo
 if [ "${survived}" -eq 0 ]; then

@@ -221,6 +221,15 @@ with its anchor, in the top-level `found_but_not_verified` array. Every
 What changed is that "we found this and could not afford to check it" is
 now a disclosed outcome rather than a reason to return nothing.
 
+The trim checks **both** ceilings — weighted units and the token target
+— because the reservation it precedes checks both. Trimming on units
+alone left the token case aborting the whole review, which is the same
+suppression through the other door. It is also the single place the
+token floor is enforced: the supplemental-lens rollback deliberately
+checks units only, since the trim runs later and sees the whole set, and
+a second token check there merely rolled back candidates the tokens
+could have covered.
+
 Trimming happens **before** the buckets, verification tiers, reserves
 and the verify plan are derived, so exactly one candidate set is ever in
 play. Deriving them first is not a cosmetic ordering question: it makes

@@ -369,7 +369,10 @@ const VERIFIER_RECORD = {
     reachability: PREDICATE,
     contract_violation: PREDICATE,
     strongest_refutation: { type: 'string' },
-    unsettled_predicates: { type: 'array', items: { type: 'string' } },
+    // Constrained to the three predicate names. A free string here is matched
+    // by exact comparison downstream, so "semantics " would read as a
+    // different predicate and silently defeat the contradiction check.
+    unsettled_predicates: { type: 'array', items: { type: 'string', enum: ['semantics', 'reachability', 'contract_violation'] } },
     grounding: { type: 'string', enum: ['strong', 'weak'] },
   },
 }
@@ -961,6 +964,12 @@ function normalizeAttack(raw, id, hasConcreteCounterexample) {
   if (!a.predicted_signature) missing.push('predicted_signature')
   if (a.signature_matched !== true) missing.push('signature_matched=true')
   if (!controlled) missing.push('control_passed=true (a specification_citation does not substitute for the control run)')
+  // The control's OUTPUT, on the same footing as patched_result. A bare
+  // control_passed=true is an assertion that the control ran; the recorded
+  // result is what makes that assertion checkable, and terminal evidence can
+  // override a refuting adjudicator, so this is exactly where a bare boolean
+  // must not be enough.
+  if (!a.control_result) missing.push('control_result')
   if (!missing.length) return a
 
   // NEVER downgrade to `held`: a run whose result cannot be trusted says
@@ -1089,6 +1098,12 @@ lenses.forEach((lens) => launched(`find:${lens}`, W.finder))
 endWave()
 
 const candidates = []
+// Everything found and then dropped because the budget could not verify it —
+// from EITHER path: the supplemental-lens rollback, and the pre-verification
+// trim. One collection, because the report owes the reader one list. Routing
+// only one path here is how the disclosure came to claim a run had found 14
+// candidates when it had accepted 26.
+const trimmed = []
 const extraRegions = []
 const recommendedLenses = []
 const lensesRun = [...lenses]
@@ -1186,13 +1201,17 @@ if (wantedLens && P.supplementalLens && admitOptional(W.finder, floorsFor(candid
   // we already paid for, keep what fits and disclose the rest. Dropping the
   // whole run here would spend the budget and return nothing, which is the
   // one outcome worse than partial coverage.
-  // Both dimensions, or the abort simply moves: with drift, the units fit
-  // while the tokens do not, and the run still dies after paying for the lens.
+  // Weighted units only. The token floor is enforced once, by the
+  // pre-verification trim, which runs later and sees the whole candidate set.
+  // Checking tokens here as well rolled back candidates the tokens could in
+  // fact have covered — measured at 36wu it cost one retained candidate and
+  // saved no tokens — while the trim would have caught any real overflow.
   while (candidates.length > beforeSupplemental
-         && (committedWU + floorsFor(candidates) > budgetWU + EPS
-             || !admitTokens(floorsFor(candidates)))) {
+         && committedWU + floorsFor(candidates) > budgetWU + EPS) {
     const dropped = candidates.pop()
     unrecordCandidate(dropped)
+    dropped.dropped_by = 'supplemental_lens_rollback'
+    trimmed.push(dropped)
     ledger.deferred.push({
       target_id: dropped.id, kind: 'supplemental_candidate',
       anchor: `${dropped.file}:${dropped.line}`, title: dropped.title,
@@ -1296,8 +1315,14 @@ const byRank = (a, b) => rank(a) - rank(b) || `${a.file}:${a.line}`.localeCompar
 // that was then discarded, and a ledger that called those candidates
 // unverified when a verifier had in fact run. Everything downstream is built
 // from the trimmed set, so there is exactly one candidate set in play.
-const trimmed = []
-while (candidates.length && committedWU + floorsFor(candidates) > budgetWU + EPS) {
+// Both dimensions, or the abort simply moves. reserve() below gates on the
+// weighted-unit ceiling AND on the token target, so trimming only against the
+// former leaves the token case aborting the whole review — the same
+// suppression this loop exists to prevent, through the other door. The
+// supplemental rollback already checks both; this is its sibling.
+while (candidates.length
+       && (committedWU + floorsFor(candidates) > budgetWU + EPS
+           || !admitTokens(floorsFor(candidates)))) {
   // Least severe class first, and within it the worst-ranked member — the
   // same ranking the rest of the wave funds by, not discovery order. "Least
   // consequential" has to mean the same thing here as it does everywhere
@@ -1310,6 +1335,7 @@ while (candidates.length && committedWU + floorsFor(candidates) > budgetWU + EPS
   }
   if (!victim) break
   candidates.splice(candidates.indexOf(victim), 1)
+  victim.dropped_by = 'trim_before_verification'
   trimmed.push(victim)
   defer({ target_id: victim.id, kind: 'candidate_verification', anchor: `${victim.file}:${victim.line}`, title: victim.title }, 'deferred_by_budget')
 }
@@ -1673,7 +1699,16 @@ const results = candidates.map((c) => {
   // rejects — otherwise conflicting evidence would eject a real defect.
   const unsettledNames = (verifierRecord && Array.isArray(verifierRecord.unsettled_predicates))
     ? verifierRecord.unsettled_predicates : []
-  const canRefute = groundedRefutation && PREDICATES.some((k) =>
+  // Matching is exact, so a name that is not one of the three defeats the
+  // check silently: list "semantics " and the falsified "semantics" no longer
+  // looks contested. The schema constrains this, but the schema is enforced on
+  // the agent, and this decides whether a real defect gets rejected — so it
+  // fails closed here too rather than trusting one layer.
+  const unsettledNamesValid = unsettledNames.every((n) => PREDICATES.includes(n))
+  if (!unsettledNamesValid) {
+    malformed('verifier', c.id, `unsettled_predicates named ${JSON.stringify(unsettledNames)}; only ${PREDICATES.join(', ')} are predicates, so no rejection can rest on this record`)
+  }
+  const canRefute = groundedRefutation && unsettledNamesValid && PREDICATES.some((k) =>
     citedAs(verifierRecord, k, 'falsifies_candidate') && !unsettledNames.includes(k))
   let state = v ? v.state : 'unresolved'
   const terminal = s.grade === 'reproduced' && s.execution_status === 'executed'
@@ -1864,6 +1899,7 @@ return {
     origin: c.origin,
     scope_binding: c.scope_binding,
     reason: 'deferred_by_budget',
+    dropped_by: c.dropped_by,
   })),
 
   // Named for what it is: every candidate with its state, not a findings list.
@@ -1920,7 +1956,14 @@ return {
   // of money. A target the profile declined is not bought by raising the
   // budget, so it is named as a profile change instead.
   frontier: (() => {
-    const paid = ledger.deferred.find((d) => d.reason === 'deferred_by_budget')
+    // Verifying a candidate that was found and dropped outranks any optional
+    // coverage purchase, and not merely by doctrine: when a run trims, the
+    // next increment demonstrably buys verification and not a region probe.
+    // Ledger order alone put the probe first — it is deferred a wave earlier —
+    // so the frontier named the one thing the next budget would NOT buy.
+    const byBudget = ledger.deferred.filter((d) => d.reason === 'deferred_by_budget')
+    const paid = byBudget.find((d) => d.kind === 'candidate_verification' || d.kind === 'supplemental_candidate')
+      || byBudget[0]
     if (paid) return `next budget would ${paid.kind.replace(/_/g, ' ')} at ${paid.anchor}`
     const prof = ledger.deferred.find((d) => d.reason === 'deferred_by_profile')
     if (prof) return `budget was not the limit; a different profile would ${prof.kind.replace(/_/g, ' ')} at ${prof.anchor}`

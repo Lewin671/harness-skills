@@ -185,6 +185,15 @@ function makeAgent(state, s) {
       // that contradicts itself must not be read as support.
       // D: falsifies AND lists that same predicate unsettled — conflicting
       // evidence must not eject a candidate either.
+      // A falsification whose contested predicate is named with a trailing
+      // space: exact matching would miss the contradiction and let the
+      // rejection through on evidence the verifier itself called unsettled.
+      if (s.verifierBadUnsettledName) {
+        const ids = expectedIds(prompt)
+        const mk = (id) => ({ candidate_id: id, semantics: predicate('falsifies_candidate'), reachability: predicate('unsettled'),
+          contract_violation: predicate('unsettled'), strongest_refutation: 'conflicting', unsettled_predicates: ['semantics '], grounding: 'strong' })
+        return l.includes('minors') ? { verdicts: ids.map(mk) } : mk(ids[0])
+      }
       if (s.verifierContradictoryRefute) {
         const ids = expectedIds(prompt)
         const mk = (id) => ({ candidate_id: id, semantics: predicate('falsifies_candidate'), reachability: predicate('unsettled'),
@@ -265,6 +274,12 @@ function makeAgent(state, s) {
         // A cited spec must NOT stand in for the control: a defect already
         // present at base_sha would otherwise be reported as introduced here.
         else if (s.attackOmit === 'control_but_cites_spec') { delete m.control_passed; delete m.control_result; m.specification_citation = 'RFC 1234 section 2' }
+        // Control OUTPUT recorded, but the control never passed — with a spec
+        // cited. Isolates control_passed from control_result, so neither
+        // check can hide behind the other.
+        else if (s.attackOmit === 'control_passed_but_cites_spec') { delete m.control_passed; m.specification_citation = 'RFC 1234 section 2' }
+        // Claims the control passed but records nothing it returned.
+        else if (s.attackOmit === 'control_result_only') { delete m.control_result }
         else if (s.attackOmit === 'applied') m.patch_applied = false
         else if (s.attackOmit === 'patched_failed') m.patched_failed = false
         else if (s.attackOmit === 'bound') m.bound_to_base_sha = false
@@ -416,7 +431,7 @@ R.push(await run('emergent hit at 14wu', { ...BASE, budget_wu: 14 }))
 }
 // Mutation coverage: each reproduction requirement, omitted alone. Deleting
 // any single check in normalizeAttack makes exactly one of these fail.
-for (const field of ['control', 'control_but_cites_spec', 'bound', 'hash', 'capability', 'signature_matched', 'test_code', 'command', 'patched_result', 'predicted_signature', 'applied', 'patched_failed']) {
+for (const field of ['control', 'control_but_cites_spec', 'control_passed_but_cites_spec', 'control_result_only', 'bound', 'hash', 'capability', 'signature_matched', 'test_code', 'command', 'patched_result', 'predicted_signature', 'applied', 'patched_failed']) {
   R.push(await run(`reproduced missing ${field}`, { ...BASE }, { attackOmit: field }))
 }
 // The attacked critical must have NO counterexample, or the guard is untested.
@@ -567,6 +582,20 @@ R.push({ ...ordRev, expect: (res) => {
   return kept(res) === kept(ordFwd.res)
     || `discovery order changed what trimming kept: ${kept(ordFwd.res)} vs ${kept(res)}`
 } })
+// A predicate name that is not one of the three defeats exact matching, so
+// the rejection must fail closed rather than proceed on contested evidence.
+R.push(await run('unsettled predicate misnamed', { ...BASE }, { verifierBadUnsettledName: true, adjAlwaysRefute: true,
+  expect: (res) => res.refuted.length === 0
+    || `${res.refuted.length} candidate(s) rejected on a predicate named outside the enum` }))
+// When candidates were found and dropped for budget, verifying them is what
+// the next increment actually buys — region probes are not reachable in that
+// regime at all, so naming one would be false.
+R.push(await run('frontier after trimming', { ...BASE, budget_wu: 16 }, {
+  expect: (res) => {
+    if (!res.verification_depth.unverified_by_budget) return 'nothing was trimmed, so the frontier claim is untested'
+    return /candidate verification|supplemental candidate/.test(res.frontier)
+      || `candidates went unverified but the frontier promised: ${res.frontier}`
+  } }))
 R.push(await run('anchor does not match file:line', { ...BASE }, { anchorMismatch: true,
   expect: (res) => res.ledger.invalid_candidates.some((x) => /anchor/.test(x.reason))
     || 'a candidate whose anchor names a different file was accepted' }))
@@ -574,8 +603,17 @@ R.push(await run('anchor does not match file:line', { ...BASE }, { anchorMismatc
 // admitted against.
 R.push(await run('supplemental finder floods candidates', { ...BASE, profile: 'recall-first', budget_wu: 48 },
   { bulkSupplemental: true,
-    expect: (res, state) => res.status === 'ok'
-      || `an optional supplemental lens ran and the review then failed with ${res.status}` }))
+    expect: (res) => {
+      if (res.status !== 'ok') return `an optional supplemental lens ran and the review then failed with ${res.status}`
+      const by = {}
+      for (const f of res.found_but_not_verified || []) by[f.dropped_by] = (by[f.dropped_by] || 0) + 1
+      if (!by.supplemental_lens_rollback) return 'the supplemental flood was never rolled back'
+      // The rollback exists to make the floor fit BEFORE the rest of the wave
+      // spends against it. If it leaves work for the later trim it has not
+      // done its job, and the run verifies fewer candidates for the same money.
+      if (by.trim_before_verification) return `the rollback left ${by.trim_before_verification} candidate(s) to the later trim`
+      return true
+    } }))
 R.push(await run('escalated adjudication still weak', { ...BASE }, { adjAlwaysWeak: true }))
 // Enough candidates for multi-batch adjudication, so escalation must reach
 // past its single escrowed batch and hit the real ceiling.
@@ -610,10 +648,33 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
   // it earns its keep only when they do not. Past roughly 6.6x the accuracy
   // floor stops fitting in tokens while still fitting in units, so this is
   // the regime where the token half of the ceiling is the only thing left.
+  // It used to abort the whole review here. That threw away everything the
+  // finders had already been paid for, which is the suppression the trim
+  // exists to prevent — so now it trims on the token dimension instead and
+  // discloses what it dropped. What must still hold: nothing is promoted, and
+  // nothing found is lost.
   const d = drainer(48000, 48, 7)
   R.push(await run('priors underestimate by 7x', { ...BASE }, { onCall: d.onCall, drift: true }, d.budget,
+    (res) => {
+      if ((res.substantiated || []).length) return `7x drift still substantiated ${res.substantiated.length} candidate(s)`
+      const dep = res.verification_depth
+      if (!dep) return `7x drift aborted the whole review as ${res.status} instead of trimming to what the tokens could fund`
+      if (dep.candidates_found !== dep.candidates_retained + dep.unverified_by_budget) {
+        return `7x drift lost candidates: found ${dep.candidates_found}, accounted ${dep.candidates_retained}+${dep.unverified_by_budget}`
+      }
+      if (!dep.unverified_by_budget) return '7x drift trimmed nothing, so the token half of the ceiling did nothing'
+      return true
+    }))
+}
+{
+  // Past roughly 50x the priors the COVERAGE floor itself stops fitting in
+  // tokens. That is the one floor trimming cannot rescue — a review without
+  // breadth has nothing to say and its silence means nothing — so the run
+  // must refuse rather than proceed on a finder wave it cannot pay for.
+  const d = drainer(48000, 48, 60)
+  R.push(await run('coverage floor unaffordable in tokens', { ...BASE }, { onCall: d.onCall, drift: true }, d.budget,
     (res) => res.status === 'budget_too_small'
-      || `priors were 7x off and the run proceeded anyway as ${res.status}`))
+      || `the coverage floor did not fit in tokens and the run proceeded as ${res.status}`))
 }
 {
   // Drift arrives with the attack, after adjudication's units are already
@@ -767,11 +828,30 @@ for (const r of R) {
     if (dc0.verified_findings !== dc0.adjudicator_substantiated_findings + dc0.substantiated_by_terminal_evidence_only) {
       fail++; problems.push(`${r.name}: ${dc0.verified_findings} verified findings do not split into ${dc0.adjudicator_substantiated_findings} adjudicated + ${dc0.substantiated_by_terminal_evidence_only} terminal-only`)
     }
-    // The headline Coverage item must agree in all three places it appears.
-    const deferredVerification = (r.res.ledger.deferred || []).filter((x) => x.kind === 'candidate_verification').length
+    // The headline Coverage item must agree in all three places it appears —
+    // counting BOTH paths a candidate can be dropped for budget.
+    const deferredVerification = (r.res.ledger.deferred || []).filter((x) => x.kind === 'candidate_verification' || x.kind === 'supplemental_candidate').length
     const named = (r.res.found_but_not_verified || []).length
     if (dc0.found_but_not_verified !== named || named !== deferredVerification) {
       fail++; problems.push(`${r.name}: found-but-not-verified disagrees — checklist ${dc0.found_but_not_verified}, array ${named}, ledger ${deferredVerification}`)
+    }
+    // The region-probe escrow exists so an optional probe can never cost a
+    // candidate its verifier: a probe is admitted only if the floor still
+    // fits WITH the extra critical it might produce. Both happening at once
+    // means the escrow did not hold. Excluded under drift, where actual spend
+    // outruns the priors the escrow was computed from.
+    if (!r.drift && r.res.search_breadth && r.res.verification_depth
+        && r.res.search_breadth.regions_probed > 0
+        && r.res.verification_depth.unverified_by_budget > 0) {
+      fail++; problems.push(`${r.name}: bought ${r.res.search_breadth.regions_probed} region probe(s) while ${r.res.verification_depth.unverified_by_budget} candidate(s) went unverified for budget`)
+    }
+    // Nothing found may simply vanish: every candidate is either carried into
+    // the results or disclosed as dropped for budget.
+    if (r.res.verification_depth) {
+      const d = r.res.verification_depth
+      if (d.candidates_found !== d.candidates_retained + d.unverified_by_budget) {
+        fail++; problems.push(`${r.name}: found ${d.candidates_found} candidates but accounted for ${d.candidates_retained}+${d.unverified_by_budget}`)
+      }
     }
     // A trimmed candidate is disclosed, so it must carry the anchor a reader
     // needs; and it must not also appear as a reported result.
@@ -851,8 +931,10 @@ for (const r of R) {
     && a.patch_applied === true && a.patched_failed === true
     && a.signature_matched === true && a.test_code && a.command && a.patched_result && a.predicted_signature
     // A control run, not a cited specification: only the control attributes
-    // the failure to THIS patch.
-    && a.control_passed === true)
+    // the failure to THIS patch — and what that control actually returned,
+    // on the same footing as patched_result. A bare boolean is an assertion
+    // that the control ran; the recorded output is what makes it checkable.
+    && a.control_passed === true && Boolean(a.control_result))
   for (const x of r.res.refuted || []) {
     const v = x.verifier
     const falsified = v && ['semantics', 'reachability', 'contract_violation'].some((k) => v[k] && v[k].holds === 'falsifies_candidate')
