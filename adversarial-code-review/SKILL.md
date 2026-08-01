@@ -44,6 +44,12 @@ Three layered documents, and you need all three:
   from prose.** A procedure regenerated on every run is not auditable,
   and auditability is what this skill sells.
 
+`tests/run-tests` holds the contract tests; `tests/run-mutation-tests`
+breaks each protection in turn, on a copy, and requires the suite to go
+red for it. Run both after editing the script — a green suite proves
+nothing on its own, which is the same reason this skill refuses to call
+an unrefuted candidate verified.
+
 ## Positioning
 
 An explicit opt-in, not the default deep review. Reach for it only when

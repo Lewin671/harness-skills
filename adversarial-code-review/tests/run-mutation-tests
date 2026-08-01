@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Do the contract tests actually bite?
+#
+# A green suite proves nothing on its own — an assertion that can never fail
+# is worse than no assertion, because it manufactures confidence. This breaks
+# one protection in review-workflow.js at a time, on a COPY, and requires
+# run-tests to go red for each. A surviving mutant means that protection is
+# unguarded: either add a scenario that reaches it, or an assertion that sees
+# the difference.
+#
+# Exit 0 when every mutant is killed. Known-equivalent mutants are listed and
+# excluded explicitly rather than silently tolerated.
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+ORIG="${HERE}/../review-workflow.js"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/acr-mut-XXXXXX")"
+trap 'rm -rf "${TMP}"' EXIT
+
+# A red baseline would make every mutant look killed for free — the same
+# can't-fail-meaningfully defect this script exists to catch, one level up.
+if ! "${HERE}/run-tests" >/dev/null 2>&1; then
+  echo "baseline run-tests is already failing — fix that first; mutation results would be meaningless"
+  exit 1
+fi
+
+survived=0
+total=0
+
+mutate() {
+  local name="$1" from="$2" to="$3" nth="${4:-1}"
+  total=$((total + 1))
+  if ! ACR_FROM="$from" ACR_TO="$to" ACR_NTH="$nth" ACR_SRC="$ORIG" ACR_OUT="${TMP}/m.js" python3 - <<'PY'
+import os, pathlib, sys
+s = pathlib.Path(os.environ['ACR_SRC']).read_text()
+frm, to, nth = os.environ['ACR_FROM'], os.environ['ACR_TO'], int(os.environ['ACR_NTH'])
+if s.count(frm) < nth:
+    sys.exit(9)
+i = -1
+for _ in range(nth):
+    i = s.index(frm, i + 1)
+pathlib.Path(os.environ['ACR_OUT']).write_text(s[:i] + to + s[i + len(frm):])
+PY
+  then
+    printf '%-44s %s\n' "$name" "SKIP (target text not found — update this mutant)"
+    survived=$((survived + 1))
+    return
+  fi
+  if ACR_WORKFLOW="${TMP}/m.js" "${HERE}/run-tests" >/dev/null 2>&1; then
+    printf '%-44s %s\n' "$name" "SURVIVED"
+    survived=$((survived + 1))
+  else
+    printf '%-44s %s\n' "$name" "killed"
+  fi
+}
+
+mutate "repro: signature_matched" "  if (a.signature_matched !== true) missing.push('signature_matched=true')" "  "
+mutate "repro: control/spec" "  if (!controlled) missing.push('control_passed or specification_citation')" "  "
+mutate "repro: executed" "  if (!executed) missing.push('execution_status=executed')" "  " 2
+mutate "repro: patch binding" "  if (!bound) missing.push('bound_to_base_sha + patch_hash_verified')" "  " 2
+mutate "repro: test_code" "  if (!a.test_code) missing.push('test_code')" "  "
+mutate "repro: command" "  if (!a.command) missing.push('command')" "  "
+mutate "repro: patched_result" "  if (!a.patched_result) missing.push('patched_result')" "  " 2
+mutate "repro: predicted_signature" "  if (!a.predicted_signature) missing.push('predicted_signature')" "  "
+mutate "repro: ready capability" "  if (a.test_capability !== 'ready') missing.push('test_capability=ready')" "  " 2
+mutate "held: executed" "    if (!executed) missing.push('execution_status=executed')" "    "
+mutate "held: patch binding" "    if (!bound) missing.push('bound_to_base_sha + patch_hash_verified')" "    "
+mutate "held: ready capability" "    if (a.test_capability !== 'ready') missing.push('test_capability=ready')" "    "
+mutate "held: patched_result" "    if (!a.patched_result) missing.push('patched_result')" "    "
+mutate "held: vectors_attempted" "    if (!(a.vectors_attempted && a.vectors_attempted.length)) missing.push('vectors_attempted')" "    "
+mutate "plausible needs counterexample" "    if (!hasConcreteCounterexample) {" "    if (false) {"
+mutate "plausible cannot claim execution" "    if (executed) {
+      malformed('attack', id, 'graded plausible while reporting execution — execution_status normalised to unavailable')
+      return { ...a, execution_status: 'unavailable' }
+    }" "    "
+mutate "probe completeness fields" "['input', 'trace', 'expected_vs_actual', 'predicted_signature']" "['trace']"
+mutate "probe target-id reconciliation" "  if (raw.target_id !== id) {" "  if (false) {" 2
+mutate "attack target-id reconciliation" "  if (raw.target_id !== id) {" "  if (false) {"
+mutate "not_attempted vs inconclusive" "    : (probeFailed ? 'blocked' : 'not_attempted')" "    : 'inconclusive'"
+mutate "prepaid token debt" "  return (waveEstimateWU + wu + prepaidDebtWU) * tokensPerWU <= budget.remaining()" "  return (waveEstimateWU + wu) * tokensPerWU <= budget.remaining()"
+mutate "grounded-refutation guard" "  if (state === 'substantiated' && !groundedRefutation && !terminal) {" "  if (false) {"
+mutate "refutation grounding must be strong" "verifierRecord && verifierRecord.grounding === 'strong'" "verifierRecord"
+mutate "terminal evidence override" "  if (terminal && state !== 'substantiated') {" "  if (false) {"
+mutate "region-probe floor escrow" "  if (admitOptional(W.probe, floorsFor([...candidates, ...syntheticCriticals(acceptedRegionProbes.length + 1)]))) acceptedRegionProbes.push(t)" "  if (admitOptional(W.probe, 0)) acceptedRegionProbes.push(t)"
+mutate "weak verdict replacement" "        if (v.grounding === 'strong') verdictById.set(id, v)" "        verdictById.set(id, v)"
+mutate "unknown-verdict-id rejection" "    if (!expected.has(id)) { ledger.unknown_verdict_ids.push({ role, id }); continue }" "    if (false) { continue }"
+mutate "duplicate-verdict rejection" "    if (seen.has(id)) { malformed(role, id, 'duplicate record in one batch — first kept'); continue }" "    if (false) { continue }"
+mutate "low-confidence coverage risk" "  ledger.coverage_risks.push({" "  if (false) ledger.coverage_risks.push({"
+mutate "finder evidence validation" "  if (!validEvidence(c)) {" "  if (false) {"
+mutate "weighted-unit hard ceiling" "  if (committedWU + wu > budgetWU + EPS) return false" "  "
+mutate "optional protected-floor check" "  if (committedWU + costWU + protectedWU > budgetWU + EPS) return false" "  "
+mutate "token ceiling (generic)" "  if (!admitTokens(wu)) return false" "  "
+mutate "prepaid-wave token gate" "  if (!admitTokens(wu)) return false
+  waveEstimateWU += wu
+  return true
+}" "  waveEstimateWU += wu
+  return true
+}"
+mutate "escrow draw token gate" "    if (!admitTokens(wu)) return false
+    escrow[pool] -= wu" "    escrow[pool] -= wu"
+mutate "blocked/inconclusive normalization" "    if (!executed) return a
+    malformed('attack', id, \`graded \${a.grade} while reporting execution — execution_status normalised to unavailable\`)
+    return { ...a, execution_status: 'unavailable' }" "    return a"
+mutate "probe outcome exactness" "  if (!p || p.outcome !== 'counterexample_constructed') return false" "  if (!p) return false"
+mutate "escalated verifier identity" "    if (e.r && e.r.candidate_id === e.c.id && e.r.grounding === 'strong') verifierById.set(e.c.id, e.r)" "    if (e.r) verifierById.set(e.c.id, e.r)"
+mutate "null-finder coverage disclosure" "  if (!res) { ledger.unrun_lenses.push(lens); failed('finder', lens, 'finder did not return'); return }" "  if (!res) { return }"
+mutate "grounded refutation definition" "    verifier_completed: groundedRefutation," "    verifier_completed: verified,"
+
+echo
+if [ "${survived}" -eq 0 ]; then
+  echo "all ${total} mutants killed — the suite has teeth"
+else
+  echo "${survived}/${total} mutants SURVIVED — those protections are unguarded"
+  exit 1
+fi

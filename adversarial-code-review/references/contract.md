@@ -149,7 +149,10 @@ exactly one state:
 - **`refuted`** — cited evidence falsifies at least one load-bearing
   predicate.
 - **`unresolved`** — evidence conflicts, or a required predicate stays
-  unknown after an honest attempt.
+  unknown after an honest attempt. Also the mandatory state when the only
+  refutation on record is weakly grounded: an attempt that could not
+  ground itself has settled nothing, and treating it as settled is the
+  same error as treating failure-to-refute as substantiation.
 
 The adjudicator also assigns final severity per the rubric above,
 overriding the finder's proposal, and states in one line what evidence

@@ -136,9 +136,15 @@ let committedWU = 0
 let waveEstimateWU = 0
 const launches = []
 
-// The user's token target is a HARD ceiling — agent() throws past it — so it
+// The user's token target is a hard ADMISSION guard — agent() throws past the
+// target, so nothing may be admitted whose projected cost does not fit. It
 // gates every launch, including ones paid for out of escrow or reserved in an
 // earlier wave. Cumulative within a wave, re-baselined from actuals between.
+//
+// It is not a guarantee about actual spend: a wave is admitted atomically and
+// cannot be re-checked mid-flight, so if the weighted-unit priors under-state
+// real cost, an already-open wave can still overshoot. The priors are
+// documented as estimates for exactly this reason.
 // Weighted units already committed whose TOKENS will be spent in a later
 // wave. endWave() clears the per-wave estimate, which is what previously let
 // an execution eat tokens that adjudication was already owed. Tracking the
@@ -1150,11 +1156,11 @@ for (const o of wave4) {
 
 // Escalate-once, on a declared field. As many as fit; the rest are disclosed.
 const weakCriticals = criticals.filter((c) => { const v = verifierById.get(c.id); return v && v.grounding === 'weak' })
-// Withdraw first, exactly as with weak adjudications. A weak refutation left
-// in place makes verifierById.has() true, which satisfies the substantiation
-// guard downstream — so a failed escalation would quietly license the very
-// finding the weak grounding said we could not stand behind.
-for (const c of weakCriticals) verifierById.delete(c.id)
+// The weak record is KEPT: the report still wants its unsettled_predicates,
+// and nothing downstream is fooled by it, because "a verifier completed" is
+// defined as a GROUNDED refutation, not merely a returned one. Deleting the
+// record was a critical-only special case whose only surviving effect was on
+// the reported counts, so the definition carries the rule instead.
 const escNow = []
 for (const c of weakCriticals) {
   if (drawOrReserve('verifier', W.criticalVerifierEscalated)) escNow.push(c)
@@ -1169,12 +1175,13 @@ if (escNow.length) {
   for (const e of esc) {
     if (!e) continue
     if (e.r && e.r.candidate_id === e.c.id && e.r.grounding === 'strong') verifierById.set(e.c.id, e.r)
-    else failed('verifier', e.c.id, 'escalated verifier returned nothing usable or was still weakly grounded; the withdrawn weak record is not restored')
+    else failed('verifier', e.c.id, 'escalated verifier returned nothing usable or was still weakly grounded; the original weak record stands and does not count as a completed refutation')
   }
   endWave()
 }
 for (const c of weakCriticals) {
-  if (!verifierById.has(c.id)) {
+  const r = verifierById.get(c.id)
+  if (!r || r.grounding !== 'strong') {
     ledger.forced_unresolved.push({ candidate_id: c.id, anchor: `${c.file}:${c.line}`, why: 'refutation was weakly grounded and the single permitted rerun did not produce a grounded one' })
   }
 }
@@ -1239,9 +1246,9 @@ prepaidDebtWU = escrow.adjudicator
 let adjudicationTokenBlocked = false
 if (adjInput.length && !admitPrepaid(adjReserveWU)) {
   // Weighted units for adjudication were committed two waves ago, but the
-  // token target is a hard ceiling measured against real spend. Launching
-  // past it would throw inside agent() and lose the batch anyway; refusing
-  // here at least leaves an honest ledger instead of an exception.
+  // admission guard is measured against real spend, which has moved since.
+  // Launching past the target would throw inside agent() and lose the batch
+  // anyway; refusing here at least leaves an honest ledger, not an exception.
   adjudicationTokenBlocked = true
   for (const e of adjInput) failed('adjudicator', e.candidate.id, 'token target exhausted before adjudication could run')
   log('token target exhausted before adjudication — no candidate can be reported as a finding')
@@ -1344,15 +1351,26 @@ function attackSummary(id, probeKind) {
 const results = candidates.map((c) => {
   const v = verdictById.get(c.id) || null
   const s = attackSummary(c.id, 'candidate_probe')
-  const verified = verifierById.has(c.id)
+  const verifierRecord = verifierById.get(c.id) || null
+  const verified = Boolean(verifierRecord)
+  // A refutation that could not ground itself has not settled anything, at
+  // any severity. The weak record is kept — the report wants its
+  // unsettled_predicates — but it does not count as a completed refutation.
+  // Only criticals buy an escalation; majors and minors simply fail closed.
+  const groundedRefutation = Boolean(verifierRecord && verifierRecord.grounding === 'strong')
   let state = v ? v.state : 'unresolved'
   const terminal = s.grade === 'reproduced' && s.execution_status === 'executed'
 
   // Fail closed: nothing becomes a finding on a finder's word. Without a
-  // completed refutation attempt, "nobody disproved it" is all we have, and
+  // grounded refutation attempt, "nobody disproved it" is all we have, and
   // the contract says that is not substantiation.
-  if (state === 'substantiated' && !verified && !terminal) {
-    ledger.forced_unresolved.push({ candidate_id: c.id, anchor: `${c.file}:${c.line}`, why: 'no verifier completed and no controlled reproduction; substantiation would rest on the finder claim alone' })
+  if (state === 'substantiated' && !groundedRefutation && !terminal) {
+    ledger.forced_unresolved.push({
+      candidate_id: c.id, anchor: `${c.file}:${c.line}`,
+      why: verified
+        ? 'the only refutation was weakly grounded and there is no controlled reproduction'
+        : 'no verifier completed and no controlled reproduction; substantiation would rest on the finder claim alone',
+    })
     state = 'unresolved'
   }
   // Terminal evidence is machine-checkable, so the script enforces it rather
@@ -1388,7 +1406,11 @@ const results = candidates.map((c) => {
     decisive_evidence: v ? v.decisive_evidence : 'adjudication did not complete for this candidate',
     unsettled_predicate: v ? (v.unsettled_predicate || null) : null,
     grounding: v ? v.grounding : null,
-    verifier_completed: verified,
+    // "Completed" means a refutation that could ground itself. A returned but
+    // weakly grounded one has settled nothing, and reporting it as completed
+    // would overstate what this review actually checked.
+    verifier_completed: groundedRefutation,
+    verifier_grounding: verifierRecord ? verifierRecord.grounding : null,
     verifier: verifierById.get(c.id) || null,
     probe: s.probe,
     attack: s.attack,

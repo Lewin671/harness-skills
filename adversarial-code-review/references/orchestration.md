@@ -227,10 +227,20 @@ buys a reasoning-only review, and the report's tradeoff lines will show
 
 When the user has set a turn token target, the script also reads the
 `budget` global (`budget.total`, `budget.spent()`, `budget.remaining()`)
-and treats `budget.remaining()` as a **hard guard**: it will not open a
-wave whose projected WU cost maps to more than the remaining tokens.
-Weighted units schedule; real tokens veto. Without a user target, the
-WU budget is the only bound.
+and treats `budget.remaining()` as a **hard admission guard**: it will
+not open a wave whose projected WU cost maps to more than the remaining
+tokens. Weighted units schedule; real tokens veto. Without a user
+target, the WU budget is the only bound.
+
+It guards *admission*, not actual spend, and the difference is not a
+quibble. A wave is admitted atomically and cannot be re-checked in
+flight, so if the priors under-state real cost, an already-open wave
+overshoots and nothing in the script can prevent it. Note also that
+`tokensPerWU` is `total / budgetWU`, which makes the token check
+arithmetically identical to the weighted-unit check whenever actuals
+match the priors — it earns its keep only when they drift. Both facts
+are why the priors are labelled estimates and why the report says
+"weighted units" rather than "tokens".
 
 ### Wave scheduling
 
@@ -513,6 +523,16 @@ reported, never swallowed:
 - A null **finder** means that lens was not run — Coverage ledger.
 - A null **verifier** leaves its candidate `unresolved` with reason
   `verification did not complete`.
+- A **weakly grounded** verifier does the same, at *every* severity. Only
+  criticals buy an escalation, but a refutation that could not ground
+  itself has settled nothing regardless of severity, so a candidate whose
+  sole refutation is weak cannot be substantiated without a controlled
+  reproduction. Cheap severities fail closed rather than relax.
+  The weak record is kept for the report — its `unsettled_predicates` are
+  what the Unresolved Candidates section needs — but
+  `verifier_completed` means a *grounded* refutation, not merely a
+  returned one. Defining the count that way is what makes the rule
+  uniform; there is no separate withdrawal step.
 - A target that was never probed is `not_attempted`, never `inconclusive` —
   minor candidates are not probe targets under any profile, so most runs have
   several, and grading them as "we tried and it held up" would be invention.
