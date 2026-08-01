@@ -184,7 +184,7 @@ mutate "trim respects tokens too" "       && (committedWU + floorsFor(candidates
            || !admitTokens(floorsFor(candidates)))) {" "       && (committedWU + floorsFor(candidates) > budgetWU + EPS
            )) {"
 mutate "supplemental rollback is disclosed" "    trimmed.push(dropped)" "    "
-mutate "unsettled names must be predicates" "  const canRefute = groundedRefutation && unsettledNamesValid && PREDICATES.some((k) =>" "  const canRefute = groundedRefutation && PREDICATES.some((k) =>"
+mutate "unsettled names must be predicates" "  const canRefute = groundedRefutation && unsettledNamesValid && decisiveStated && PREDICATES.some((k) =>" "  const canRefute = groundedRefutation && decisiveStated && PREDICATES.some((k) =>"
 mutate "frontier names the accuracy floor first" "    const paid = byBudget.find((d) => ACCURACY_KINDS.includes(d.kind))
       || byBudget[0]" "    const paid = byBudget[0]"
 
@@ -318,6 +318,12 @@ mutate "attacker counterexamples are complete" "  const attackerBuilt = ['input'
     .every((k) => nonblank(a[k]))" "  const attackerBuilt = true"
 mutate "downgrade keeps the attacker's evidence" "    grade: (hasConcreteCounterexample || attackerBuilt) ? 'plausible' : 'inconclusive'," "    grade: hasConcreteCounterexample ? 'plausible' : 'inconclusive',"
 
+# A verdict has to say what decided it, and name what it could not settle.
+mutate "verdict states its decisive evidence" "  const canSubstantiate = groundedRefutation && selfConsistent && decisiveStated" "  const canSubstantiate = groundedRefutation && selfConsistent"
+mutate "rejection states its decisive evidence" "  const canRefute = groundedRefutation && unsettledNamesValid && decisiveStated && PREDICATES.some((k) =>" "  const canRefute = groundedRefutation && unsettledNamesValid && PREDICATES.some((k) =>"
+mutate "unsettled predicate is non-blank" "  if (v && v.state === 'unresolved' && !nonblank(v.unsettled_predicate)) {" "  if (v && v.state === 'unresolved' && !v.unsettled_predicate) {"
+mutate "blank predicate is not a name" "    unsettled_predicate: v && nonblank(v.unsettled_predicate) ? v.unsettled_predicate : null," "    unsettled_predicate: v ? (v.unsettled_predicate || null) : null,"
+
 # A reviewed path may legitimately be named __proto__.
 mutate "path map has a null prototype" "const scopeBindingByPath = Object.create(null)" "const scopeBindingByPath = {}"
 
@@ -357,7 +363,7 @@ mutate "emergent count excludes uncredited" "    emergent_candidates: [...candid
 mutate "uncredited emergents are counted" "    emergent_candidates_outside_their_region: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe' && !c.from_region).length," "    emergent_candidates_outside_their_region: 0,"
 mutate "frontier ranks deferred verifiers" "    const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate', 'candidate_verifier', 'adjudication_batch']" "    const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate']"
 
-mutate "checklist counts unnamed predicates" "      r.adjudicated_state === 'unresolved' && !r.unsettled_predicate).length," "      false).length,"
+mutate "checklist counts unnamed predicates" "      r.adjudicated_state === 'unresolved' && !nonblank(r.unsettled_predicate)).length," "      false).length,"
 
 # Previously excluded as equivalent, restored and measured instead. absorb()
 # sorts each finder's OWN list, which does not make the concatenated array
@@ -435,7 +441,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=185
+EXPECTED_TOTAL=189
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

@@ -131,6 +131,25 @@ actually receive.
 
 If the patch is empty, stop and ask — do not review an empty diff.
 
+**Submodules are not in the artifact, and that has to be said rather than
+assumed away.** A superproject diff records a gitlink — which commit the
+submodule points at — not the source inside it, and `git ls-files --others`
+does not recurse. So changes *within* a checked-out submodule reach neither
+the patch every agent is told is the exact artifact, nor the snapshot in §7,
+whose `ls-files` is the superproject's: an agent overwriting a file inside an
+already-dirty submodule leaves both snapshots identical. Detect it and say so:
+
+```bash
+# Registered submodules with any content of their own. Named in the report as
+# uncaptured, and reviewed — if they matter — as their own scope.
+acr_submodules="$(git submodule status --recursive 2>/dev/null | awk '{print $2}')"
+```
+
+Reviewing the submodule separately, with `--repo` pointing inside it, is the
+supported answer. Recursing here is not: `git diff --submodule=diff` produces
+output `git apply` cannot apply into the superproject, so the patch binding
+the whole attack phase rests on would become a claim rather than a fact.
+
 Record the pre-run tree state for the write-safety check in §7. Status
 alone is **not** enough, and this matters more than it looks: a tracked
 file that is already modified reports ` M path` before and after an
@@ -217,6 +236,9 @@ Two kinds of path stay outside it, and both belong in the report rather than
 behind an implied "total coverage":
 
 - **gitignored paths** — build output, `node_modules`, local caches.
+- **anything inside a checked-out submodule.** The `ls-files` here is the
+  superproject's, and a dirty submodule reports the same one-line marker in
+  status however much changes inside it.
 - **anything git does not list at all.** `git ls-files --others` and
   `git status` report neither FIFOs, sockets, nor device nodes — measured,
   both are empty for a worktree containing one. So a special file appearing,

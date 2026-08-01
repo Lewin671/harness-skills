@@ -762,6 +762,11 @@ execute_codex() {
   diag="$(printf '%s' "$diag" | tr '\r\n' '  ')"
   echo "$diag" >&2
 
+  # Each attempt's stream is fenced in the log. The stale-model fallback
+  # appends a second run to the same file, so "the last thread.started" can
+  # belong to the attempt that FAILED — and a retry that answers without
+  # emitting one would then advertise the dead session as resumable.
+  attempt_marker="=== codex-second-opinion attempt boundary ==="
   local status watchdog="" statedir pidfile marker
   # A private 0700 directory from mktemp -d: the marker must not be a
   # path another local process can pre-create as a symlink in a shared
@@ -831,7 +836,7 @@ execute_codex() {
     codex_status=0
     wait $! || codex_status=$?
     echo "$codex_status" > "${statedir}/status"
-  } | tee -a "$log" | truncate_stream >&2 &
+  } | { printf '%s\n' "$attempt_marker"; cat; } | tee -a "$log" | truncate_stream >&2 &
   local pipeline_pid=$!
   wait "$pipeline_pid" 2>/dev/null || true
   status="$(cat "${statedir}/status" 2>/dev/null || echo 1)"

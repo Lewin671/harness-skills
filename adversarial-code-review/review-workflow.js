@@ -954,7 +954,7 @@ exactly these fields:
   candidate_id       one of: ${batch.map((e) => e.candidate.id).join(', ')} — and no other
   state              "substantiated" | "refuted" | "unresolved"
   final_severity     "critical" | "major" | "minor"
-  decisive_evidence  one sentence naming the specific evidence that decided
+  decisive_evidence  REQUIRED and non-empty. One sentence naming the specific evidence that decided
                      it — the cited code, the control run, the predicate that
                      could not be settled. Not a restatement of the claim.
   grounding          "strong" | "weak" — weak triggers one rerun, and a rerun
@@ -2312,7 +2312,13 @@ const results = candidates.map((c) => {
   const selfConsistent = Boolean(verifierRecord
     && Array.isArray(verifierRecord.unsettled_predicates)
     && verifierRecord.unsettled_predicates.length === 0)
-  const canSubstantiate = groundedRefutation && selfConsistent
+  // A verdict has to say what decided it. Blank is not a sentence, and this
+  // string is what the Verified Findings entry prints as its evidence.
+  const decisiveStated = Boolean(v && nonblank(v.decisive_evidence))
+  if (v && !decisiveStated) {
+    malformed('adjudicator', c.id, 'verdict carried no decisive_evidence; a state with nothing said for it cannot be reported as one')
+  }
+  const canSubstantiate = groundedRefutation && selfConsistent && decisiveStated
     && PREDICATES.every((k) => citedAs(verifierRecord, k, 'supports_candidate'))
   // A predicate cannot be both the thing that falsifies the candidate and a
   // thing the verifier could not settle. Only an uncontested falsification
@@ -2328,7 +2334,7 @@ const results = candidates.map((c) => {
   if (!unsettledNamesValid) {
     malformed('verifier', c.id, `unsettled_predicates named ${JSON.stringify(unsettledNames)}; only ${PREDICATES.join(', ')} are predicates, so no rejection can rest on this record`)
   }
-  const canRefute = groundedRefutation && unsettledNamesValid && PREDICATES.some((k) =>
+  const canRefute = groundedRefutation && unsettledNamesValid && decisiveStated && PREDICATES.some((k) =>
     citedAs(verifierRecord, k, 'falsifies_candidate') && !unsettledNames.includes(k))
   let state = v ? v.state : 'unresolved'
   const terminal = s.grade === 'reproduced' && s.execution_status === 'executed'
@@ -2370,7 +2376,7 @@ const results = candidates.map((c) => {
     })
     state = 'substantiated'
   }
-  if (v && v.state === 'unresolved' && !v.unsettled_predicate) {
+  if (v && v.state === 'unresolved' && !nonblank(v.unsettled_predicate)) {
     malformed('adjudicator', c.id, 'unresolved verdict did not name the predicate that stayed unsettled')
   }
   if (!v) {
@@ -2401,7 +2407,7 @@ const results = candidates.map((c) => {
     // proposal as though a verdict had been reached.
     severity_unassigned: !v,
     decisive_evidence: v ? v.decisive_evidence : 'adjudication did not complete for this candidate',
-    unsettled_predicate: v ? (v.unsettled_predicate || null) : null,
+    unsettled_predicate: v && nonblank(v.unsettled_predicate) ? v.unsettled_predicate : null,
     grounding: v ? v.grounding : null,
     // "Completed" means a refutation that could ground itself. A returned but
     // weakly grounded one has settled nothing, and reporting it as completed
@@ -2582,7 +2588,7 @@ return {
     // told. The script cannot supply one, so it counts the verdicts that
     // arrived without it and the report has to own the gap.
     unresolved_without_named_predicate: results.filter((r) =>
-      r.adjudicated_state === 'unresolved' && !r.unsettled_predicate).length,
+      r.adjudicated_state === 'unresolved' && !nonblank(r.unsettled_predicate)).length,
     actions_deferred: ledger.deferred.length,
     agent_failures: ledger.agent_failures.length,
     malformed_results: ledger.malformed_results.length,

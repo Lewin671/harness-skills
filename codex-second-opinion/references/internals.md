@@ -101,6 +101,15 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   creates the directory on first use and a check that only looked at
   directories that already exist would wave through the very run that
   creates it.
+- The `CODEX_HOME` containment check covers that directory and its
+  `sessions` root, both resolved through symlinks. It does not walk
+  deeper, and cannot: codex creates the per-session subdirectories at
+  run time, so there is nothing to inspect beforehand and a check that
+  enumerated today's tree would still miss tomorrow's. What it defends
+  against is a *placement* — a repository that is also the home
+  directory, a home pointed into the tree — not a symlink planted
+  several levels down inside one's own codex state. That bound is
+  stated here rather than closed by a walk that would still be partial.
 - The scratch directory is resolved *before* the feature and MCP checks,
   not after. Those checks use here-strings, and on the bash 3.2 macOS
   ships `<<<` materialises a temporary file under `TMPDIR` — so a

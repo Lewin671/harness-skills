@@ -604,7 +604,8 @@ function makeAgent(state, s) {
       if (s.adjNull) return null
       const ids = expectedIds(prompt)
       if (s.adjAlwaysRefute) {
-        return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'refuted', final_severity: 'minor', decisive_evidence: 'stub', grounding: 'strong' })) }
+        return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'refuted', final_severity: 'minor',
+          decisive_evidence: s.adjBlankDecisive ? '  ' : 'stub', grounding: 'strong' })) }
       }
       if (s.adjUnknownId) return { verdicts: [{ candidate_id: 'ZZ9', state: 'substantiated', final_severity: 'critical', decisive_evidence: 'stub', grounding: 'strong' }] }
       if (l.includes('escalated')) {
@@ -634,6 +635,16 @@ function makeAgent(state, s) {
       // mandatory — "we could not tell" is only actionable when it says what
       // could not be told — and the script cannot invent one, so the gap has
       // to be counted where the report will see it.
+      // A verdict that says nothing about what decided it, and one whose
+      // unsettled predicate is only whitespace.
+      if (s.adjBlankFields) {
+        return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'substantiated', final_severity: 'critical',
+          decisive_evidence: '   ', grounding: 'strong' })) }
+      }
+      if (s.adjBlankPredicate) {
+        return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'unresolved', final_severity: 'minor',
+          decisive_evidence: 'stub', unsettled_predicate: '  ', grounding: 'strong' })) }
+      }
       if (s.adjUnresolvedNoPredicate) {
         return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'unresolved', final_severity: 'minor',
           decisive_evidence: 'stub', grounding: 'strong' })) }
@@ -1296,6 +1307,28 @@ R.push(await run('unusable regions do not eat probe slots', { ...BASE }, { inval
     return res.disclosure_checklist.regions_dropped_invalid === 2
       || `the checklist reports ${res.disclosure_checklist.regions_dropped_invalid} unusable regions, not 2`
   } }))
+R.push(await run('verdict states no decisive evidence', { ...BASE }, { adjBlankFields: true, probeAlwaysFails: true,
+  expect: (res) => (res.substantiated.every((x) => x.attack_grade === 'reproduced')
+    && res.ledger.malformed_results.some((m) => /no decisive_evidence/.test(m.why)))
+    || 'a finding was reported on a verdict that said nothing about what decided it' }))
+R.push(await run('unresolved predicate is blank', { ...BASE }, { adjBlankPredicate: true,
+  expect: (res) => {
+    if (!(res.disclosure_checklist.unresolved_without_named_predicate > 0)) {
+      return 'a whitespace predicate name counted as naming one in the checklist'
+    }
+    const named = res.candidate_results.filter((r) => r.unsettled_predicate !== null
+      && !String(r.unsettled_predicate).trim())
+    if (named.length) return `${named[0].candidate_id} reports a blank string as its unsettled predicate`
+    return res.ledger.malformed_results.some((m) => /did not name the predicate/.test(m.why))
+      || 'a blank predicate was neither reported nor recorded as malformed'
+  } }))
+// verifierCleanRefute is what makes canRefute reachable at all: without a
+// cited falsifying predicate nothing is rejected regardless, and the
+// assertion would hold for the wrong reason.
+R.push(await run('rejection states no decisive evidence', { ...BASE },
+  { verifierCleanRefute: true, adjAlwaysRefute: true, adjBlankDecisive: true,
+    expect: (res) => res.refuted.length === 0
+      || `${res.refuted.length} candidate(s) rejected on a verdict that said nothing for it` }))
 R.push(await run('unresolved verdict names no predicate', { ...BASE }, { adjUnresolvedNoPredicate: true,
   expect: (res) => {
     const n = res.disclosure_checklist.unresolved_without_named_predicate

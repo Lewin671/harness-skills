@@ -168,8 +168,15 @@ mode_main() {
   # the log accumulates across the stale-model fallback retry, and only
   # the final (successful) run's session can be resumed. JSON escaping
   # means agent-authored text cannot contain these raw quoted keys.
+  # Only the LAST attempt's segment. The log accumulates across the
+  # stale-model fallback, and "the last thread.started in the file" is the
+  # failed attempt's whenever the successful retry did not emit one — which
+  # the code below otherwise treats as a valid answer with no session to
+  # resume. Advertising the dead id instead is the one outcome that path
+  # exists to prevent.
   local session_out
-  session_out="$(grep '"type":"thread.started"' "$log" 2>/dev/null | tail -1 |
+  session_out="$(awk -v m="$attempt_marker" '$0 == m { buf = "" ; next } { buf = buf $0 "\n" } END { printf "%s", buf }' "$log" 2>/dev/null |
+    grep '"type":"thread.started"' | tail -1 |
     grep -o '"thread_id":"[^"]*"' | head -1 | cut -d'"' -f4)" || session_out=""
 
   # Continuation must be verified, not assumed: given a well-formed but

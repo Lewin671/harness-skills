@@ -47,7 +47,9 @@ Three layered documents, and you need all three:
 
 `tests/run-tests` holds the contract tests; `tests/run-mutation-tests`
 breaks each protection in turn, on a copy, and requires the suite to go
-red for it. Two more cover the protections that live in prose, extracting
+red for it — and records, by name, the ones no scenario reaches and the
+ones a mutant cannot distinguish, so the count never stands in for
+coverage it does not have. Two more cover the protections that live in prose, extracting
 the recipes straight out of orchestration.md so the doc stays their only
 source of truth: `tests/run-snapshot-tests` for the write-safety
 snapshot, `tests/run-capture-tests` for the Phase 0 patch capture — both
@@ -83,12 +85,14 @@ What it guarantees beyond that flow:
   instructs you to call Workflow — the user invoking it is the
   multi-agent opt-in.
 - **No write instructions outside throwaway worktrees.** The parent
-  tree is snapshotted before and after — HEAD, status, and a content
-  hash of tracked and untracked-but-visible files — and any unexpected
-  difference is disclosed. Detection, not enforcement: Claude Code has
-  no tool-restriction knob on `agent()`, and gitignored paths are
-  outside the snapshot. State it that way; orchestration.md §1 and §7
-  give the command and why a stronger claim would be false.
+  tree is snapshotted before and after — HEAD, the index, status, and a
+  content hash of tracked and untracked-but-visible files — and any
+  unexpected difference is disclosed. Detection, not enforcement: Claude
+  Code has no tool-restriction knob on `agent()`. Three things sit
+  outside the snapshot and belong in the report: gitignored paths,
+  anything inside a checked-out **submodule**, and anything git does not
+  list at all. orchestration.md §1 and §7 give the commands and why a
+  stronger claim would be false.
 - **Review only.** Output a report; never apply a fix. Fixing is a
   separate task the user must ask for afterwards.
 - **Executable attacks run the artifact's own test command.** A git
@@ -120,7 +124,10 @@ Do this in the main agent; the Workflow script cannot run commands.
    gitignored dependencies, so without an explicit patch the attack
    phase would read different code than the review phase. Exact
    commands, including the read-only way to include untracked files, in
-   orchestration.md §1.
+   orchestration.md §1. **Changes inside a checked-out submodule are not
+   in the patch** — a superproject diff carries the gitlink, not the
+   source — so name any submodule as uncaptured and offer to review it
+   as its own scope.
 3. **Exclude and partition**: drop lockfiles, `vendor/`, generated
    clients, snapshots and build output, and name the exclusions. Beyond
    roughly 1,500 changed lines or eight modules, partition or ask the

@@ -84,6 +84,10 @@ if [ -n "${FAKE_FAIL:-}" ]; then
 fi
 if [ -n "${FAKE_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_FAIL_ONCE" ]; then
   : > "$FAKE_FAIL_ONCE"
+  # FAKE_FAIL_THREAD: emit a thread id BEFORE being rejected. The failed
+  # attempt's session then sits in the log ahead of the retry's.
+  [ -n "${FAKE_FAIL_THREAD:-}" ] &&
+    echo '{"type":"thread.started","thread_id":"0198dead-dead-dead-dead-deaddeaddead"}'
   echo '{"type":"error","message":"unknown model"}'
   exit 1
 fi
@@ -1595,6 +1599,24 @@ case "$last_session" in
   *)
     bad "consult: the wrapper's session line stays last when no session exists" "last: ${last_session}" ;;
 esac
+
+# The stale-model fallback appends a second run to the same log. If the
+# REJECTED attempt emitted a thread id and the successful retry did not, a
+# whole-file scan advertises the dead session — and a follow-up resumes it.
+combined2="${workdir}/fallback-thread.out"
+FAKE_FAIL_ONCE="${workdir}/fail-once-thread" FAKE_FAIL_THREAD=1 FAKE_NO_THREAD=1 \
+  "$wrapper" consult --repo "$repo" --timeout 30 "question" > "$combined2" 2>&1
+status=$?
+# The marker line, not the whole file: the progress feed legitimately echoes
+# the rejected attempt's raw thread.started event.
+last_session="$(grep '^session: ' "$combined2" | tail -1)"
+if [ "$status" = 0 ] && case "$last_session" in *deaddead*) false ;; *) true ;; esac &&
+   grep -q '^session: unavailable' "$combined2"; then
+  ok "consult: a rejected attempt's session is not advertised after a fallback"
+else
+  bad "consult: a rejected attempt's session is not advertised after a fallback" \
+    "exit $status, $(grep '^session: ' "$combined2" | tail -1)"
+fi
 
 # --- multiline question cannot forge progress markers ------------------
 
