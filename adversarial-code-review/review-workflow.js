@@ -897,7 +897,12 @@ function normalizeAttack(raw, id, hasConcreteCounterexample) {
     return { ...a, execution_status: 'unavailable' }
   }
 
-  const controlled = a.control_passed === true || Boolean(a.specification_citation)
+  // A specification says what the code OUGHT to do. Only the control run says
+  // this patch is what stopped it doing so. Accepting a citation in place of a
+  // control lets a defect that already existed at base_sha be reported as
+  // introduced by the change under review — which is the one thing a
+  // reproduction is supposed to establish.
+  const controlled = a.control_passed === true
   const missing = []
   if (!bound) missing.push('bound_to_base_sha + patch_hash_verified')
   if (a.test_capability !== 'ready') missing.push('test_capability=ready')
@@ -909,7 +914,7 @@ function normalizeAttack(raw, id, hasConcreteCounterexample) {
   if (!a.patched_result) missing.push('patched_result')
   if (!a.predicted_signature) missing.push('predicted_signature')
   if (a.signature_matched !== true) missing.push('signature_matched=true')
-  if (!controlled) missing.push('control_passed or specification_citation')
+  if (!controlled) missing.push('control_passed=true (a specification_citation does not substitute for the control run)')
   if (!missing.length) return a
 
   // NEVER downgrade to `held`: a run whose result cannot be trusted says

@@ -127,7 +127,9 @@ git diff --unified=0 HEAD -- . "${excludes[@]}" |
 
 # untracked files are changed in their entirety
 git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
-  while IFS= read -r -d '' f; do printf '%s 1 %s\n' "$f" "$(wc -l < "$f")"; done
+  while IFS= read -r -d '' f; do printf '%s 1 %s\n' "$f" "$(awk 'END{print NR}' "$f")"; done
+# awk, not `wc -l`: a file with no trailing newline counts 0 lines under wc,
+# which produces the range 1..0 and silently rejects every candidate in it.
 ```
 
 A file the map does not mention falls back to file-level binding rather

@@ -306,6 +306,18 @@ things that were actually counted.
 
 ## 7. What This Contract Assumes
 
+**It is not a defence against a hostile artifact.** Every field it
+checks — grounding, citations, hash verification, whether a test ran and
+what it returned — is supplied by an agent that read the artifact. The
+orchestrator can enforce that a claim is *complete and internally
+consistent*; it cannot authenticate it. An artifact that can influence
+the agents reading it can therefore manufacture both substantiation and
+rejection, and no amount of schema tightening changes that. What the
+contract buys against a hostile artifact is that manufacturing takes
+consistent, checkable lying rather than a single vague sentence — a
+higher bar, not a wall.
+
+
 It assumes honest-but-fallible reviewers examining a benign-but-buggy
 artifact. Two things fall outside it, and neither is hypothetical when
 the input is code someone else wrote:

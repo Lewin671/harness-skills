@@ -230,6 +230,9 @@ function makeAgent(state, s) {
       if (s.attackOmit) {
         const m = { ...fullReproduced }
         if (s.attackOmit === 'control') { delete m.control_passed; delete m.control_result; delete m.specification_citation }
+        // A cited spec must NOT stand in for the control: a defect already
+        // present at base_sha would otherwise be reported as introduced here.
+        else if (s.attackOmit === 'control_but_cites_spec') { delete m.control_passed; delete m.control_result; m.specification_citation = 'RFC 1234 section 2' }
         else if (s.attackOmit === 'applied') m.patch_applied = false
         else if (s.attackOmit === 'patched_failed') m.patched_failed = false
         else if (s.attackOmit === 'bound') m.bound_to_base_sha = false
@@ -380,7 +383,7 @@ R.push(await run('emergent hit at 14wu', { ...BASE, budget_wu: 14 }))
 }
 // Mutation coverage: each reproduction requirement, omitted alone. Deleting
 // any single check in normalizeAttack makes exactly one of these fail.
-for (const field of ['control', 'bound', 'hash', 'capability', 'signature_matched', 'test_code', 'command', 'patched_result', 'predicted_signature', 'applied', 'patched_failed']) {
+for (const field of ['control', 'control_but_cites_spec', 'bound', 'hash', 'capability', 'signature_matched', 'test_code', 'command', 'patched_result', 'predicted_signature', 'applied', 'patched_failed']) {
   R.push(await run(`reproduced missing ${field}`, { ...BASE }, { attackOmit: field }))
 }
 // The attacked critical must have NO counterexample, or the guard is untested.
@@ -677,7 +680,9 @@ for (const r of R) {
     && a.bound_to_base_sha === true && a.patch_hash_verified === true && a.test_capability === 'ready'
     && a.patch_applied === true && a.patched_failed === true
     && a.signature_matched === true && a.test_code && a.command && a.patched_result && a.predicted_signature
-    && (a.control_passed === true || a.specification_citation))
+    // A control run, not a cited specification: only the control attributes
+    // the failure to THIS patch.
+    && a.control_passed === true)
   for (const x of r.res.refuted || []) {
     const v = x.verifier
     const falsified = v && ['semantics', 'reachability', 'contract_violation'].some((k) => v[k] && v[k].holds === 'falsifies_candidate')

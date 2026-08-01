@@ -54,7 +54,7 @@ PY
 }
 
 mutate "repro: signature_matched" "  if (a.signature_matched !== true) missing.push('signature_matched=true')" "  "
-mutate "repro: control/spec" "  if (!controlled) missing.push('control_passed or specification_citation')" "  "
+mutate "repro: control run required" "  const controlled = a.control_passed === true" "  const controlled = a.control_passed === true || Boolean(a.specification_citation)"
 mutate "repro: executed" "  if (!executed) missing.push('execution_status=executed')" "  " 2
 mutate "repro: patch binding" "  if (!bound) missing.push('bound_to_base_sha + patch_hash_verified')" "  " 2
 mutate "repro: test_code" "  if (!a.test_code) missing.push('test_code')" "  "

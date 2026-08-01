@@ -124,7 +124,12 @@ Do this in the main agent; the Workflow script cannot run commands.
 6. **Announce** the target, profile, budget, model roles and the
    estimated launch count before spending anything. A typical run lands
    around 16–19 subagent launches, above this session's default
-   workflow-size guideline — say so.
+   workflow-size guideline — say so. If execution is on (the default),
+   say that too, in these terms: the review will apply the patch in a
+   throwaway worktree and run the repository's own test command, which
+   executes code from the artifact with this session's privileges.
+   For code you did not write and would not run, pass
+   `allow_execution: false`.
 
 Then call the `Workflow` tool with `scriptPath` set to
 `review-workflow.js` beside this file (usually
