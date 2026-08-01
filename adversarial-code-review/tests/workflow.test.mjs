@@ -124,6 +124,30 @@ function makeAgent(state, s) {
         for (let i = 0; i < 20; i++) many.push(cand('bulk.js', 200 + i, 'critical', 'present_code', `bulk crit ${i}`))
         return { candidates: many, additional_high_risk_regions: [] }
       }
+      // Discovery order reversed, rank held constant: trimming must drop the
+      // same candidates either way, because it ranks rather than taking
+      // whatever the finders happened to emit last.
+      if (s.orderProbe) {
+        const mk = (n) => cand('bulk.js', 400 + n, 'minor', 'present_code', `ordered ${n}`)
+        const seq = [1, 2, 3, 4, 5, 6, 7, 8]
+        return { candidates: (s.orderProbe === 'reversed' ? seq.reverse() : seq).map(mk), additional_high_risk_regions: [] }
+      }
+      // Many distinct claims on ONE line, so whatever trimming drops is
+      // co-located with what it keeps. A retained candidate must not cite a
+      // sibling the report no longer contains.
+      if (s.coLocatedTrim) {
+        const many = []
+        for (let i = 0; i < 8; i++) many.push(cand('bulk.js', 500, 'minor', 'present_code', `co ${i}`))
+        return { candidates: many, additional_high_risk_regions: [] }
+      }
+      // Two lenses file the SAME claim at different severities. Collapsing
+      // them on text alone keeps whichever arrived first, so a minor-labelled
+      // decoy can swallow the critical and demote it to batch verification.
+      if (s.severityDupes) {
+        if (lens === 'logic correctness') return { candidates: [cand('pay.js', 42, 'minor', 'present_code', 'same claim')], additional_high_risk_regions: [] }
+        if (lens === 'security') return { candidates: [cand('pay.js', 42, 'critical', 'present_code', 'same claim')], additional_high_risk_regions: [] }
+        return { candidates: [], additional_high_risk_regions: [] }
+      }
       if (s.allEvidenceInvalid) {
         return { candidates: [{ file: 'a.js', line: 1, title: 'no evidence', proposed_severity: 'critical', confidence: 'high', evidence_kind: 'present_code', evidence: { anchor: 'a.js:1' } }],
           additional_high_risk_regions: [], recommended_missing_lens: 'performance' }
@@ -490,6 +514,59 @@ R.push(await run('decoy candidate flood', { ...BASE }, { decoyFlood: true,
     if (!res.ledger.deferred.some((x) => x.kind === 'candidate_verification')) return 'nothing was reported as found-but-unverified'
     return true
   } }))
+// Deduplication must not become a downgrade channel: a decoy filed as minor
+// may not swallow the identical claim filed as critical.
+R.push(await run('same claim, different severity', { ...BASE }, { severityDupes: true,
+  expect: (res) => {
+    const at42 = (res.candidate_results || []).filter((x) => x.anchor === 'pay.js:42')
+    if (at42.length < 2) return 'a differently-severed duplicate was collapsed away'
+    if (!at42.some((x) => x.verification_tier === 'critical')) return 'the critical copy never got critical-tier verification'
+    return true
+  } }))
+// Malformed range data is a caller bug, not "absent" coverage: reading it as
+// absence would silently downgrade the whole run to file-level binding.
+// An array whose entries are themselves well-formed pair lists: only the
+// is-it-an-object check can reject this one.
+R.push(await run('changed_ranges not an object', { ...BASE, changed_ranges: [[[1, 5]]] }, {
+  expect: (res) => res.status === 'invalid_args' || 'a malformed changed_ranges was accepted' }))
+// A non-iterable entry: without the is-it-an-array check this throws rather
+// than returning invalid_args, which is how the mutant is caught.
+R.push(await run('changed_ranges entry not an array', { ...BASE, changed_ranges: { 'pay.js': 5 } }, {
+  expect: (res) => res.status === 'invalid_args' || 'a non-array range list was accepted' }))
+R.push(await run('changed_ranges malformed pair', { ...BASE, changed_ranges: { 'pay.js': [[5, 1]] } }, {
+  expect: (res) => res.status === 'invalid_args' || 'an inverted range was accepted' }))
+// A file the map does not cover is bound only to the file, and the run has to
+// say so rather than presenting it as bound to the change.
+R.push(await run('file-level-only binding is disclosed', { ...BASE, changed_ranges: { 'pay.js': [[1, 100]] } }, {
+  expect: (res) => {
+    if (!res.run.scope_binding.file_level_only_paths.includes('auth.js')) return 'auth.js was not disclosed as file-level-only'
+    if (res.run.scope_binding.by_path['pay.js'].level !== 'hunk_level') return 'a covered path was not reported as hunk-bound'
+    const auth = (res.candidate_results || []).filter((x) => x.anchor.startsWith('auth.js'))
+    if (!auth.length || !auth.every((x) => x.scope_binding.level === 'file_level_only')) return 'an auth.js finding did not carry file-level-only binding'
+    if (res.disclosure_checklist.reported_candidates_file_level_only < auth.length) return 'the checklist undercounts file-level-only candidates'
+    const pay = (res.candidate_results || []).filter((x) => x.anchor.startsWith('pay.js'))
+    if (pay.length && !pay.every((x) => x.scope_binding.level === 'hunk_level' && x.scope_binding.matched_range)) return 'a hunk-bound finding lost its matched range'
+    return true
+  } }))
+// Trimming drops candidates that share an anchor with the survivors, so the
+// co-location list has to be rebuilt from what actually survived.
+R.push(await run('co-located candidates trimmed', { ...BASE, budget_wu: 16 }, { coLocatedTrim: true,
+  expect: (res) => (res.found_but_not_verified || []).length > 0
+    || 'the co-location scenario trimmed nothing, so it proves nothing' }))
+// Trimming must rank, not take whatever arrived last: same candidates, same
+// ranks, reversed discovery order — the retained set has to be identical.
+// budget_wu 16 is chosen so trimming actually removes one candidate: at 20
+// nothing is dropped and the comparison passes vacuously.
+const ordFwd = await run('trim order (forward)', { ...BASE, budget_wu: 16 }, { orderProbe: 'forward' })
+const ordRev = await run('trim order (reversed)', { ...BASE, budget_wu: 16 }, { orderProbe: 'reversed' })
+R.push(ordFwd)
+R.push({ ...ordRev, expect: (res) => {
+  const kept = (r) => (r.candidate_results || []).map((x) => x.anchor).sort().join(',')
+  const trimmedCount = (res.ledger.deferred || []).filter((x) => x.kind === 'candidate_verification').length
+  if (!trimmedCount) return 'the ordering scenario trimmed nothing, so it proves nothing'
+  return kept(res) === kept(ordFwd.res)
+    || `discovery order changed what trimming kept: ${kept(ordFwd.res)} vs ${kept(res)}`
+} })
 R.push(await run('anchor does not match file:line', { ...BASE }, { anchorMismatch: true,
   expect: (res) => res.ledger.invalid_candidates.some((x) => /anchor/.test(x.reason))
     || 'a candidate whose anchor names a different file was accepted' }))
@@ -636,12 +713,74 @@ for (const r of R) {
       fail++; problems.push(`${r.name}: region ${rg.target_id} reports a counterexample the workflow rejected`)
     }
   }
+  // Budget spent on a candidate the run then refuses to report is budget
+  // wasted twice: it buys nothing, and it makes the ledger lie when that
+  // candidate is disclosed as "found but not verified". Every per-candidate
+  // launch must name a candidate the report actually contains.
+  if (r.res.candidate_results) {
+    const reported = new Set(r.res.candidate_results.map((x) => x.candidate_id))
+    for (const k of r.state.calls) {
+      const m = k.label.match(/^(?:verify|probe|attack):(C\d+)$/)
+      if (m && !reported.has(m[1])) {
+        fail++; problems.push(`${r.name}: launched ${k.label} for a candidate absent from the results`)
+        break
+      }
+    }
+    // A retained candidate may not cite a sibling the report dropped.
+    for (const x of r.res.candidate_results) {
+      const dangling = (x.co_located_with || []).filter((id) => !reported.has(id))
+      if (dangling.length) {
+        fail++; problems.push(`${r.name}: ${x.candidate_id} is co-located with unreported ${dangling.join(',')}`)
+        break
+      }
+    }
+    // "Verified below its final severity" is a statement about a FINDING.
+    for (const x of r.res.candidate_results) {
+      if (x.verified_below_final_severity && x.state !== 'substantiated') {
+        fail++; problems.push(`${r.name}: ${x.candidate_id} is ${x.state} but counted as verified below final severity`)
+        break
+      }
+    }
+  }
+  // The attacker must not be told a citation can stand in for the control
+  // run, because normalizeAttack rejects exactly that. A prompt that invites
+  // evidence the script will downgrade spends the most expensive agent in
+  // the system on a guaranteed waste.
+  for (const p of r.state.prompts) {
+    if (p.label && p.label.startsWith('attack:')
+        && /either control_passed is true or specification_citation/.test(p.prompt)) {
+      fail++; problems.push(`${r.name}: the attack prompt still offers a citation instead of a control`)
+      break
+    }
+  }
   // The checklist exists to make omission detectable, so every ledger array
   // it claims to count must actually agree with the ledger.
   for (const key of ['coverage_risks', 'unknown_verdict_ids', 'malformed_results', 'agent_failures', 'forced_unresolved']) {
     if (r.res.disclosure_checklist && r.res.ledger
         && r.res.disclosure_checklist[key] !== (r.res.ledger[key] || []).length) {
       fail++; problems.push(`${r.name}: checklist ${key}=${r.res.disclosure_checklist[key]} but ledger has ${(r.res.ledger[key] || []).length}`)
+    }
+  }
+  const dc0 = r.res.disclosure_checklist
+  if (dc0) {
+    // Every verified finding earned it one of exactly two ways.
+    if (dc0.verified_findings !== dc0.adjudicator_substantiated_findings + dc0.substantiated_by_terminal_evidence_only) {
+      fail++; problems.push(`${r.name}: ${dc0.verified_findings} verified findings do not split into ${dc0.adjudicator_substantiated_findings} adjudicated + ${dc0.substantiated_by_terminal_evidence_only} terminal-only`)
+    }
+    // The headline Coverage item must agree in all three places it appears.
+    const deferredVerification = (r.res.ledger.deferred || []).filter((x) => x.kind === 'candidate_verification').length
+    const named = (r.res.found_but_not_verified || []).length
+    if (dc0.found_but_not_verified !== named || named !== deferredVerification) {
+      fail++; problems.push(`${r.name}: found-but-not-verified disagrees — checklist ${dc0.found_but_not_verified}, array ${named}, ledger ${deferredVerification}`)
+    }
+    // A trimmed candidate is disclosed, so it must carry the anchor a reader
+    // needs; and it must not also appear as a reported result.
+    const reportedIds = new Set((r.res.candidate_results || []).map((x) => x.candidate_id))
+    for (const f of r.res.found_but_not_verified || []) {
+      if (!f.anchor || !f.candidate_id || reportedIds.has(f.candidate_id)) {
+        fail++; problems.push(`${r.name}: found-but-not-verified entry ${f.candidate_id} is incomplete or double-counted`)
+        break
+      }
     }
   }
   const dc = r.res.disclosure_checklist

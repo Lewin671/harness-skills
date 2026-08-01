@@ -123,11 +123,16 @@ same filtered pathspecs, and cover all three shapes of change:
 
 ```bash
 # tracked hunks; a deletion-only hunk has new-side length 0, so anchor it at
-# the line the deletion sits against rather than dropping it
+# the line the deletion sits against rather than dropping it.
+# A wholly deleted file has `+++ /dev/null`, so the new-side rule never fires
+# for it: track the old-side path as well, or its hunk is emitted under an
+# empty filename — or worse, under the PREVIOUS file's name.
 git diff --unified=0 HEAD -- . "${excludes[@]}" |
-  awk '/^\+\+\+ b\//{f=substr($0,7)}
+  awk '/^--- a\//{o=substr($0,7)}
+       /^\+\+\+ /{f=($0=="+++ /dev/null") ? o : substr($0,7)}
        /^@@/{split($3,a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2])+0;
-             if(n>0) print f, s, s+n-1; else print f, s, s}'
+             if(f=="") next;
+             if(n>0) print f, s, s+n-1; else print f, (s>0?s:1), (s>0?s:1)}'
 
 # untracked files are changed in their entirety
 git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
@@ -142,6 +147,22 @@ incomplete map is the likely case — new files, deletion-only hunks, a
 caller who built it from tracked changes alone — and rejecting on absence
 would silently discard findings about exactly the code most likely to be
 new. Only an explicit range list can rule a line out.
+
+That fallback is a real weakening, so it is disclosed rather than
+assumed away. The script returns `run.scope_binding.by_path` and
+`run.scope_binding.file_level_only_paths`, and every candidate carries
+`scope_binding.level` — `hunk_level` with the `matched_range`, or
+`file_level_only` with the reason. The report must name the
+file-level-only paths in Coverage and tag any finding anchored in one:
+its anchor is in a reviewed file, but nothing mechanically placed it
+inside the change.
+
+**Malformed** range data is not treated as absent data. A
+`changed_ranges` that is not an object, an entry that is not an array,
+or a pair that is not `[start, end]` with `start <= end`, all return
+`invalid_args`. Absence is an expected gap; a broken range builder is a
+caller bug, and reading it as absence would quietly drop hunk binding
+across the entire run.
 
 Both manifests are returned in `run`, so the report states what was
 actually reviewed rather than what was intended.
@@ -195,10 +216,25 @@ diff or an artifact manufacturing decoys, deletes the whole review and
 the real findings with it. So the candidate set is trimmed from the
 least consequential end (minors, then majors, then criticals) until it
 fits, and everything trimmed is reported as **found but not verified**,
-with its anchor. Every *retained* candidate still gets a verifier; that
-part is not negotiable. What changed is that "we found this and could
-not afford to check it" is now a disclosed outcome rather than a reason
-to return nothing.
+with its anchor, in the top-level `found_but_not_verified` array. Every
+*retained* candidate still gets a verifier; that part is not negotiable.
+What changed is that "we found this and could not afford to check it" is
+now a disclosed outcome rather than a reason to return nothing.
+
+Trimming happens **before** the buckets, verification tiers, reserves
+and the verify plan are derived, so exactly one candidate set is ever in
+play. Deriving them first is not a cosmetic ordering question: it makes
+the run launch verifiers, probes and executable attacks for candidates
+it has already decided not to report — spending the budget on work it
+throws away, and calling those candidates unverified in the ledger when
+a verifier did in fact run on them. Within a severity class the victim
+is the worst-ranked member, the same ranking the rest of the wave funds
+by, not whichever finder happened to emit last.
+
+Report achieved depth as `verification_depth.candidates_found` against
+`candidates_retained`, so a trimmed run cannot be read as a run that
+found less: "0/6 candidates adjudicated; 6 found but unverified by
+budget", never "no candidates found".
 
 ## 3. Model tiers
 

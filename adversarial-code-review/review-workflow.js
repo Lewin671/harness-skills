@@ -126,7 +126,47 @@ const includedPaths = A.included_paths
 // Optional but strongly preferred: the changed line ranges per file, from
 // `git diff --unified=0`. File-level binding still lets a candidate cite an
 // untouched line in a reviewed file; this closes that to the hunk.
-const changedRanges = (A.changed_ranges && typeof A.changed_ranges === 'object') ? A.changed_ranges : null
+//
+// ABSENT coverage falls back to file-level binding, because an incomplete map
+// is the likely case and rejecting on absence discards findings about exactly
+// the code most likely to be new. MALFORMED coverage is a different thing: it
+// is a caller bug, and silently reading it as "absent" would turn a broken
+// range builder into a quiet loss of hunk binding across the whole run.
+let changedRanges = null
+if (A.changed_ranges !== undefined && A.changed_ranges !== null) {
+  if (typeof A.changed_ranges !== 'object' || Array.isArray(A.changed_ranges)) {
+    return { status: 'invalid_args', detail: 'changed_ranges must be an object mapping path -> [[start, end], ...]' }
+  }
+  for (const file of Object.keys(A.changed_ranges)) {
+    const ranges = A.changed_ranges[file]
+    if (!Array.isArray(ranges)) {
+      return { status: 'invalid_args', detail: `changed_ranges["${file}"] must be an array of [start, end] pairs` }
+    }
+    for (const r of ranges) {
+      if (!Array.isArray(r) || r.length !== 2
+          || !Number.isFinite(r[0]) || !Number.isFinite(r[1]) || r[0] > r[1]) {
+        return { status: 'invalid_args', detail: `changed_ranges["${file}"] contains a malformed range; each entry must be [start, end] with start <= end` }
+      }
+    }
+  }
+  changedRanges = A.changed_ranges
+}
+
+// What each reviewed path could actually be bound to. Recorded up front so
+// the report can name the paths where "inside the artifact" means only "in a
+// reviewed file", not "in a changed hunk".
+const hunkRangesFor = (file) => {
+  const r = changedRanges && changedRanges[file]
+  return Array.isArray(r) && r.length ? r : null
+}
+const scopeBindingByPath = {}
+for (const file of includedPaths) {
+  const ranges = hunkRangesFor(file)
+  scopeBindingByPath[file] = ranges
+    ? { level: 'hunk_level', ranges }
+    : { level: 'file_level_only', reason: changedRanges ? 'path_absent_from_changed_ranges' : 'no_changed_ranges_supplied' }
+}
+const fileLevelOnlyPaths = includedPaths.filter((f) => scopeBindingByPath[f].level === 'file_level_only')
 // Stage 2 runs the artifact's own test command. A git worktree is a checkout,
 // not a sandbox: that command executes with the session's privileges. A caller
 // reviewing code they would not run should be able to keep the whole
@@ -685,10 +725,13 @@ ${(triage.probe_candidates || []).length
 
 3. CONTROL. Author the focused reproducer and run it HERE, still unpatched.
    Record control_result and set control_passed. A reproducer that already
-   fails at base_sha is testing a pre-existing breakage, not this change; if
-   you cannot get a passing control, you may instead cite the spec or
-   documented contract that establishes the expected result, in
-   specification_citation.
+   fails at base_sha is testing a pre-existing breakage, not this change.
+   The control is REQUIRED and nothing substitutes for it: a specification
+   says what the code ought to do, only the control run shows that this patch
+   is what stopped it doing so. If you cannot get a passing control, you
+   cannot grade this reproduced — say so rather than spending the rest of the
+   attack. You may still cite the spec or documented contract in
+   specification_citation; it accompanies a control, it never replaces one.
 
 4. ATTACK. "git apply ${A.patch_path}", confirm "git diff --stat" is
    non-empty, then rerun the reproducer. Record:
@@ -703,9 +746,9 @@ ${(triage.probe_candidates || []).length
 
 5. GRADE, honestly:
    - reproduced: the test failed, the failure matched predicted_signature,
-     AND either control_passed is true or specification_citation is given.
-     Requires test_code and command. Anything missing is downgraded
-     automatically, so do not claim it without the evidence.
+     AND control_passed is true. Requires test_code and command. Anything
+     missing is downgraded automatically, so do not claim it without the
+     evidence.
    - plausible: a concrete counterexample exists but was not executed. Set
      execution_status to "unavailable".
    - held: you executed and the code did NOT break — patch_applied true and
@@ -827,17 +870,14 @@ function evidenceProblem(c) {
   if (!includedPaths.includes(c.file)) {
     return `${c.file} is not among the reviewed paths`
   }
-  if (changedRanges) {
-    const ranges = changedRanges[c.file]
-    // No entry for this file means the map does not KNOW about it — a new
-    // file, a deletion-only hunk, a caller that built the map from tracked
-    // changes alone. Falling back to file-level binding is right; rejecting
-    // would discard every finding about exactly the code most likely to be
-    // new. Only an explicit range set can rule a line out.
-    if (Array.isArray(ranges) && ranges.length
-        && !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {
-      return `${c.file}:${c.line} is not inside any changed hunk listed for that file`
-    }
+  // No entry for this file means the map does not KNOW about it — a new
+  // file, a deletion-only hunk, a caller that built the map from tracked
+  // changes alone. Falling back to file-level binding is right; rejecting
+  // would discard every finding about exactly the code most likely to be
+  // new. Only an explicit range set can rule a line out.
+  const ranges = hunkRangesFor(c.file)
+  if (ranges && !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {
+    return `${c.file}:${c.line} is not inside any changed hunk listed for that file`
   }
   if (c.evidence_kind === 'present_code') {
     return e.quoted_code && e.observed_behavior ? null : 'present_code evidence is incomplete'
@@ -1063,7 +1103,13 @@ function addCandidate(c, lens, origin) {
   // in bulk: every duplicate raises the mandatory accuracy floor, so enough of
   // them abort the review and suppress the real findings with it. Collapse
   // byte-identical claims, and cap what one lens can contribute.
-  const fingerprint = JSON.stringify([c && c.file, c && c.line, c && c.title, c && c.evidence_kind, c && c.evidence])
+  //
+  // proposed_severity and confidence are PART of the identity, because they
+  // route verification effort. Without them, a decoy filed as minor collapses
+  // a later identical claim filed as critical, and the survivor keeps the
+  // minor tier: cheap batch verification and no execution. That turns
+  // deduplication into a downgrade channel.
+  const fingerprint = JSON.stringify([c && c.file, c && c.line, c && c.title, c && c.evidence_kind, c && c.evidence, c && c.proposed_severity, c && c.confidence])
   if (candidateFingerprints.has(fingerprint)) {
     ledger.invalid_candidates.push({ lens, origin, title: c && c.title, anchor: c && c.evidence && c.evidence.anchor, reason: 'byte-identical duplicate of a candidate already accepted' })
     return null
@@ -1081,9 +1127,30 @@ function addCandidate(c, lens, origin) {
   nextId += 1
   candidateFingerprints.add(fingerprint)
   perLensCount.set(lens, seen + 1)
-  const rec = { ...c, id: `C${nextId}`, lens, origin, co_located: [] }
+  // What "inside the artifact" actually proved for this anchor. file_level_only
+  // means the anchor is in a reviewed file and nothing mechanically placed it
+  // in a changed hunk — a weaker claim, and the report has to say so.
+  const ranges = hunkRangesFor(c.file)
+  const matched = ranges ? ranges.find((r) => c.line >= r[0] && c.line <= r[1]) : null
+  const scope_binding = matched
+    ? { level: 'hunk_level', matched_range: matched }
+    : { level: 'file_level_only', matched_range: null,
+        reason: changedRanges ? 'path_absent_from_changed_ranges' : 'no_changed_ranges_supplied' }
+  // Kept on the record so a rollback can undo the index entry it created.
+  const rec = { ...c, id: `C${nextId}`, lens, origin, co_located: [], fingerprint, scope_binding }
   candidates.push(rec)
   return rec
+}
+
+// Undo what addCandidate recorded. A candidate rolled back for budget is not
+// "already accepted": leaving its fingerprint in the index makes a later
+// region probe that independently rediscovers the same defect look like a
+// duplicate of something no longer in the run, which suppresses it entirely.
+function unrecordCandidate(rec) {
+  if (!rec) return
+  candidateFingerprints.delete(rec.fingerprint)
+  const seen = perLensCount.get(rec.lens) || 0
+  if (seen > 0) perLensCount.set(rec.lens, seen - 1)
 }
 
 function absorb(res, lens) {
@@ -1125,6 +1192,7 @@ if (wantedLens && P.supplementalLens && admitOptional(W.finder, floorsFor(candid
          && (committedWU + floorsFor(candidates) > budgetWU + EPS
              || !admitTokens(floorsFor(candidates)))) {
     const dropped = candidates.pop()
+    unrecordCandidate(dropped)
     ledger.deferred.push({
       target_id: dropped.id, kind: 'supplemental_candidate',
       anchor: `${dropped.file}:${dropped.line}`, title: dropped.title,
@@ -1203,13 +1271,58 @@ if (acceptedRegionProbes.length) {
 }
 endWave()
 
-candidates.forEach((c) => {
-  c.in_high_risk_region = inRegion(c)
-  c.co_located = candidates.filter((o) => o.id !== c.id && o.file === c.file && o.line === c.line).map((o) => o.id)
-})
+// Region membership first: it is an input to the ranking that decides what
+// survives trimming.
+candidates.forEach((c) => { c.in_high_risk_region = inRegion(c) })
 
 const rank = (c) => (c.in_high_risk_region ? 0 : 1) * 100 - CONF_RANK[c.confidence] * 10
 const byRank = (a, b) => rank(a) - rank(b) || `${a.file}:${a.line}`.localeCompare(`${b.file}:${b.line}`)
+
+// ---------------------------------------------------------------------------
+// Trim to what the budget can actually verify — BEFORE anything is derived
+// from the candidate set.
+//
+// A candidate set too large to verify used to abort the run. That makes
+// suppression cheap: anything that can inflate the candidate count — a noisy
+// diff, or an artifact manufacturing decoys — deletes the whole review and
+// the real findings with it. Trim from the least consequential end instead
+// and report what went unverified. "Found but not verified" is an honest
+// category; returning nothing after spending the budget is not.
+//
+// Order matters and used not to. Deriving the buckets, the verification
+// tiers, the adjudication reserve and the verify plan BEFORE this loop meant
+// the trim removed candidates from the report while the plans still launched
+// verifiers, probes and executable attacks for them: budget spent on work
+// that was then discarded, and a ledger that called those candidates
+// unverified when a verifier had in fact run. Everything downstream is built
+// from the trimmed set, so there is exactly one candidate set in play.
+const trimmed = []
+while (candidates.length && committedWU + floorsFor(candidates) > budgetWU + EPS) {
+  // Least severe class first, and within it the worst-ranked member — the
+  // same ranking the rest of the wave funds by, not discovery order. "Least
+  // consequential" has to mean the same thing here as it does everywhere
+  // else, or the disclosure misdescribes what was dropped.
+  const order = ['minor', 'major', 'critical']
+  let victim = null
+  for (const sev of order) {
+    const pool = candidates.filter((c) => c.proposed_severity === sev).sort(byRank)
+    if (pool.length) { victim = pool[pool.length - 1]; break }
+  }
+  if (!victim) break
+  candidates.splice(candidates.indexOf(victim), 1)
+  trimmed.push(victim)
+  defer({ target_id: victim.id, kind: 'candidate_verification', anchor: `${victim.file}:${victim.line}`, title: victim.title }, 'deferred_by_budget')
+}
+if (trimmed.length) {
+  log(`budget covers ${candidates.length} candidates; ${trimmed.length} reported as found-but-unverified`)
+}
+
+// Co-location is computed after trimming so a retained candidate never cites
+// a sibling id the report does not contain.
+candidates.forEach((c) => {
+  c.co_located = candidates.filter((o) => o.id !== c.id && o.file === c.file && o.line === c.line).map((o) => o.id)
+})
+
 const criticals = candidates.filter((c) => c.proposed_severity === 'critical').sort(byRank)
 const majors = candidates.filter((c) => c.proposed_severity === 'major').sort(byRank)
 const minors = candidates.filter((c) => c.proposed_severity === 'minor').sort(byRank)
@@ -1221,15 +1334,6 @@ log(`candidates: ${candidates.length} (${criticals.length}C ${majors.length}M ${
 // adjudication capacity is reserved first because without it nothing in this
 // run can be reported at all.
 // ---------------------------------------------------------------------------
-
-// Buckets are rebuilt after trimming so plan, floors and waves all describe
-// the same candidate set.
-const criticalsFinal = candidates.filter((c) => c.proposed_severity === 'critical').sort(byRank)
-const majorsFinal = candidates.filter((c) => c.proposed_severity === 'major').sort(byRank)
-const minorsFinal = candidates.filter((c) => c.proposed_severity === 'minor').sort(byRank)
-criticals.length = 0; criticals.push(...criticalsFinal)
-majors.length = 0; majors.push(...majorsFinal)
-minors.length = 0; minors.push(...minorsFinal)
 
 const adjBatches = chunk(candidates, ADJ_BATCH_MAX)
 const adjReserveWU = sum(adjBatches, (b) => W.adjudicator(b.length))
@@ -1257,29 +1361,8 @@ const accuracyFloorWU = sum(verifyPlan, (x) => x.wu)
 // normal case, handled by disclosed deferral, not an error. What is NOT
 // survivable is being unable to verify and adjudicate the candidates at all,
 // because then the run produces candidates it can never turn into findings.
-// A candidate set too large to verify used to abort the run. That makes
-// suppression cheap: anything that can inflate the candidate count — a noisy
-// diff, or an artifact manufacturing decoys — deletes the whole review and
-// the real findings with it. Trim from the least consequential end instead
-// and report what went unverified. "Found but not verified" is an honest
-// category; returning nothing after spending the budget is not.
-const trimmed = []
-while (candidates.length && committedWU + floorsFor(candidates) > budgetWU + EPS) {
-  const order = ['minor', 'major', 'critical']
-  let victim = null
-  for (const sev of order) {
-    const pool = candidates.filter((c) => c.proposed_severity === sev)
-    if (pool.length) { victim = pool[pool.length - 1]; break }
-  }
-  if (!victim) break
-  candidates.splice(candidates.indexOf(victim), 1)
-  trimmed.push(victim)
-  defer({ target_id: victim.id, kind: 'candidate_verification', anchor: `${victim.file}:${victim.line}`, title: victim.title }, 'deferred_by_budget')
-}
-if (trimmed.length) {
-  log(`budget covers ${candidates.length} candidates; ${trimmed.length} reported as found-but-unverified`)
-}
-
+// The trim above already reduced the set to what these floors can cover, so
+// reaching either branch below means even the trimmed set does not fit.
 const floorsWU = committedWU + floorsFor(candidates)
 const plan = { lenses: lensesRun, candidates: candidates.length, criticals: criticals.length, majors: majors.length, minors: minors.length, regions: allRegions.length, trimmed_unverified: trimmed.length }
 
@@ -1650,6 +1733,7 @@ const results = candidates.map((c) => {
     in_high_risk_region: c.in_high_risk_region,
     evidence_kind: c.evidence_kind,
     evidence: c.evidence,
+    scope_binding: c.scope_binding,
     proposed_severity: c.proposed_severity,
     confidence: c.confidence,
     state,
@@ -1670,8 +1754,10 @@ const results = candidates.map((c) => {
     verification_tier: verificationTier.get(c.id) || null,
     // True when adjudication graded it more severe than the tier its
     // verification was bought at — the finding is real, but it was scrutinised
-    // as something cheaper than it turned out to be.
-    verified_below_final_severity: Boolean(v && v.final_severity
+    // as something cheaper than it turned out to be. Gated on `substantiated`:
+    // an unresolved or refuted candidate is not a finding, so counting it here
+    // would inflate a checklist key that is explicitly about findings.
+    verified_below_final_severity: Boolean(state === 'substantiated' && v && v.final_severity
       && SEV_RANK[v.final_severity] > SEV_RANK[verificationTier.get(c.id) || 'minor']),
     verifier_completed: groundedRefutation,
     verifier_grounding: verifierRecord ? verifierRecord.grounding : null,
@@ -1718,6 +1804,10 @@ return {
     excluded_paths: A.excluded_paths || [],
     change_kind: triage.change_kind, triage_confidence: triage.confidence,
     model_roles: { cheap: M.cheap, strong: M.strong, escalated_effort: M.highEffort },
+    // Which paths could be bound to a changed hunk and which could only be
+    // bound to the file. A finding on a file_level_only path is inside the
+    // artifact but was never mechanically placed inside the change.
+    scope_binding: { by_path: scopeBindingByPath, file_level_only_paths: fileLevelOnlyPaths },
   },
 
   // Weighted units are scheduling priors, NOT token measurements.
@@ -1745,6 +1835,11 @@ return {
 
   verification_depth: {
     candidates: candidates.length,
+    // Found, kept, and dropped for budget — stated separately so a run that
+    // trimmed cannot be read as a run that found less.
+    candidates_found: candidates.length + trimmed.length,
+    candidates_retained: candidates.length,
+    unverified_by_budget: trimmed.length,
     verified: results.filter((r) => r.verifier_completed).length,
     adjudicated: results.filter((r) => r.adjudicated_state).length,
     executed: executedForReal,
@@ -1752,6 +1847,24 @@ return {
     candidates_with_actions_deferred_by_budget: new Set(ledger.deferred.filter((d) => d.reason === 'deferred_by_budget' && /^C\d+$/.test(d.target_id)).map((d) => d.target_id)).size,
     actions_deferred: ledger.deferred.length,
   },
+
+  plan,
+
+  // contract.md section 6 makes this the FIRST item of Coverage and Residual
+  // Risk: the review is admitting it saw something and stopped. A count in
+  // the ledger is not enough — the anchors have to survive into the report,
+  // so they are named here rather than left to be reconstructed.
+  found_but_not_verified: trimmed.map((c) => ({
+    candidate_id: c.id,
+    anchor: `${c.file}:${c.line}`,
+    title: c.title,
+    proposed_severity: c.proposed_severity,
+    confidence: c.confidence,
+    lens: c.lens,
+    origin: c.origin,
+    scope_binding: c.scope_binding,
+    reason: 'deferred_by_budget',
+  })),
 
   // Named for what it is: every candidate with its state, not a findings list.
   candidate_results: results,
@@ -1767,9 +1880,26 @@ return {
   // exactly what a complete report must account for, so a reader can tell
   // when something was dropped. Treat a mismatch as a defect in the report.
   disclosure_checklist: {
+    // verified_findings stays the size of the Verified Findings section. The
+    // two components below say how each one earned that state: an adjudicator
+    // verdict, or a controlled reproduction that overrode one (contract.md
+    // section 5). They must sum to verified_findings.
+    // Both components are gated on the FINAL state, not the raw verdict: an
+    // adjudicator's `substantiated` that the grounding guard forced back to
+    // unresolved is not a finding, so counting it here would break the sum
+    // and overstate what adjudication actually delivered.
     verified_findings: results.filter((r) => r.state === 'substantiated').length,
+    adjudicator_substantiated_findings: results.filter((r) => r.state === 'substantiated' && r.adjudicated_state === 'substantiated').length,
+    substantiated_by_terminal_evidence_only: results.filter((r) => r.state === 'substantiated' && r.adjudicated_state !== 'substantiated').length,
     unresolved_candidates: results.filter((r) => r.state === 'unresolved').length,
     rejected_candidates: results.filter((r) => r.state === 'refuted').length,
+    // Found and disclosed, never verified — the headline Coverage item.
+    found_but_not_verified: trimmed.length,
+    // Findings whose anchor is in a reviewed file but was never mechanically
+    // placed inside a changed hunk.
+    file_level_only_paths: fileLevelOnlyPaths.length,
+    reported_candidates_file_level_only: results.filter((r) => r.scope_binding && r.scope_binding.level === 'file_level_only').length,
+    verified_findings_file_level_only: results.filter((r) => r.state === 'substantiated' && r.scope_binding && r.scope_binding.level === 'file_level_only').length,
     lenses_not_selected: LENSES.filter((l) => !lensesRun.includes(l)).length,
     lenses_selected_but_unrun: ledger.unrun_lenses.length,
     regions_not_probed: regionResults.filter((r) => !r.probed).length,

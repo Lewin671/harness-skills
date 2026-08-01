@@ -97,6 +97,25 @@ one whose `anchor` disagrees with its own `file` and `line`, or whose
 file is not among the paths the review actually covers — a candidate
 about code nobody reviewed cannot become a finding about it.
 
+### How strongly an anchor is bound
+
+Two strengths, and the difference has to reach the report. When a usable
+range list exists for the path, the anchor is bound at **hunk level**:
+it lies inside a line range the change actually touched. When no usable
+range entry exists for an included path, candidates from that path are
+retained under **file-level** binding. That proves only that the anchor
+belongs to a reviewed file; it does not mechanically establish that the
+anchor lies in a changed hunk. An explicit range list that excludes the
+anchor still rejects the candidate.
+
+The fallback is deliberate — an incomplete range map is the likely case,
+and rejecting on absence would discard findings about exactly the code
+most likely to be new. What is not acceptable is presenting the weaker
+binding as the stronger one, so every finding carries its level and the
+report names the file-level-only paths. Malformed range data is a
+different thing again: it is a caller bug, and the run refuses to start
+rather than reading it as absent coverage.
+
 ## 2. Severity Rubric
 
 Severity is about impact if the defect is real, never about the
@@ -207,10 +226,14 @@ convincing it sounds:
 - **`reproduced`** — an executed test fails, *and* the failure matches
   the predicted signature, *and* the patch was actually applied and the
   patched run actually failed — both stated explicitly, not inferred
-  from prose — *and* one of these holds: a control run shows the same
-  test passing without the reviewed patch applied, or a cited
-  specification establishes the expected result. Attach the test source,
-  the exact command, and the failure output. Every one of these is
+  from prose — *and* a control run shows the same test passing without
+  the reviewed patch applied. The control is not substitutable: a
+  specification says what the code *ought* to do, only the control shows
+  that this patch is what stopped it doing so. Accept a citation in its
+  place and a defect that already existed at `base_sha` is reportable as
+  introduced by the change, which is the one thing a reproduction exists
+  to establish. A citation may accompany the control as corroboration.
+  Attach the test source, the exact command, and the failure output. Every one of these is
   self-reported by the attacker; what the orchestrator can enforce is
   that the claim is complete and internally consistent, and it downgrades
   anything that is not. A reproduction is only as good as that report.
@@ -272,7 +295,8 @@ nothing. Every section may be empty; none may be absent.
    because the budget could not fund a verifier for all of them, each with
    its anchor: these are the ones a reader most needs to see, since the
    review is admitting it saw something and stopped;
-   lenses considered but not run;
+   the reviewed paths that could be bound only at file level, and any
+   finding anchored in one; lenses considered but not run;
    high-risk regions not probed or not executed, and why; every attack
    graded `held`, `blocked` or `inconclusive`, with reasons; every
    `plausible` with its `execution_status`; candidates dropped for

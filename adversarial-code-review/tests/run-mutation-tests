@@ -106,7 +106,7 @@ mutate "null-finder coverage disclosure" "  if (!res) { ledger.unrun_lenses.push
 mutate "grounded refutation definition" "    verifier_completed: groundedRefutation," "    verifier_completed: verified,"
 mutate "contradictory record cannot support" "  const canSubstantiate = groundedRefutation && selfConsistent" "  const canSubstantiate = groundedRefutation"
 mutate "scope manifest is mandatory" "if (!Array.isArray(A.included_paths) || !A.included_paths.length) {" "if (false) {"
-mutate "changed-hunk binding" "        && !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {" "        && false) {"
+mutate "changed-hunk binding" "  if (ranges && !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {" "  if (false) {"
 mutate "disclosure checklist counts" "    verified_findings: results.filter((r) => r.state === 'substantiated').length," "    verified_findings: 0,"
 mutate "predicates must support substantiation" "    && PREDICATES.every((k) => citedAs(verifierRecord, k, 'supports_candidate'))" "    "
 mutate "falsification must cite code" "    && typeof r[k].cited_code === 'string' && r[k].cited_code.trim())" "    )"
@@ -117,7 +117,7 @@ mutate "per-lens candidate cap" "  if (seen >= MAX_CANDIDATES_PER_LENS) {" "  if
 mutate "execution decision must be stated" "if (typeof A.allow_execution !== 'boolean') {" "if (A.allow_execution !== undefined && typeof A.allow_execution !== 'boolean') {"
 mutate "checklist covers unknown verdict ids" "    unknown_verdict_ids: ledger.unknown_verdict_ids.length," "    unknown_verdict_ids: 0,"
 mutate "falsification cannot be unsettled" "    citedAs(verifierRecord, k, 'falsifies_candidate') && !unsettledNames.includes(k))" "    citedAs(verifierRecord, k, 'falsifies_candidate'))"
-mutate "absent range list falls back" "    if (Array.isArray(ranges) && ranges.length" "    if (true"
+mutate "absent range list falls back" "  if (ranges && !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {" "  if (changedRanges && !(ranges || []).some((r) => c.line >= r[0] && c.line <= r[1])) {"
 mutate "profile caps lens breadth" "if (P.maxLenses && lenses.length > P.maxLenses) {" "if (false) {"
 mutate "region reports normalised verdict" "    counterexample_constructed: Boolean(p && p.constructed)," "    counterexample_constructed: Boolean(p && p.outcome === 'counterexample_constructed'),"
 mutate "checklist covers coverage risks" "    coverage_risks: ledger.coverage_risks.length," "    coverage_risks: 0,"
@@ -137,6 +137,35 @@ mutate "fence strips its own marker" "  const body = String(text === undefined |
 mutate "supplemental candidate rollback" "  while (candidates.length > beforeSupplemental
          && (committedWU + floorsFor(candidates) > budgetWU + EPS
              || !admitTokens(floorsFor(candidates)))) {" "  while (false) {"
+
+# Trimming, and everything that must be derived from the trimmed set.
+mutate "trim ranks rather than takes last" "const pool = candidates.filter((c) => c.proposed_severity === sev).sort(byRank)" "const pool = candidates.filter((c) => c.proposed_severity === sev)"
+mutate "plans derive from the trimmed set" "const criticals = candidates.filter((c) => c.proposed_severity === 'critical').sort(byRank)" "const criticals = [...candidates, ...trimmed].filter((c) => c.proposed_severity === 'critical').sort(byRank)"
+mutate "co-location excludes trimmed" "  c.co_located = candidates.filter((o) => o.id !== c.id && o.file === c.file && o.line === c.line).map((o) => o.id)" "  c.co_located = [...candidates, ...trimmed].filter((o) => o.id !== c.id && o.file === c.file && o.line === c.line).map((o) => o.id)"
+mutate "found-but-not-verified is counted" "    found_but_not_verified: trimmed.length," "    found_but_not_verified: 0,"
+mutate "found-but-not-verified is named" "  found_but_not_verified: trimmed.map((c) => ({" "  found_but_not_verified: [].map((c) => ({"
+
+# Deduplication must not silently downgrade routing.
+mutate "dedup preserves routing severity" "c && c.evidence, c && c.proposed_severity, c && c.confidence])" "c && c.evidence])"
+
+# Disclosure of what a finding's state and binding actually rest on.
+mutate "verified-below-tier means a finding" "    verified_below_final_severity: Boolean(state === 'substantiated' && v && v.final_severity" "    verified_below_final_severity: Boolean(v && v.final_severity"
+mutate "terminal-only substantiation split out" "    substantiated_by_terminal_evidence_only: results.filter((r) => r.state === 'substantiated' && r.adjudicated_state !== 'substantiated').length," "    substantiated_by_terminal_evidence_only: 0,"
+mutate "adjudicated substantiation gated on state" "    adjudicator_substantiated_findings: results.filter((r) => r.state === 'substantiated' && r.adjudicated_state === 'substantiated').length," "    adjudicator_substantiated_findings: results.filter((r) => r.adjudicated_state === 'substantiated').length,"
+mutate "file-level-only candidates counted" "    reported_candidates_file_level_only: results.filter((r) => r.scope_binding && r.scope_binding.level === 'file_level_only').length," "    reported_candidates_file_level_only: 0,"
+mutate "candidate carries its binding level" "  const scope_binding = matched
+    ? { level: 'hunk_level', matched_range: matched }" "  const scope_binding = matched
+    ? { level: 'hunk_level', matched_range: matched }
+    ? { level: 'hunk_level', matched_range: matched }"
+
+# Malformed range data is a caller bug, never read as absent coverage.
+mutate "changed_ranges must be an object" "  if (typeof A.changed_ranges !== 'object' || Array.isArray(A.changed_ranges)) {" "  if (false) {"
+mutate "changed_ranges entries are arrays" "    if (!Array.isArray(ranges)) {" "    if (false) {"
+mutate "changed_ranges pairs are well formed" "      if (!Array.isArray(r) || r.length !== 2
+          || !Number.isFinite(r[0]) || !Number.isFinite(r[1]) || r[0] > r[1]) {" "      if (false) {"
+
+# The attacker must not be invited to produce evidence the script rejects.
+mutate "attack prompt requires the control" "     AND control_passed is true. Requires test_code and command. Anything" "     AND either control_passed is true or specification_citation is given. Anything"
 
 echo
 if [ "${survived}" -eq 0 ]; then
