@@ -41,6 +41,13 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
     listing; output it cannot recognize — including nothing at all —
     is evidence of nothing and is refused rather than read as "all
     clear".
+  - Every `"enabled"` field must be a bare `true` or `false`, checked by
+    counting keys against well-formed values. The enumeration keys
+    entirely on those literal bytes — the grep looks for `true`, the
+    parser matches four characters — so a payload spelling it
+    `"enabled":"true"` would satisfy neither and read as a server that is
+    switched off. Applied to the re-check as well, where booleans that
+    have become strings prove exactly as little.
   - The *first* listing is held to the same bar, for the same reason.
     Verified on 0.146.0: a config with no servers prints `[]`, three
     bytes — never nothing. So a `mcp list` that exits 0 having printed
@@ -75,12 +82,26 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
 - The result file must live outside the repo, or Codex's own file
   sweeps pick it up and pollute the result. A repo-local TMPDIR is
   detected and replaced with /tmp for the same reason.
-- `CODEX_HOME` gets the same test and a different answer. Codex writes
+- `CODEX_HOME` gets the same test and the opposite answer. Codex writes
   every run's session under it, so a `CODEX_HOME` inside the worktree
-  writes into the tree being read — same pollution, same dirty status.
-  But it cannot be substituted the way TMPDIR can: moving it orphans
-  every earlier session and breaks `--continue`. So this one is a
-  warning naming the path, not a relocation and not a refusal.
+  writes into the tree being read — same pollution, same dirty status,
+  and those session files then feed Codex's own file sweeps on the next
+  run. It cannot be substituted the way TMPDIR can: moving it orphans
+  every earlier session and breaks `--continue`. With no substitution
+  available the choice is refuse or break the claim, and the TMPDIR case
+  already settles which — exit `3`, naming the one variable that fixes
+  it. Resolved through the nearest *existing* ancestor, because codex
+  creates the directory on first use and a check that only looked at
+  directories that already exist would wave through the very run that
+  creates it.
+- The scratch directory is resolved *before* the feature and MCP checks,
+  not after. Those checks use here-strings, and on the bash 3.2 macOS
+  ships `<<<` materialises a temporary file under `TMPDIR` — so a
+  repo-local `TMPDIR` was written inside the repository, briefly, before
+  the relocation that exists to prevent it. The relocation also exports
+  `TMPDIR`: moving only this script's own files would leave the shell's
+  temporaries, `mktemp`'s default, and codex itself still pointed inside
+  the tree.
 - There is no portable `timeout` binary on macOS, hence the watchdog
   subshell. It signals the whole process group — codex spawns shell
   commands that inherit the pipeline's stdout, and killing only the
@@ -142,15 +163,25 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   `--base`, and a merge commit needs a first-parent diff (not
   `git show`, whose combined-diff semantics usually print nothing).
 - Those prechecks run *before* any sandbox exists, so they are the one
-  place the wrapper itself could write the repository. `git status`
-  refreshes stale stat info and rewrites `.git/index`; measured,
-  `--no-optional-locks` suppresses exactly that write, so the status
-  precheck carries it — and so does the `--uncommitted` scope sentence,
-  where the same command is handed to a reviewer running under a
-  read-only sandbox that would deny the write anyway. The flag is not a
-  blanket cure: `git diff` refreshes the index with or without it
-  (measured). Nothing here touches tracked content, and SKILL.md states
-  the residual rather than claiming the prechecks touch nothing.
+  place the wrapper itself could write the repository or run a program.
+  Three measures, each measured against 0.146.0's git:
+  - `git status` refreshes stale stat info and rewrites `.git/index`;
+    `--no-optional-locks` suppresses exactly that write. The
+    `--uncommitted` scope sentence carries the same flag, where the
+    command is handed to a reviewer under a read-only sandbox that would
+    deny the write anyway.
+  - `git diff` against the working tree refreshes the index *with or
+    without* that flag, so the `--base` precheck runs it under a byte
+    copy through `GIT_INDEX_FILE`. Same index content, same answer, and
+    the refresh lands on the copy. When the copy cannot be made the run
+    refuses: the same scratch directory is about to fail the result file,
+    so running unprotected buys no successful run, only a rewritten
+    index on the way to the exit.
+  - `core.fsmonitor` names a program git executes while refreshing —
+    outside every sandbox codex could impose, and before its hooks, apps
+    and plugins are disabled. `--no-optional-locks` does not stop it;
+    `-c core.fsmonitor=false` does. Verified: with a hook configured, a
+    plain status runs it and the flagged one does not.
 - `--output-schema` is silently ignored by `exec review` (an invalid
   schema that makes plain `codex exec` fail with a 400 produces no
   error here). Structured findings do exist, but only in the rollout

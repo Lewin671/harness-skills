@@ -93,7 +93,7 @@ check_scope_nonempty() {
       # write here; the working-tree diff below needs the heavier
       # git_readonly_index, which no flag substitutes for.
       local status_out
-      status_out="$(git --no-optional-locks status --porcelain --untracked-files=normal)" || {
+      status_out="$(git --no-optional-locks -c core.fsmonitor=false status --porcelain --untracked-files=normal)" || {
         echo "error: git status failed in ${repo}" >&2; exit 3; }
       if [ -z "$status_out" ]; then
         echo "nothing to review: no staged, unstaged, or untracked changes" >&2
@@ -123,7 +123,7 @@ check_scope_nonempty() {
       # git refreshes stale stat data and rewrites .git/index — with or
       # without --no-optional-locks (measured). See git_readonly_index.
       diff_status=0
-      git_readonly_index git --no-optional-locks diff --quiet "$merge_base" || diff_status=$?
+      git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --quiet "$merge_base" || diff_status=$?
       if [ "$diff_status" -eq 0 ]; then
         echo "nothing to review: no changes since the merge base with ${scope_value}" >&2
         exit 2
@@ -294,10 +294,6 @@ mode_main() {
 
   common_check_model_flags
   common_env_checks
-  # Before the precheck: it needs somewhere outside the repo for the
-  # throwaway index, and a CODEX_HOME inside the tree is an environment
-  # problem that outranks an empty scope either way.
-  common_resolve_scratch
   check_scope_nonempty
   common_setup_scratch
   run_with_fallback

@@ -209,7 +209,7 @@ mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + es
 
 // Priced at the observed rate now."
 mutate "candidate probes repriced after the sample" "  if (admitTokens(verifyPendingWU + probeAdmitted.length * W.probe + W.probe)) { probeAdmitted.push(t); continue }" "  if (true) { probeAdmitted.push(t); continue }"
-mutate "region probes sample one first" "    if (admitTokens(probePendingWU + W.probe)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }" "    if (true) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }"
+mutate "region probes sample one first" "    if (admitTokens(probePendingWU + W.probe + floorAfter)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }" "    if (true) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }"
 mutate "tie-breaks are a total order" "const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)" "const cmp = (a, b) => String(a).localeCompare(String(b))"
 mutate "optional purchases respect tokens" "  if (!admitTokens(costWU + protectedWU)) return false" "  "
 mutate "remaining verifiers respect tokens" "  if (admitTokens(verifyPendingWU + v.wu)) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }" "  if (true) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }"
@@ -280,17 +280,30 @@ mutate "oversized scope is disclosed" "  if (preTrimFloorsWU > 2 * budgetWU) {" 
 # Disclosure counters added with the protections above.
 mutate "checklist counts unusable regions" "    regions_dropped_invalid: ledger.invalid_regions.length," "    regions_dropped_invalid: 0,"
 # Values that reach an execution-privileged agent as literal commands.
+# Finder-added regions are rationed too, and the probe wave still owes the
+# accuracy floor after the sample reprices it.
+mutate "finder regions merge by rank" "for (const r of [...triageRegions, ...[...extraRegions].sort(byEmitRank)]) {" "for (const r of [...triageRegions, ...extraRegions]) {"
+mutate "finder region rank is recorded" "    .forEach((r, i) => extraRegions.push({ ...r, emit_rank: i }))" "    .forEach((r) => extraRegions.push({ ...r }))"
+mutate "finders are told their region order counts" "outside your lens — ORDER THEM MOST DANGEROUS FIRST, because only the first" "outside your lens — in any order, because only the first"
+mutate "probe repricing still owes the floor" "    if (admitTokens(probePendingWU + W.probe + floorAfter)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }" "    if (admitTokens(probePendingWU + W.probe)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }"
+
 mutate "patch path is shell-quoted (hash check)" "   \${shellQuote(A.patch_path)} equals \${A.patch_sha256}" "   \${A.patch_path} equals \${A.patch_sha256}"
 mutate "patch path is shell-quoted (git apply)" "\"git apply \${shellQuote(A.patch_path)}\"" "\"git apply \${A.patch_path}\""
 mutate "shell quoting escapes quotes" "  return \`'\${String(v === undefined || v === null ? '' : v).split(\"'\").join(\"'\\\\''\")}'\`" "  return \`'\${String(v === undefined || v === null ? '' : v)}'\`"
 
-# Each REQUIRED binding, individually.
+# Each REQUIRED binding, individually. Three of the six are also guarded a
+# second time — base_sha and patch_sha256 by the hexadecimal check, and
+# included_paths by its own array check — so dropping them from REQUIRED does
+# not let the run proceed. Those three are named for what their mutant really
+# proves: that the caller is told WHICH argument was missing, instead of
+# getting a diagnostic about the wrong thing. The other three have no second
+# layer, and there the mutant disables the protection outright.
 mutate "scope is required" "const REQUIRED = ['scope', 'base_sha'" "const REQUIRED = ['base_sha'"
-mutate "base_sha is required" "'scope', 'base_sha', 'patch_path'" "'scope', 'patch_path'"
+mutate "base_sha is named in the missing list" "'scope', 'base_sha', 'patch_path'" "'scope', 'patch_path'"
 mutate "patch_path is required" "'base_sha', 'patch_path', 'patch_sha256'" "'base_sha', 'patch_sha256'"
-mutate "patch_sha256 is required" "'patch_path', 'patch_sha256', 'repo_root'" "'patch_path', 'repo_root'"
+mutate "patch_sha256 is named in the missing list" "'patch_path', 'patch_sha256', 'repo_root'" "'patch_path', 'repo_root'"
 mutate "repo_root is required" "'patch_sha256', 'repo_root', 'included_paths']" "'patch_sha256', 'included_paths']"
-mutate "included_paths is required" "'repo_root', 'included_paths']" "'repo_root']"
+mutate "included_paths is named in the missing list" "'repo_root', 'included_paths']" "'repo_root']"
 
 # The recall channel's tally and the frontier's priority.
 mutate "emergent count excludes uncredited" "    emergent_candidates: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe' && c.from_region).length," "    emergent_candidates: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe').length,"
@@ -333,7 +346,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=160
+EXPECTED_TOTAL=164
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

@@ -663,8 +663,10 @@ ${EVIDENCE_RULES}
 
 Return candidates as a list. You may also return
 additional_high_risk_regions ({file, start_line, end_line, why}) noticed
-outside your lens, and at most one recommended_missing_lens naming a lens
-from the menu that this change clearly needs and was not assigned.`
+outside your lens — ORDER THEM MOST DANGEROUS FIRST, because only the first
+few regions in the whole run are probed and your order is the order yours are
+funded in. And at most one recommended_missing_lens naming a lens from the
+menu that this change clearly needs and was not assigned.`
 }
 
 const VERIFIER_CHARTER = `You are an adversarial verifier. Your charter is unidirectional: build the
@@ -1433,10 +1435,24 @@ function pickVictim(pool) {
 // candidates, so a region reported by a later finder could not protect an
 // earlier finder's claim — which made the cap depend on the order the
 // finders were processed in, the one thing bounded selection must not do.
+// Finder-added regions are a rationed list like triage's, so the same rule
+// applies: the order a model returns them in must not decide which is bought.
+// Triage is TOLD its order is the funding order and keeps its rank; a finder
+// is told the same about its own list, but its rank only means something
+// within that list — one finder's second-most-dangerous region is not
+// comparable to another's. So they merge by rank position (every finder's
+// first, then every finder's second), with the region's own text as the
+// final tie-break, which makes the merge independent of the order the
+// finders happened to answer in.
 function absorbRegions(res) {
   if (!res) return
-  for (const r of keepRegions(res.additional_high_risk_regions, 'finder')) extraRegions.push(r)
+  keepRegions(res.additional_high_risk_regions, 'finder')
+    .forEach((r, i) => extraRegions.push({ ...r, emit_rank: i }))
 }
+
+const byEmitRank = (a, b) => (a.emit_rank || 0) - (b.emit_rank || 0)
+  || cmp(JSON.stringify([a.file, a.start_line, a.end_line, a.why]),
+         JSON.stringify([b.file, b.start_line, b.end_line, b.why]))
 
 function absorb(res, lens) {
   if (!res) { ledger.unrun_lenses.push(lens); failed('finder', lens, 'finder did not return'); return }
@@ -1520,7 +1536,7 @@ if (wantedLens && P.supplementalLens && admitOptional(W.finder, floorsFor(candid
 // the funding order, so its list keeps its rank; finder-noticed regions queue
 // behind it. Duplicates are dropped so one region cannot consume two probes.
 const allRegions = []
-for (const r of [...triageRegions, ...extraRegions]) {
+for (const r of [...triageRegions, ...[...extraRegions].sort(byEmitRank)]) {
   const key = `${r.file}:${r.start_line}-${r.end_line}`
   if (allRegions.some((x) => `${x.file}:${x.start_line}-${x.end_line}` === key)) continue
   allRegions.push(r)
@@ -1583,7 +1599,15 @@ if (acceptedRegionProbes.length) {
   const probeRestAdmitted = []
   let probePendingWU = 0
   for (const t of probeRest) {
-    if (admitTokens(probePendingWU + W.probe)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }
+    // The SAME protected floor admitOptional checked when these were
+    // accepted, re-measured at the rate the sample just revealed. Dropping it
+    // here is not a simplification: at a drift where one more probe fits but
+    // that probe plus the floor does not, the probe launches and the trim
+    // later gives up candidates to pay for it — which is exactly the
+    // "cheap coverage can never eat the accuracy floor" rule, defeated one
+    // wave after it was enforced.
+    const floorAfter = floorsFor([...candidates, ...syntheticCriticals(probeRestAdmitted.length + 1)])
+    if (admitTokens(probePendingWU + W.probe + floorAfter)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }
     defer({ target_id: t.target_id, kind: 'region_probe', anchor: t.label }, 'deferred_by_budget')
   }
   const out = [...probeSampleOut, ...await parallel(probeRestAdmitted.map((t) => () => runProbe(t)))]

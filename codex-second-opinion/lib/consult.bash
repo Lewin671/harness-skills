@@ -160,7 +160,6 @@ mode_main() {
 
   common_check_model_flags
   common_env_checks
-  common_resolve_scratch
   common_setup_scratch
   run_with_fallback
 

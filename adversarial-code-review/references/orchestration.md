@@ -152,6 +152,31 @@ everything="$( { git diff --name-only "${diff_args[@]}"
 excluded="$(comm -23 <(printf '%s\n' "${everything}") <(printf '%s\n' "${included}"))"
 ```
 
+`included` and `excluded` are newline-delimited shell variables;
+`included_paths` and `excluded_paths` are JSON arrays of the same paths.
+Convert them explicitly and pass each path **verbatim** — a
+mis-transcribed path is not a cosmetic problem: `evidenceProblem` rejects
+every candidate whose file is not in the manifest, so the review silently
+loses that file's findings while reporting it as covered.
+
+Two ways the transcription goes wrong. `git diff --name-only` and
+`git ls-files` C-quote a path containing a quote, a backslash or a
+non-ASCII byte — `"src/caf\303\251.js"` — and that quoted spelling is
+not the path. Use the `-z` variants when either is possible:
+
+```bash
+# NUL-separated, never C-quoted. Read into an array, then serialise that.
+included_arr=()
+while IFS= read -r -d '' f; do included_arr+=("$f"); done < <(
+  { git diff --name-only -z "${diff_args[@]}" -- . "${excludes[@]}"
+    [ "${untracked}" = 1 ] && git ls-files --others --exclude-standard -z -- . "${excludes[@]}"; })
+```
+
+And a path containing a newline cannot be represented in the
+newline-delimited form at all. If one exists, exclude it and name it in
+`excluded_paths` rather than passing a mangled spelling — an excluded
+file is a disclosed gap; a wrong path is a silent one.
+
 `allow_execution` is **required** too, with no default. Running the
 artifact's own test command with this session's privileges is a trust
 decision, and a decision nobody made is not one.

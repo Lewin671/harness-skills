@@ -62,13 +62,12 @@ modes**, not just consult: a review's prompt, the diff it read, and its
 findings stay on disk after the run. For consult it is also
 load-bearing — it is what makes `--continue` work.
 
-Two narrower truths, not rounded off. A `CODEX_HOME` inside the
-repository puts that session write in the tree being read, and moving it
-would orphan earlier sessions — so the script warns. And the
-empty-scope prechecks are plain git queries: `git status` runs with
-`--no-optional-locks` so it cannot rewrite `.git/index`, though
-`git diff` refreshes stale stat info there regardless. Neither touches
-tracked content.
+Two placements get refused rather than worked around: a `CODEX_HOME`
+inside the repository, which cannot be relocated without orphaning
+earlier sessions and so exits `3`, and a repo-local `TMPDIR`, which is
+moved. The script's own git prechecks write nothing in the repository
+and run no program its config names — `references/internals.md` says
+how, and the tests hold each of those to a measured claim.
 
 ## Independence Contract
 

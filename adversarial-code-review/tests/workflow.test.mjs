@@ -98,7 +98,9 @@ function makeAgent(state, s) {
         // rejected them: a region naming a file the review does not cover,
         // and one whose range runs backwards so no candidate can ever fall
         // inside it.
-        high_risk_regions: s.invalidRegions ? [
+        // No triage regions: every funded probe slot then comes from the
+        // finders, which is what makes their merge order observable.
+        high_risk_regions: s.noTriageRegions ? [] : s.invalidRegions ? [
           { file: 'not-reviewed.js', start_line: 1, end_line: 10, why: 'outside the reviewed paths' },
           { file: 'pay.js', start_line: 40, end_line: 10, why: 'range runs backwards' },
           { file: 'pay.js', start_line: 10, end_line: 40, why: 'money arithmetic' },
@@ -303,6 +305,25 @@ function makeAgent(state, s) {
           ? { 'logic correctness': 'test adequacy', 'boundary and error handling': 'performance', security: 'performance', 'concurrency and async': 'data migration and config' }
           : { 'logic correctness': 'performance', 'boundary and error handling': 'data migration and config', security: 'performance', 'concurrency and async': 'test adequacy' }
         out.recommended_missing_lens = votes[lens] || 'performance'
+      }
+      // Two finders, two regions each. `regionFlip` swaps which finder
+      // reports which pair without changing the set, so a merge that rides on
+      // finder-processing order funds a different pair each way.
+      if (s.finderRegions) {
+        // Each finder's OWN ranking is what the prompt asks for, so the
+        // merge takes every finder's first before any finder's second. These
+        // four are picked so that rule and a plain content sort disagree:
+        // by rank the funded pair is util+auth, by content alone it would be
+        // auth+bulk. Sorting content-first would silently discard a finder's
+        // most dangerous region in favour of another's second.
+        const late = { file: 'util.js', start_line: 50, end_line: 60, why: 'ranked first by its finder' }
+        const mid = { file: 'bulk.js', start_line: 50, end_line: 60, why: 'ranked second by its finder' }
+        const early = { file: 'auth.js', start_line: 50, end_line: 60, why: 'ranked first by its finder' }
+        const other = { file: 'jobs.js', start_line: 50, end_line: 60, why: 'ranked second by its finder' }
+        const first = s.regionFlip ? [early, other] : [late, mid]
+        const second = s.regionFlip ? [late, mid] : [early, other]
+        if (lens === 'security') out.additional_high_risk_regions = first
+        if (lens === 'logic correctness') out.additional_high_risk_regions = second
       }
       // Exactly one candidate in the whole run, so the verify plan is a
       // single entry and there is nothing to sample — the case where a wave
@@ -1169,6 +1190,30 @@ for (const key of ['scope', 'base_sha', 'patch_path', 'patch_sha256', 'repo_root
         || `${key} was not reported as a missing required argument (${JSON.stringify(res.missing || res.detail)})`
     } }))
 }
+// Finder-added regions are a rationed list too: only the first few are
+// probed, so which finder answered first must not decide which region is
+// examined.
+{
+  const flipped = await run('finder regions, reporters swapped', { ...BASE },
+    { finderRegions: true, regionFlip: true, noTriageRegions: true })
+  const flippedProbed = ((flipped.res.regions || []).filter((r) => r.probed).map((r) => r.anchor)).join(' ')
+  R.push(flipped)
+  R.push(await run('finder region funding ignores finder order', { ...BASE },
+    { finderRegions: true, noTriageRegions: true,
+      expect: (res) => {
+        const probed = res.regions.filter((r) => r.probed).map((r) => r.anchor)
+        if (probed.length !== 2) return `expected the balanced profile to probe two regions, got ${JSON.stringify(probed)}`
+        if (probed.join(' ') !== flippedProbed) {
+          return `finder order changed which regions were probed: ${JSON.stringify(probed)} vs "${flippedProbed}"`
+        }
+        // Each finder's FIRST region, not the two that happen to sort
+        // earliest: bulk.js:50-60 is its finder's second choice and must lose
+        // to util.js:50-60, which is the other finder's first.
+        const want = ['auth.js:50-60', 'util.js:50-60']
+        return want.every((a) => probed.includes(a))
+          || `the funded pair ignores each finder's own ranking: ${JSON.stringify(probed)}`
+      } }))
+}
 // A reviewed path may legitimately be named `__proto__`. On a plain object
 // that key sets the prototype instead of creating an own property, so the
 // path would vanish from the disclosure the report is built from.
@@ -1192,6 +1237,13 @@ for (const field of ['scope', 'patch_path', 'repo_root', 'intent']) {
 }
 // The artifact record itself is fenced, like every other artifact-derived
 // value: a path scope names files somebody else chose.
+R.push(await run('finders are told their region order is the funding order', { ...BASE }, {
+  expect: (res, state) => {
+    const finders = state.prompts.filter((x) => x.label && x.label.startsWith('find:'))
+    if (!finders.length) return 'no finder prompt was built'
+    const silent = finders.find((x) => !/ORDER THEM MOST DANGEROUS FIRST/.test(x.prompt))
+    return !silent || `${silent.label} asks for regions without saying its order is the funding order`
+  } }))
 R.push(await run('scope forges the fence', { ...BASE, scope: 'UNTRUSTED-RECORD marker in the scope' }, {
   expect: (res, state) => {
     const carrying = state.prompts.filter((x) => x.prompt.includes('marker in the scope'))
@@ -1358,6 +1410,22 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
       return attacks <= 1 || `all ${attacks} executable attacks were launched at the prior rate despite 20x drift`
     }))
 
+  // Region probes are cheap coverage and may never be bought with capacity
+  // the accuracy floor is owed. The acceptance check protects that floor; so
+  // must the re-admission after the sample reprices the wave. At 8x probe
+  // drift another 1.5-unit probe still fits on its own, and does not fit
+  // alongside the floor for the candidate it might add.
+  {
+    const dp = drainer(90000, 90, 1, { 'probe:': 8 })
+    R.push(await run('probe repricing keeps the accuracy floor', { ...BASE, profile: 'recall-first', budget_wu: 90 },
+      { onCall: dp.onCall, drift: true, unpriced: true }, dp.budget,
+      (res) => {
+        const probes = launchesOf(res).filter((x) => /^probe:R/.test(x.label)).length
+        if (res.status !== 'ok') return `the run ended ${res.status} before the probe wave could be judged`
+        return probes <= 1
+          || `${probes} region probes were launched at a rate where the accuracy floor no longer fits`
+      }))
+  }
   // The frontier must name MANDATORY accuracy work over optional coverage
   // even when the ledger recorded the optional deferral first. At 46wu with
   // 4x verifier drift a region probe is deferred in wave 3 and a verifier in

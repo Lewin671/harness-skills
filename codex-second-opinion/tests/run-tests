@@ -45,6 +45,7 @@ cat > "$fake" <<'FAKE'
 #   FAKE_NO_THREAD      suppress the thread.started event when set
 #   FAKE_CONFIG_ERR     fail the way --strict-config fails on an unknown key
 [ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
+[ -n "${FAKE_TMPDIR_LOG:-}" ] && printf '%s\n' "${TMPDIR:-unset}" >> "$FAKE_TMPDIR_LOG"
 case "${1:-}" in
   --version)
     echo "fake-codex 0.146.0"; exit 0 ;;
@@ -798,6 +799,35 @@ else
   bad "review: CDPATH cannot redirect --repo or pollute stdout"
 fi
 
+# An `enabled` field that is not a bare boolean. The grep looks for `true`
+# and the parser only sets enabled on those four literal bytes, so a
+# string-valued field matches neither and would read as a server that is
+# switched off — fail-open on exactly the schema drift this block exists to
+# survive. Checked on the first listing and on the re-check.
+stderr="${workdir}/mcp-strbool.err"
+argv_log="${workdir}/argv-mcp-strbool.log"
+FAKE_MCP_LIST='[{"name":"github","enabled":"true"}]' \
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'not a bare true or false' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a non-boolean enabled field fails closed"
+else
+  bad "review: a non-boolean enabled field fails closed" "exit $status"
+fi
+
+stderr="${workdir}/mcp-strbool-recheck.err"
+FAKE_MCP_LIST='[{"name":"github","enabled":true}]' \
+FAKE_MCP_LIST_AFTER='[{"name":"github","enabled":"false"}]' \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'not a bare true or false' "$stderr"; then
+  ok "review: a non-boolean enabled field in the re-check fails closed"
+else
+  bad "review: a non-boolean enabled field in the re-check fails closed" "exit $status"
+fi
+
 # The quiet truncation: cut after a complete DISABLED entry. Nothing in the
 # visible part is enabled, so the `true` grep never fires and a shape check
 # alone reads it as a clean listing — while every server in the suffix that
@@ -895,6 +925,90 @@ if [ "$base_idx_status" = 0 ] && [ "$base_idx_before" = "$base_idx_after" ]; the
   ok "review: the --base precheck does not rewrite .git/index"
 else
   bad "review: the --base precheck does not rewrite .git/index" "exit $base_idx_status, index changed: $([ "$base_idx_before" = "$base_idx_after" ] && echo no || echo yes)"
+fi
+
+# core.fsmonitor names a program git runs while refreshing, outside every
+# sandbox codex could impose and before any of its feature gates exist.
+# --no-optional-locks does not stop it; -c core.fsmonitor=false does.
+fsm="${workdir}/fsm"
+git init -q "$fsm"
+printf 'x\n' > "$fsm/a.txt"
+printf 'y\n' > "$fsm/b.txt"
+git -C "$fsm" add -A
+git -C "$fsm" "${commit_env[@]}" commit -q -m i
+fsm_marker="${workdir}/fsmonitor-fired"
+cat > "${workdir}/fsmonitor-hook" <<HOOK
+#!/bin/sh
+: > "${fsm_marker}"
+printf '/\0'
+HOOK
+chmod +x "${workdir}/fsmonitor-hook"
+git -C "$fsm" config core.fsmonitor "${workdir}/fsmonitor-hook"
+printf 'edit\n' >> "$fsm/a.txt"
+touch -m -t 202001010101 "$fsm/a.txt" "$fsm/b.txt"
+rm -f "$fsm_marker"
+"$wrapper" review --repo "$fsm" --timeout 30 >/dev/null 2>&1
+fsm_status=$?
+if [ "$fsm_status" = 0 ] && [ ! -e "$fsm_marker" ]; then
+  ok "review: the precheck does not run a configured fsmonitor program"
+else
+  bad "review: the precheck does not run a configured fsmonitor program" "exit $fsm_status, fired: $([ -e "$fsm_marker" ] && echo yes || echo no)"
+fi
+
+# A repo-local TMPDIR must be relocated before anything writes under it —
+# bash puts here-string temporaries there, and the MCP checks use several.
+# Asserted from the child's environment, not the wrapper's own file paths:
+# moving `scratch` alone would leave TMPDIR pointing into the repository.
+tmp_in_repo="${dirty}/inner-tmp"
+mkdir -p "$tmp_in_repo"
+tmpdir_log="${workdir}/tmpdir-seen.log"
+stderr="${workdir}/tmpdir-repo.err"
+TMPDIR="$tmp_in_repo" FAKE_TMPDIR_LOG="$tmpdir_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+seen="$(tail -1 "$tmpdir_log" 2>/dev/null || echo missing)"
+case "$seen" in
+  "${tmp_in_repo}"*) inside=yes ;;
+  *) inside=no ;;
+esac
+if [ "$status" = 0 ] && grep -q 'TMPDIR is inside the repo' "$stderr" && [ "$inside" = no ]; then
+  ok "review: a repo-local TMPDIR is relocated for the whole run"
+else
+  bad "review: a repo-local TMPDIR is relocated for the whole run" "exit $status, child TMPDIR: ${seen}"
+fi
+rm -rf "$tmp_in_repo"
+
+# When the throwaway index cannot be created there is no safe way to run the
+# working-tree diff, and no useful one either: the same scratch directory is
+# about to fail the result file. Refusing beats rewriting .git/index on the
+# way to an exit the run was going to take anyway.
+noidx="${workdir}/noidx"
+git init -q "$noidx"
+printf 'one\n' > "$noidx/f.txt"
+printf 'a\n' > "$noidx/clean.txt"
+git -C "$noidx" add -A
+git -C "$noidx" "${commit_env[@]}" commit -q -m tracked
+noidx_base="$(git -C "$noidx" rev-parse --abbrev-ref HEAD)"
+git -C "$noidx" checkout -q -b feat
+printf 'two\n' >> "$noidx/f.txt"
+git -C "$noidx" add -A
+git -C "$noidx" "${commit_env[@]}" commit -q -m feat
+touch -m -t 202001010101 "$noidx/f.txt" "$noidx/clean.txt"
+noidx_before="$(shasum -a 256 "$noidx/.git/index" | cut -d' ' -f1)"
+ro_scratch="${workdir}/ro-scratch"
+mkdir -p "$ro_scratch"; chmod 555 "$ro_scratch"
+stderr="${workdir}/noidx.err"
+TMPDIR="$ro_scratch" "$wrapper" review --repo "$noidx" --base "$noidx_base" --timeout 30 \
+  >/dev/null 2> "$stderr"
+noidx_status=$?
+chmod 755 "$ro_scratch"
+noidx_after="$(shasum -a 256 "$noidx/.git/index" | cut -d' ' -f1)"
+if [ "$noidx_status" = 3 ] && [ "$noidx_before" = "$noidx_after" ] &&
+   grep -q 'throwaway index' "$stderr"; then
+  ok "review: an unusable scratch dir refuses rather than rewriting .git/index"
+else
+  bad "review: an unusable scratch dir refuses rather than rewriting .git/index" \
+    "exit $noidx_status, index changed: $([ "$noidx_before" = "$noidx_after" ] && echo no || echo yes)"
 fi
 
 # --- session writes land outside the repository, or are disclosed ------

@@ -183,6 +183,20 @@ mcp_enabled_ids() {
     END { if (depth != 0 || bdepth != 0) print "!" }'
 }
 
+# Every `"enabled"` key in the payload must carry a bare true or false.
+# The enumeration keys entirely on that: the grep looks for `true`, and the
+# parser only sets enabled on the literal four bytes. So a payload that spelled
+# it `"enabled":"true"` would match neither, produce no id, and read as a
+# server that is switched off — a fail-open on exactly the CLI schema drift the
+# rest of this block is built to survive. Counting keys against well-formed
+# values catches it whichever way the drift went.
+mcp_enabled_values_boolean() {
+  local payload="$1" keys values
+  keys="$(grep -oE '"enabled"[[:space:]]*:' <<< "$payload" | wc -l | tr -d '[:space:]')"
+  values="$(grep -oE '"enabled"[[:space:]]*:[[:space:]]*(true|false)' <<< "$payload" | wc -l | tr -d '[:space:]')"
+  [ "$keys" = "$values" ]
+}
+
 # Close the model state machine. Called by each mode_main straight after
 # parsing, before anything is spent: every rejection here is a mistake
 # that would otherwise surface minutes later as a failed run.
@@ -235,6 +249,12 @@ common_env_checks() {
   work_tree="$(git rev-parse --is-inside-work-tree 2>/dev/null)" || work_tree=""
   [ "$work_tree" = "true" ] || {
     echo "error: ${repo} is not a git work tree" >&2; exit 3; }
+
+  # Before the first here-string below: on bash 3.2 `<<<` materialises a
+  # temporary file under TMPDIR, so a repo-local TMPDIR would be written —
+  # briefly, but written — inside the tree this run promises only to read, and
+  # the relocation that fixes that used to happen afterwards.
+  common_resolve_scratch
 
   codex_bin="${CODEX_BIN:-codex}"
   if ! "$codex_bin" --version >/dev/null 2>&1; then
@@ -295,6 +315,8 @@ EOF
   # turn a found entry into a false pipeline status.
   if [ "$mcp_status" -ne 0 ]; then
     mcp_problem="could not verify standalone MCP exposure ('codex mcp list' failed)"
+  elif ! mcp_enabled_values_boolean "$mcp_out"; then
+    mcp_problem="could not verify standalone MCP exposure (an 'enabled' field is not a bare true or false)"
   elif grep -qE '"enabled"[[:space:]]*:[[:space:]]*true' <<< "$mcp_out"; then
     local mcp_id unaddressable="" unnamed=0 truncated=0
     while IFS= read -r mcp_id; do
@@ -361,7 +383,11 @@ EOF
         # where a listing with entries was just read.
         case "$verify_out" in
           '[]'|'{}') : ;;
-          *'"enabled"'*) : ;;
+          *'"enabled"'*)
+            # Same value-shape bar as the first listing: a re-check whose
+            # booleans have become strings proves nothing either.
+            mcp_enabled_values_boolean "$verify_out" ||
+              mcp_problem="could not confirm the standalone MCP servers were switched off (an 'enabled' field is not a bare true or false)" ;;
           *)
             mcp_problem="could not confirm the standalone MCP servers were switched off (unrecognized re-check output)" ;;
         esac
@@ -498,6 +524,11 @@ common_resolve_scratch() {
       echo "error: no temporary directory outside the repo; set TMPDIR elsewhere" >&2
       exit 3
     fi
+    # Move TMPDIR itself, not just this script's own files: bash puts
+    # here-string temporaries there, mktemp defaults to it, and so does codex.
+    # Relocating `scratch` alone would leave every one of those writing into
+    # the repository.
+    export TMPDIR="$scratch"
   fi
 }
 
@@ -523,8 +554,13 @@ git_readonly_index() {
   copy="$(mktemp "${scratch}/codex-idx-XXXXXX" 2>/dev/null)" || copy=""
   if [ -z "$copy" ] || ! cat "$real" > "$copy" 2>/dev/null; then
     [ -n "$copy" ] && rm -f "$copy"
-    "$@" || status=$?
-    return "$status"
+    # No fallback to the plain command. A scratch directory that cannot hold
+    # one copied index cannot hold the result file either, so common_setup_
+    # scratch is about to exit 3 regardless — running unprotected here buys
+    # no successful run at all, only a rewritten .git/index on the way out.
+    echo "error: cannot create the throwaway index under ${scratch}" >&2
+    echo "error: refusing to run a working-tree git command that would rewrite ${real}" >&2
+    exit 3
   fi
   GIT_INDEX_FILE="$copy" "$@" || status=$?
   rm -f "$copy"
