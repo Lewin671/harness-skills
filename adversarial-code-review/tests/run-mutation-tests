@@ -81,7 +81,7 @@ mutate "held: executed" "    if (!executed) missing.push('execution_status=execu
 mutate "held: patch binding" "    if (!bound) missing.push('bound_to_base_sha + patch_hash_verified')" "    "
 mutate "held: ready capability" "    if (a.test_capability !== 'ready') missing.push('test_capability=ready')" "    "
 mutate "held: patched_result" "    if (!nonblank(a.patched_result)) missing.push('patched_result')" "    "
-mutate "held: vectors_attempted" "    if (!(a.vectors_attempted && a.vectors_attempted.length)) missing.push('vectors_attempted')" "    "
+mutate "held: vectors_attempted" "    if (!(Array.isArray(a.vectors_attempted) && a.vectors_attempted.some(nonblank))) missing.push('vectors_attempted')" "    "
 mutate "plausible needs counterexample" "    if (!hasConcreteCounterexample) {" "    if (false) {"
 mutate "plausible cannot claim execution" "  if (a.execution_status === 'unavailable') return 'unavailable'" "  if (a.execution_status === 'executed') return 'executed'"
 mutate "probe completeness fields" "['input', 'trace', 'expected_vs_actual', 'predicted_signature']" "['trace']"
@@ -235,7 +235,7 @@ mutate "prompt values carry no line break" "  if (A[k] !== undefined && /[\\r\\n
 
 # A launched attack cannot report a scheduling decision made before it ran.
 mutate "attacker cannot forge a deferral" "  if (a.execution_status === 'unavailable') return 'unavailable'" "  if (a.execution_status !== 'executed') return a.execution_status"
-mutate "blocked must say what stopped it" "    if (out.grade === 'blocked' && !out.reason) {" "    if (false) {"
+mutate "blocked must say what stopped it" "    if (out.grade === 'blocked' && !nonblank(out.reason)) {" "    if (false) {"
 
 # The preflight run is what makes test_capability=ready checkable.
 mutate "repro: probe_command" "  if (!nonblank(a.probe_command)) missing.push('probe_command')" "  " 2
@@ -296,6 +296,18 @@ mutate "adjudication sees the probe" "  probe: probeByTarget.get(c.id) || null,"
 mutate "a lens collapses its own repeats" "    if (ownFingerprints.has(fp)) {" "    if (false) {"
 mutate "cross-lens duplicates spend a slot" "  perLensCount.set(lens, seen + 1)
   const fingerprint = fingerprintOf(c)" "  const fingerprint = fingerprintOf(c)"
+
+# Present-but-blank, in every place the contract asks for evidence.
+mutate "candidate evidence is non-blank" "    return nonblank(e.quoted_code) && nonblank(e.observed_behavior) ? null : 'present_code evidence is incomplete or blank'" "    return e.quoted_code && e.observed_behavior ? null : 'present_code evidence is incomplete or blank'"
+mutate "omission evidence is non-blank" "    return nonblank(e.obligation) && nonblank(e.searched_scope) && nonblank(e.evidence_of_absence)" "    return e.obligation && e.searched_scope && e.evidence_of_absence"
+mutate "counterexample fields are non-blank" ".filter((k) => !nonblank(p[k]))" ".filter((k) => !p[k])"
+mutate "attack vectors are non-blank" "    if (!(Array.isArray(a.vectors_attempted) && a.vectors_attempted.some(nonblank))) missing.push('vectors_attempted')" "    if (!(Array.isArray(a.vectors_attempted) && a.vectors_attempted.length)) missing.push('vectors_attempted')"
+mutate "blocked reason is non-blank" "    if (out.grade === 'blocked' && !nonblank(out.reason)) {" "    if (out.grade === 'blocked' && !out.reason) {"
+
+# Severity leads the canonical order the adjudication batches are cut from.
+mutate "canonical order leads with severity" "const rank = (c) => -(SEV_WEIGHT[c.proposed_severity] || 0) * 1000
+  + (c.in_high_risk_region ? 0 : 1) * 100" "const rank = (c) => 0 * 1000
+  + (c.in_high_risk_region ? 0 : 1) * 100"
 
 # A reviewed path may legitimately be named __proto__.
 mutate "path map has a null prototype" "const scopeBindingByPath = Object.create(null)" "const scopeBindingByPath = {}"
@@ -361,6 +373,7 @@ mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.finger
 #
 #   rate divides by launched units  (launchedWU vs committedWU in ratePerWU)
 #   escrow draw token gate          (admitTokens inside drawOrReserve)
+#   probe floor counts the sample   (probeSample.length in floorAfter)
 #
 # Three others used to sit here on the strength of absorb() sorting each
 # finder's candidates. That argument was wrong: absorb sorts each finder's OWN
@@ -378,9 +391,26 @@ mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.finger
 # drift from 15x to 40x returns the same verdict either way, because the
 # per-wave rate already carries it.
 #
-# The escrow one: every path that draws escrow re-prices itself at launch
-# time, immediately after drawOrReserve, so the two checks ask the same
-# question and no scenario can separate them.
+# The probe-floor one is correct and unreachable, which is a different thing
+# from unnecessary. The sampled probe's emergent candidate is not absorbed
+# until after the remaining probes are admitted, so the floor those admissions
+# price has to include it — the term is right. It is worth about three
+# weighted units on a single admission, and no combination of budget and drift
+# in this suite's range makes three units decide one: sweeps at 30-72wu and
+# 1.0-2.0x drift move the probe-count threshold identically with and without
+# it. Kept because the arithmetic is right and the margin it needs is one
+# candidate away; excluded because a mutant for it survives by construction.
+#
+# The escrow one needs two cases, not the one the note used to claim. It is
+# NOT true that every draw is re-checked at launch: the first item of a
+# multi-item wave is the sample, and the sample launches without one.
+#   - Escrow covers exactly one item, so in a multi-item wave the second
+#     comes from reserve(), whose admitTokens sees waveEstimateWU already
+#     carrying the first. If the second is admitted the first would have
+#     been; if it is refused the wave has one item, which is the next case.
+#   - A one-item wave has no sample, so its single item IS re-checked after
+#     endWave, by the same admitTokens the mutant removed.
+# Either way the removed check is asked again before anything launches.
 #
 # Both are kept as defence in depth — each is what would still be right if the
 # thing that currently dominates it were removed — but a mutant for either
@@ -392,7 +422,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=176
+EXPECTED_TOTAL=182
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

@@ -1029,14 +1029,24 @@ function evidenceProblem(c) {
   if (ranges && !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {
     return `${c.file}:${c.line} is not inside any changed hunk listed for that file`
   }
+  // Non-blank, not merely present: `quoted_code: " "` is the shape of
+  // evidence with none of the substance, and every field here exists to make
+  // the claim checkable by someone who did not write it.
   if (c.evidence_kind === 'present_code') {
-    return e.quoted_code && e.observed_behavior ? null : 'present_code evidence is incomplete'
+    return nonblank(e.quoted_code) && nonblank(e.observed_behavior) ? null : 'present_code evidence is incomplete or blank'
   }
   if (c.evidence_kind === 'omission') {
-    return e.obligation && e.searched_scope && e.evidence_of_absence ? null : 'omission evidence is incomplete'
+    return nonblank(e.obligation) && nonblank(e.searched_scope) && nonblank(e.evidence_of_absence)
+      ? null : 'omission evidence is incomplete or blank'
   }
   return `unknown evidence_kind ${c.evidence_kind}`
 }
+
+// A required evidence string must actually say something. `!field` accepts
+// " " — and every one of these fields exists to make a self-reported claim
+// checkable by someone who did not write it, including on the one grade that
+// can override a refuting adjudicator.
+const nonblank = (v) => typeof v === 'string' && v.trim().length > 0
 
 // A high-risk region is a probe TARGET, and probe slots are rationed: the
 // profile funds the first few and defers the rest. So a region naming a file
@@ -1067,11 +1077,6 @@ function keepRegions(list, source) {
   }
   return out
 }
-
-// A required evidence string must actually say something. `!a.field` accepts
-// " " — and every one of these fields exists to make a self-reported claim
-// checkable, on the one grade that can override a refuting adjudicator.
-const nonblank = (v) => typeof v === 'string' && v.trim().length > 0
 
 const blockedAttack = (id, why) => ({ target_id: id, grade: 'blocked', test_capability: 'unavailable', execution_status: 'unavailable', reason: why })
 
@@ -1121,7 +1126,7 @@ function normalizeAttack(raw, id, hasConcreteCounterexample) {
     if (a.patch_applied !== true) missing.push('patch_applied=true')
     if (a.patched_failed !== false) missing.push('patched_failed=false')
     if (!nonblank(a.patched_result)) missing.push('patched_result')
-    if (!(a.vectors_attempted && a.vectors_attempted.length)) missing.push('vectors_attempted')
+    if (!(Array.isArray(a.vectors_attempted) && a.vectors_attempted.some(nonblank))) missing.push('vectors_attempted')
     if (!missing.length) return a
     malformed('attack', id, `claimed held without: ${missing.join(', ')} — downgraded to blocked`)
     return { ...blockedAttack(id, `claimed held without: ${missing.join(', ')}`), downgraded_from: 'held' }
@@ -1143,7 +1148,7 @@ function normalizeAttack(raw, id, hasConcreteCounterexample) {
     // The contract requires a blocked attack to say what stopped it —
     // "blocked" with no reason is a hole in Coverage and Residual Risk that
     // nothing downstream can fill, since only this agent knows.
-    if (out.grade === 'blocked' && !out.reason) {
+    if (out.grade === 'blocked' && !nonblank(out.reason)) {
       malformed('attack', id, 'graded blocked without recording why — the ledger cannot say what stopped it')
       out.reason = 'the attack graded itself blocked and recorded no reason'
     }
@@ -1210,7 +1215,9 @@ function normalizeProbe(raw, id) {
 // one cannot be allowed to trigger a ten-weighted-unit execution.
 function probeConstructedCounterexample(p) {
   if (!p || p.outcome !== 'counterexample_constructed') return false
-  const missing = ['input', 'trace', 'expected_vs_actual', 'predicted_signature'].filter((k) => !p[k])
+  // Blank counts as missing: four whitespace strings would otherwise be a
+  // "concrete counterexample" good enough to authorise a ten-unit execution.
+  const missing = ['input', 'trace', 'expected_vs_actual', 'predicted_signature'].filter((k) => !nonblank(p[k]))
   if (!missing.length) return true
   malformed('probe', p.target_id, `claimed a counterexample without: ${missing.join(', ')} — treated as none constructed`)
   return false
@@ -1650,7 +1657,13 @@ if (acceptedRegionProbes.length) {
     // later gives up candidates to pay for it — which is exactly the
     // "cheap coverage can never eat the accuracy floor" rule, defeated one
     // wave after it was enforced.
-    const floorAfter = floorsFor([...candidates, ...syntheticCriticals(probeRestAdmitted.length + 1)])
+    // One synthetic per probe whose yield is not yet in `candidates`: the
+    // ones still to be admitted AND the sampled one, whose emergent candidate
+    // is not absorbed until after this loop. Counting only the pending ones
+    // left room for one new critical where two could arrive, and the trim
+    // then gave up a candidate the escrow had promised to cover.
+    const floorAfter = floorsFor([...candidates,
+      ...syntheticCriticals(probeSample.length + probeRestAdmitted.length + 1)])
     if (admitTokens(probePendingWU + W.probe + floorAfter)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }
     defer({ target_id: t.target_id, kind: 'region_probe', anchor: t.label }, 'deferred_by_budget')
   }
@@ -1704,7 +1717,14 @@ endWave()
 // survives trimming.
 candidates.forEach((c) => { c.in_high_risk_region = inRegion(c) })
 
-const rank = (c) => (c.in_high_risk_region ? 0 : 1) * 100 - CONF_RANK[c.confidence] * 10
+// Severity FIRST, as contract.md section 7 requires of any bounded selection.
+// The severity buckets each sort by this too, where the term is constant and
+// changes nothing — but the whole candidate array is sorted by it as well,
+// and adjudication batches are cut from that array. Without the severity
+// term a budget that funds only the first batch could adjudicate a
+// high-confidence minor and defer a low-confidence critical.
+const rank = (c) => -(SEV_WEIGHT[c.proposed_severity] || 0) * 1000
+  + (c.in_high_risk_region ? 0 : 1) * 100 - CONF_RANK[c.confidence] * 10
 // Funding order. The fingerprint tail makes it total: co-located claims tie on
 // file, line and rank, and without it the order they are funded in is just the
 // order the finders happened to return them.

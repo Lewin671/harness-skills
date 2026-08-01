@@ -603,7 +603,16 @@ common_resolve_scratch() {
     probe="$parent"
   done
   [ -n "$probe" ] && resolved_home="$(cd -- "$probe" 2>/dev/null && pwd -P)"
-  if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; } || inside_repo "$probe"; then
+  # `sessions` is the child codex actually writes, and a symlink there points
+  # somewhere the parent does not: an outside CODEX_HOME whose sessions link
+  # into the repository writes into it just the same. Resolved with pwd -P,
+  # which follows the link.
+  local resolved_sessions=""
+  resolved_sessions="$(cd -- "${probe}/sessions" 2>/dev/null && pwd -P)" || resolved_sessions=""
+
+  if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; } \
+     || { [ -n "$resolved_sessions" ] && inside_repo "$resolved_sessions"; } \
+     || inside_repo "$probe"; then
     echo "error: CODEX_HOME (${codex_home}) resolves inside ${worktree_root} or its git storage." >&2
     echo "error: codex writes every session under CODEX_HOME/sessions, so this ${run_noun} would write the repository it is reading; refusing to start." >&2
     echo "hint: point CODEX_HOME outside the repository for this run." >&2

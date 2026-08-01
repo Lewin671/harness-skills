@@ -94,6 +94,35 @@ detects() {
   ok "$name"
 }
 
+# Detected by the STATUS term rather than by a hash, so the guard above does
+# not apply — status changing is the point. What this proves instead is that
+# the snapshot reads a CURRENT index: staging existing work moves nothing but
+# .git/index, so a snapshot taken through a frozen copy reports the tree as
+# untouched.
+detects_via_index() {
+  local name="$1" dir; shift
+  dir="$(new_repo "$(printf '%s' "$name" | tr -c 'a-zA-Z0-9' '-')")"
+  # Phase 0 exports a FROZEN index copy for the capture, and the snapshot runs
+  # inside that environment. Reproduce it here: without it the recipe reads
+  # the real index by default and this case cannot fail, which is exactly how
+  # it passed while the snapshot was reading the frozen copy.
+  local frozen="${WORK}/frozen-index-$$"
+  cp "${dir}/.git/index" "$frozen"
+  local before after
+  # The frozen export wraps the SNAPSHOTS only. The mutation stands in for an
+  # agent, which runs in its own process without Phase 0's environment — and
+  # staging into the frozen copy instead of the real index is exactly the
+  # non-event this case must not accidentally test.
+  before="$(cd "$dir" && GIT_INDEX_FILE="$frozen" acr_snapshot)"
+  ( cd "$dir" && "$@" )
+  after="$(cd "$dir" && GIT_INDEX_FILE="$frozen" acr_snapshot)"
+  if [ "$before" = "$after" ]; then
+    bad "$name" "the snapshot did not change"
+  else
+    ok "$name"
+  fi
+}
+
 detects "contents of an already-modified tracked file" sh -c 'printf overwritten > tracked.txt'
 detects "contents of an already-untracked file"        sh -c 'printf overwritten > untracked.txt'
 detects "executable bit on an already-modified file"   chmod +x tracked.txt
@@ -132,6 +161,12 @@ else
   wait "$fifo_pid" 2>/dev/null
   bad "a symlink to a FIFO does not block the snapshot" "the snapshot hung"
 fi
+
+# Staging existing work changes .git/index and nothing else: not HEAD, not
+# any file's bytes, and `git status` still reports the path as modified — in
+# the other column. A snapshot read through a frozen index copy reports the
+# tree as untouched.
+detects_via_index "existing work staged into the index" git add tracked.txt
 
 # The snapshot must not itself write the repository it is checking. A plain
 # `git status` refreshes stale stat data and rewrites .git/index, which would

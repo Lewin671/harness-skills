@@ -35,6 +35,11 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-XXXXXX")"
 # call that runs these commands: environment does not survive between calls.
 cp "$(git rev-parse --git-path index)" "${tmp}/index-copy"
 export GIT_INDEX_FILE="${tmp}/index-copy"
+# --no-ext-diff and --no-textconv on every diff for the same reason as
+# fsmonitor: both name a program git runs, before any of this is sandboxed —
+# and a textconv driver also yields prose the attack phase cannot apply.
+# --binary because a tracked binary change otherwise becomes "Binary files
+# differ", which `git apply` refuses, silently breaking the patch binding.
 # And `core.fsmonitor` names a program git EXECUTES while refreshing, outside
 # anything this review controls and before it has taken a baseline. The index
 # copy only redirects the write; this stops the run. Both belong on every
@@ -59,12 +64,18 @@ diff_args=("$(git merge-base origin/HEAD HEAD)" HEAD); untracked=0
 diff_args=("${from_ref}" "${to_ref}"); untracked=0
 
 base_sha="$(git rev-parse "${diff_args[0]}")"
-git diff "${diff_args[@]}" > "${tmp}/patch.diff"
+git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" > "${tmp}/patch.diff"
 # Untracked files exist only in the working tree, so they belong to the
 # uncommitted scope alone. Added without touching the index.
 if [ "${untracked}" = 1 ]; then
   git ls-files --others --exclude-standard -z | while IFS= read -r -d '' f; do
-    git diff --no-index --binary -- /dev/null "${f}" >> "${tmp}/patch.diff" || true
+    # Exit 1 means "they differ", which is the whole point; anything above it
+    # is a real failure. `|| true` swallowed both, so an unreadable or
+    # vanished file was dropped from the patch while the manifest below still
+    # named it — included_paths would then describe something the bound patch
+    # does not contain.
+    git diff --no-ext-diff --no-textconv --no-index --binary -- /dev/null "${f}" >> "${tmp}/patch.diff"
+    [ "$?" -le 1 ] || { echo "capture failed on ${f}" >&2; return 1; }
   done
 fi
 
@@ -95,39 +106,56 @@ changed underneath. Hash the contents:
 
 ```bash
 acr_snapshot() {
-  git rev-parse HEAD
-  # --no-optional-locks, and under the same GIT_INDEX_FILE copy as the capture
-  # above: a plain status rewrites .git/index too, which would make the
-  # write-safety check itself a write.
-  git --no-optional-locks status --porcelain=v1
-  # REGULAR FILES ONLY, and `./` on every operand.
-  #   - `shasum` follows a symlink. Pointed at a FIFO it blocks forever, and
-  #     Phase 0 hangs before the review starts; pointed at a missing target it
-  #     fails into 2>/dev/null and contributes nothing, identically before and
-  #     after. Symlinks are covered by their link text below instead, which is
-  #     what actually changes when one is retargeted.
-  #   - a file literally named `-` makes `shasum` read STDIN — the hash of
-  #     nothing, the same both times, while `git status` shows the same ` M`.
-  #     Measured; a `--` terminator does not help, `./-` does.
-  { git ls-files -z; git ls-files --others --exclude-standard -z; } |
-    while IFS= read -r -d '' f; do
-      [ -L "./$f" ] || [ ! -f "./$f" ] || printf './%s\0' "$f"
-    done |
-    xargs -0 shasum -a 256 2>/dev/null | sort | shasum -a 256
-  # Content hashes miss a mode change, and so does status: a tracked file
-  # already reported ` M` reports ` M` after its executable bit flips, and its
-  # bytes never moved. Both snapshots would match while the repository
-  # changed. `test -x` / `test -L` are POSIX, unlike stat's format flags.
-  { git ls-files -z; git ls-files --others --exclude-standard -z; } |
-    while IFS= read -r -d '' f; do
-      # The link TEXT, not what it points at. `shasum` follows a symlink, so
-      # retargeting one between two paths hashes the targets — and when a
-      # target does not exist it fails into 2>/dev/null and contributes
-      # nothing at all, identically before and after.
-      printf '%s%s %s %s\n' "$([ -x "./$f" ] && echo x || echo -)" \
-                             "$([ -L "./$f" ] && echo l || echo -)" \
-                             "$(readlink "./$f" 2>/dev/null || true)" "$f"
-    done | sort | shasum -a 256
+  # A FRESH copy of the LIVE index for every snapshot, not the frozen one the
+  # capture above reads through. Staging existing work changes .git/index and
+  # nothing else — not HEAD, not any file's bytes — so a snapshot taken
+  # through a stale copy reports that tree as untouched. Copying keeps the
+  # refresh off the real index all the same.
+  #
+  # "$(git rev-parse --git-dir)/index", NOT `rev-parse --git-path index`:
+  # the latter returns whatever GIT_INDEX_FILE points at, which during Phase 0
+  # is precisely the frozen copy this must not read.
+  local acr_idx acr_real
+  acr_idx="$(mktemp "${tmp:-${TMPDIR:-/tmp}}/acr-index-XXXXXX")"
+  acr_real="$(git rev-parse --git-dir)/index"
+  [ -f "${acr_real}" ] && cp "${acr_real}" "${acr_idx}"
+
+  (
+    # Exported inside a subshell so it cannot outlive the snapshot. An index
+    # that does not exist yet — a repository with nothing added — is left
+    # unset rather than pointed at an empty file, which git rejects.
+    [ -s "${acr_idx}" ] && export GIT_INDEX_FILE="${acr_idx}"
+
+    git rev-parse HEAD
+    # --no-optional-locks as well: a plain status rewrites the index it reads,
+    # which would make the write-safety check itself a write.
+    git --no-optional-locks status --porcelain=v1
+    # REGULAR FILES ONLY, and `./` on every operand.
+    #   - `shasum` follows a symlink. Pointed at a FIFO it blocks forever, and
+    #     Phase 0 hangs before the review starts; pointed at a missing target it
+    #     fails into 2>/dev/null and contributes nothing, identically before and
+    #     after. Symlinks are covered by their link text below instead, which is
+    #     what actually changes when one is retargeted.
+    #   - a file literally named `-` makes `shasum` read STDIN — the hash of
+    #     nothing, the same both times, while `git status` shows the same ` M`.
+    #     Measured; a `--` terminator does not help, `./-` does.
+    { git ls-files -z; git ls-files --others --exclude-standard -z; } |
+      while IFS= read -r -d '' f; do
+        [ -L "./$f" ] || [ ! -f "./$f" ] || printf './%s\0' "$f"
+      done |
+      xargs -0 shasum -a 256 2>/dev/null | sort | shasum -a 256
+    # Content hashes miss a mode change, and so does status: a tracked file
+    # already reported ` M` reports ` M` after its executable bit flips, and its
+    # bytes never moved. Both snapshots would match while the repository
+    # changed. `test -x` / `test -L` are POSIX, unlike stat's format flags.
+    { git ls-files -z; git ls-files --others --exclude-standard -z; } |
+      while IFS= read -r -d '' f; do
+        printf '%s%s %s %s\n' "$([ -x "./$f" ] && echo x || echo -)" \
+                               "$([ -L "./$f" ] && echo l || echo -)" \
+                               "$(readlink "./$f" 2>/dev/null || true)" "$f"
+      done | sort | shasum -a 256
+  )
+  rm -f "${acr_idx}"
 }
 acr_snapshot > "${tmp}/tree-before"
 ```
@@ -151,10 +179,18 @@ whether it is a symlink, and where that link points. A path that is neither —
 a FIFO, a socket, a device — appears in the second and has no content to
 hash, which is the honest treatment rather than a hang.
 
-Even this does not cover gitignored paths — build output, `node_modules`,
-local caches. Say that in the report rather than implying total coverage;
-"changes to tracked and untracked-but-visible files are detected" is true,
-"changes to the parent tree are detected" is not.
+Two kinds of path stay outside it, and both belong in the report rather than
+behind an implied "total coverage":
+
+- **gitignored paths** — build output, `node_modules`, local caches.
+- **anything git does not list at all.** `git ls-files --others` and
+  `git status` report neither FIFOs, sockets, nor device nodes — measured,
+  both are empty for a worktree containing one. So a special file appearing,
+  vanishing or changing kind is invisible here, and no amount of hashing in
+  this recipe changes that, because the recipe never learns the path exists.
+
+"Changes to tracked and untracked-but-visible files are detected" is true.
+"Changes to the parent tree are detected" is not.
 
 ### Exclusions and partitioning
 
@@ -170,7 +206,7 @@ excludes=(':(exclude)*.lock' ':(exclude)package-lock.json'
           ':(exclude)vendor/**' ':(exclude)**/node_modules/**'
           ':(exclude)**/__snapshots__/**' ':(exclude)*.min.js')
 
-git diff "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff"
+git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff"
 
 # The SAME pathspecs must filter untracked files. `git check-ignore` only
 # knows about .gitignore, so it will happily let an untracked vendor/ path or
@@ -178,7 +214,8 @@ git diff "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff"
 if [ "${untracked}" = 1 ]; then
   git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
     while IFS= read -r -d '' f; do
-      git diff --no-index --binary -- /dev/null "${f}" >> "${tmp}/patch.diff" || true
+      git diff --no-ext-diff --no-textconv --no-index --binary -- /dev/null "${f}" >> "${tmp}/patch.diff"
+      [ "$?" -le 1 ] || { echo "capture failed on ${f}" >&2; return 1; }
     done
 fi
 
@@ -244,7 +281,7 @@ same filtered pathspecs, and cover all three shapes of change:
 # Claude Code replaces bare dollar-digit tokens with invocation arguments when
 # it renders a skill, so the unparenthesised spelling would be substituted away
 # before the recipe ever reached awk.
-git diff --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
+git diff --no-ext-diff --no-textconv --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
   awk '/^--- a\//{o=substr($(0),7)}
        /^\+\+\+ /{f=($(0)=="+++ /dev/null") ? o : substr($(0),7); del=($(0)=="+++ /dev/null")}
        /^@@/{if(f=="") next;

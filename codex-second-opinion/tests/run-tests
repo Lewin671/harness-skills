@@ -1163,6 +1163,22 @@ else
   bad "review: a CODEX_HOME that resolves inward through .. fails closed" "exit $status"
 fi
 
+# The parent can sit outside while the child codex actually writes points
+# back in: `sessions` is a symlink into the repository.
+sess_home="${workdir}/outside-home"
+mkdir -p "$sess_home"
+ln -s "$dirty" "${sess_home}/sessions"
+stderr="${workdir}/codex-home-sessions.err"
+CODEX_HOME="$sess_home" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr"; then
+  ok "review: a CODEX_HOME whose sessions link into the repo fails closed"
+else
+  bad "review: a CODEX_HOME whose sessions link into the repo fails closed" "exit $status"
+fi
+rm -rf "$sess_home"
+
 # The same, for a CODEX_HOME that does not exist yet: codex creates it on
 # first use, exactly where its parent says. Resolving only existing
 # directories would wave this one through on the run that creates it.
