@@ -31,6 +31,12 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-XXXXXX")"
 # changed_ranges — must use these same ones. A branch review that captures
 # base..HEAD but builds its manifest from `git diff HEAD` yields an EMPTY
 # included_paths on a clean tree, and the script then refuses to start.
+# (1) paths the user named: NOT a fourth set of endpoints. Keep the endpoints
+#     of whatever scope they sit in, and narrow by pathspec — which means
+#     running the FILTERED recipe below and putting them where its `-- .`
+#     stands. Patch, both manifests and changed_ranges must use the same list,
+#     or included_paths describes something other than the captured patch.
+paths=(src/pay.js src/auth.js)   # then: -- "${paths[@]}" "${excludes[@]}"
 # (2) uncommitted — the common case
 diff_args=(HEAD); untracked=1
 # (3) branch vs merge-base
@@ -44,11 +50,17 @@ git diff "${diff_args[@]}" > "${tmp}/patch.diff"
 # uncommitted scope alone. Added without touching the index.
 if [ "${untracked}" = 1 ]; then
   git ls-files --others --exclude-standard -z | while IFS= read -r -d '' f; do
-    git diff --no-index --binary /dev/null "${f}" >> "${tmp}/patch.diff" || true
+    git diff --no-index --binary -- /dev/null "${f}" >> "${tmp}/patch.diff" || true
   done
 fi
 
 patch_sha256="$(shasum -a 256 "${tmp}/patch.diff" | cut -d' ' -f1)"
+
+# included_paths is REQUIRED and the script refuses to start without it, so it
+# belongs here and not only in the filtered recipe below. Same endpoints again.
+included="$( { git diff --name-only "${diff_args[@]}"
+               [ "${untracked}" = 1 ] && git ls-files --others --exclude-standard; } | sort -u)"
+excluded=""
 ```
 
 Never use `git add -N` to surface untracked files: it writes the index,
@@ -104,7 +116,7 @@ git diff "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff"
 if [ "${untracked}" = 1 ]; then
   git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
     while IFS= read -r -d '' f; do
-      git diff --no-index --binary /dev/null "${f}" >> "${tmp}/patch.diff" || true
+      git diff --no-index --binary -- /dev/null "${f}" >> "${tmp}/patch.diff" || true
     done
 fi
 
@@ -273,13 +285,23 @@ most-recent-wave, and a rate once observed is never forgotten.
 
 **The bound is not a single number, and it would be dishonest to quote one.**
 What is bounded is exposure to a *wave*: every multi-agent wave — finders,
-region probes, verifiers, and the escalated reruns — launches one agent
-first, and the rest are admitted only at what that one actually cost,
-cumulatively rather than item by item. The escalations matter most and were
+region probes, verifiers, the escalated reruns, the executable attacks and
+adjudication itself — launches one agent first, and the rest are admitted
+only at what that one actually cost, cumulatively rather than item by item.
+The escalations matter most and were
 added last: they are the strongest model at the highest effort, and drift
 that appears only there has been priced by nothing before it. Candidate probes are repriced too, because they were admitted
 before the sample existed. Those shapes now hold at 1.35x, against 1.57x,
 1.92x, 1.99x, 3.35x and 4.42x before.
+
+Clearing the wave estimate before that repricing is part of the mechanism,
+not bookkeeping. An accepted purchase is already charged to the open wave by
+whichever admission approved it, so a launch-time check that adds its cost
+again judges it against twice its price — and a *lone* item, which has no
+sample to take, is judged that way while the first of three is judged
+correctly. That inverted strictness could defer the one affordable executable
+attack, or a verifier belonging to the accuracy floor this run promises never
+to trim.
 
 Adjudication's debt is declared *before* that repricing, not after. It is
 owed tokens from the moment the floors are committed, and repricing a wave
@@ -287,14 +309,22 @@ against capacity adjudication has a prior claim on spends exactly the
 reserve that lets the run assign verdicts at all — the failure mode is a
 review that pays for every verifier and can then adjudicate none of them.
 
-What is **not** bounded is a role whose entire wave is one or two agents. A
-single executable attack costs ten weighted units, an adjudication batch is
-one call; there is nothing to sample first, and a 20x drift there runs to
-4.63x with nothing able to intervene. The suite carries those shapes too,
-marked as unpriced rather than quietly exempted, and asserts what still has
-to hold: the run ends honestly rather than reporting findings it could not
-pay to establish. Say this in the report rather than implying a ceiling that
-only some shapes respect.
+What is **not** bounded is a wave of exactly one agent. At the default budget
+that is the usual shape of the expensive half — one executable attack at ten
+weighted units, one adjudication batch — and there is genuinely nothing to
+sample first, so a 20x drift there runs to 4.63x with nothing able to
+intervene. It is also the shape of the *sample* in a larger wave: bounding
+the rest of a wave says nothing about its first member. The suite carries
+those shapes too, marked as unpriced rather than quietly exempted, and
+asserts what still has to hold: the run ends honestly rather than reporting
+findings it could not pay to establish. Say this in the report rather than
+implying a ceiling that only some shapes respect.
+
+Adjudication is admitted one batch at a time for a second reason beyond
+pricing. Refusing the whole reserve when only part of it fits ends the run
+`adjudication_failed` — every verifier paid for and not one verdict assigned
+— when the honest outcome is to adjudicate what the budget still covers and
+disclose the batches it does not.
 
 If the budget cannot fund the **coverage** floor, do not run: a review
 without breadth has nothing to say and its silence means nothing.
@@ -416,6 +446,7 @@ finder is `1.0`:
 | Finder (sonnet) | 1.00 |
 | Major verifier (sonnet) | 1.25 |
 | Critical verifier (opus) | 2.50 |
+| Critical verifier, escalated rerun (opus, highest effort) | 3.50 |
 | Minor verifier, batched (sonnet) | 0.75 + 0.30 × n, n ≤ 4 per batch |
 | Reasoning probe (sonnet) | 1.50 |
 | Executable attack (opus) | 10.00 |
@@ -562,11 +593,23 @@ rationed by design, and the surplus targets are deferred and disclosed.
 
 - Floors fit — run, and defer optional targets with
   `deferred_by_budget` in the ledger.
-- Floors exceed the budget — `budget_too_small`. Nothing runs. Raise
-  the budget or narrow the scope; do **not** produce a degraded review.
-- Floors exceed twice the budget — `scope_too_large`. The candidate set
-  is too big for this budget to verify at all, so narrowing the scope is
-  the fix rather than a slightly larger budget.
+- The **coverage** floor does not fit — `budget_too_small`. Nothing
+  runs. Raise the budget or narrow the scope; do **not** produce a
+  degraded review.
+- The **accuracy** floor does not fit — the trim runs, and the run
+  continues over what the budget can verify. There is no
+  `scope_too_large` status any more and there deliberately is not one:
+  a status returned by comparing the post-trim floor against the budget
+  could never fire, because the trim runs until exactly that comparison
+  is false. Reinstating it *before* the trim would restore the abort the
+  trim replaced, and with it the suppression that made a padded
+  candidate list able to delete a whole review.
+- Floors exceed twice the budget **before** trimming — the run proceeds
+  and says so, as a coverage risk naming the ratio: past that point the
+  candidate set is not slightly too big, it is too big for this budget
+  to verify at all, and narrowing the scope buys more than a larger
+  budget would. The advice the old status carried survives; the abort
+  does not.
 
 ## 5. Role prompts
 

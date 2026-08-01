@@ -387,8 +387,15 @@ EOF
       fi
     fi
   else
+    # Empty output is NOT an empty config. Verified on 0.146.0: a config with
+    # no servers prints `[]`, three bytes, not nothing. So a `mcp list` that
+    # exits 0 having printed nothing has failed to enumerate — a wrapper that
+    # swallowed the output, a build that writes elsewhere — and reading it as
+    # "no servers" is the one fail-open this whole block exists to avoid. The
+    # re-check below has always been strict here; the first listing has the
+    # same blind spot and no better excuse.
     case "$mcp_out" in
-      ''|'[]'|'{}') : ;;          # empty config: nothing to disclose
+      '[]'|'{}') : ;;             # empty config: nothing to disclose
       *'"enabled"'*) : ;;         # recognized shape, none enabled
       *)
         mcp_problem="could not verify standalone MCP exposure (unrecognized 'codex mcp list --json' output)" ;;
@@ -428,6 +435,22 @@ common_setup_scratch() {
   local worktree_root
   worktree_root="$(git rev-parse --show-toplevel)"
   worktree_root="$(cd "$worktree_root" && pwd -P)"
+
+  # Codex persists every run's session under CODEX_HOME/sessions. That write
+  # is disclosed, and it is harmless only while the path sits outside the
+  # repository. Inside it, the run writes session files into the very tree it
+  # is reading: they dirty git status and Codex's own file sweeps pick them
+  # up. Unlike the scratch files there is nowhere to relocate them to —
+  # moving CODEX_HOME would orphan every earlier session and break
+  # --continue — so this is a disclosure, not a substitution and not a
+  # refusal.
+  local codex_home resolved_home
+  codex_home="${CODEX_HOME:-${HOME:-}/.codex}"
+  resolved_home="$(cd "$codex_home" 2>/dev/null && pwd -P)" || resolved_home=""
+  if [ -n "$resolved_home" ] && { [ "$resolved_home" = "$worktree_root" ] ||
+     case "$resolved_home/" in "$worktree_root"/*) true ;; *) false ;; esac; }; then
+    echo "warning: CODEX_HOME (${resolved_home}) is inside ${worktree_root}; this ${run_noun}'s session files are written into the repository it is reading" >&2
+  fi
   if [ "$scratch" = "$worktree_root" ] || case "$scratch/" in "$worktree_root"/*) true ;; *) false ;; esac; then
     echo "warning: TMPDIR is inside the repo; using /tmp instead" >&2
     scratch="/tmp"
@@ -801,6 +824,13 @@ run_with_fallback() {
     inherited_model="$(effective_model_from_log)"
     if [ -n "$inherited_model" ]; then
       echo "note: inherited model in effect: ${inherited_model}" >&2
+    else
+      # Say so rather than staying silent. Both modes owe the reader the
+      # model that answered, and silence here is indistinguishable from a
+      # caller who forgot to look — leaving them to state a model nobody
+      # confirmed. "Inherited, and the stream did not name it" is the true
+      # answer, and it is one a report can actually carry.
+      echo "note: the model was inherited from your codex config; the event stream did not name it, so report it as inherited rather than naming a tier" >&2
     fi
   fi
 }

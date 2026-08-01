@@ -47,6 +47,20 @@ That promotion step is load-bearing, not bookkeeping. A recall channel
 that can attack code but cannot produce a candidate can never report a
 finding, and is decoration.
 
+Two boundaries keep that channel honest, and both exist because a
+high-risk region is a rationed purchase rather than a note:
+
+- A region must name a **reviewed path** and a range that is actually a
+  range. A region outside the artifact, or one whose end precedes its
+  start, can never contain a candidate — but it will still consume a
+  probe slot a real region would have had, on the say-so of an agent
+  that read the artifact. Unusable regions are dropped and counted.
+- A promoted candidate is credited to the region **only if its anchor
+  lies inside it**. One anchored elsewhere is still a candidate — it is
+  real, and nobody else found it, so discarding it would lose a defect —
+  but the region that produced it did not find anything *there*, and the
+  emergent count and the region's own record must say so.
+
 `proposed_severity` is deliberately named. Finders propose; the
 adjudicator assigns final severity.
 
@@ -191,7 +205,10 @@ exactly one state:
   same error as treating failure-to-refute as substantiation. An
   unresolved verdict must name the predicate that stayed unsettled — the
   report section for these is worthless without it, since "we could not
-  tell" is only actionable when it says what could not be told.
+  tell" is only actionable when it says what could not be told. Nothing
+  downstream can supply a missing one without inventing it, so verdicts
+  that arrive without it are counted and disclosed rather than quietly
+  rendered as a blank line in that section.
 
 The adjudicator also assigns final severity per the rubric above,
 overriding the finder's proposal, and states in one line what evidence
@@ -245,14 +262,29 @@ convincing it sounds:
   executed. Must record why, as `execution_status`:
   `unavailable` (the environment could not run it) ·
   `deferred_by_profile` (the profile does not buy execution here) ·
-  `deferred_by_budget` (capacity ran out). The last two are choices,
-  not facts about the code, and the ledger says which.
+  `deferred_by_budget` (capacity ran out) ·
+  `disabled_by_caller` (the caller kept the contract and declined the
+  execution half). All but the first are choices, not facts about the
+  code, and the ledger says which.
+
+  Those three are also facts only the **orchestrator** can know, since
+  they are decisions taken before any attacker was launched. An attack
+  that ran and reports one of them is asserting something it has no
+  standing to assert — into the very ledger whose job is to say
+  truthfully why something did not happen — so a launched attacker's
+  only honest non-executed status is `unavailable`, and anything else it
+  returns is normalised to that and recorded as malformed.
 - **`held`** — execution happened, the attack ran, and the code did not
   break. Name the vectors attempted. Evidence of robustness, reported
   and never dropped. **`held` is execution-only.** A probe that failed
   to imagine a counterexample has not shown the code is robust.
 - **`blocked`** — a required stage could not proceed for environmental
-  or infrastructure reasons. Says nothing about the code. Record why.
+  or infrastructure reasons. Says nothing about the code. Record why —
+  and the reason is required, not decorative: only the agent that hit
+  the obstacle knows what it was, so a `blocked` with nothing said
+  leaves a hole in Coverage and Residual Risk that nothing downstream
+  can fill. One that arrives without a reason is recorded as malformed
+  and carries a stated placeholder rather than a blank.
 - **`inconclusive`** — a probe ran, constructed no counterexample, and no
   execution was bought. A statement about how hard the code was to break.
 - **`not_attempted`** — nothing was aimed at this target at all. It is not
@@ -357,6 +389,16 @@ run behind padding. Where a bound exists, the survivors are chosen by
 consequence: severity first, then whether the anchor sits in a high-risk
 region, then confidence, and finally the record's own text so two runs given
 the same claims in different orders keep the same ones.
+
+The same rule reaches past claims. Where two records contradict each other
+about the same candidate — a batch returning both a substantiating and a
+refuting verdict for one id — neither may be kept, because keeping either
+is keeping whichever arrived first. A batch that contradicts itself has
+settled nothing, and the candidate goes forward unverified. And where an
+agent is asked for a ranked list whose tail the run cannot fund — lenses
+under a profile that caps them, regions beyond the funded few — it must be
+*told* that the order it returns is the funding order, or truncating it is
+the same defect wearing a different name.
 
 Region membership counts from the moment it is known, not from the moment it
 is recorded. Triage names its high-risk regions before any finder runs, so a

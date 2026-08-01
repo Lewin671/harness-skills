@@ -63,13 +63,14 @@ Three rules keep the loop honest:
 - Continuation is verified: if the session expired, the script
   discards the fresh-thread answer and exits `4` instead of passing it
   off as a follow-up. Start a new consultation and restate context.
-- If the `session:` line is ever missing, the answer is still valid —
+- If no session id reaches the stream, the answer is still valid —
   there is just nothing to continue; the next question starts fresh.
-  The `resume:` line is printed either way, reading `unavailable — ...`
-  in that case. That is deliberate: the answer body is
-  model-controlled, and a run that printed no `resume:` line at all
-  would leave one invented inside that body as the last such line in a
-  merged stream.
+  Both lines are printed either way, reading `session: unavailable —
+  ...` and `resume: unavailable — ...` in that case. That is
+  deliberate: the answer body is model-controlled, and a run that
+  printed neither would leave whatever the model wrote as the last line
+  of that kind in a merged stream. For `session:` that is not merely
+  cosmetic — the id is what a follow-up passes to `--continue`.
 
 A rejected model on a follow-up is never retried automatically: the
 rejected attempt may already have recorded the question in the

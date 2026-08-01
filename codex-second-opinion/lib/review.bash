@@ -84,8 +84,14 @@ check_scope_nonempty() {
       # while untracked files — which this scope promises to review —
       # sit right there. A failing git status must surface as exit 3,
       # not be read as an empty scope.
+      # --no-optional-locks so the precheck cannot write the repository it
+      # promises only to read: a plain `git status` refreshes stale stat info
+      # and rewrites .git/index (measured). The flag suppresses exactly that
+      # write. It is not a blanket cure — `git diff` below refreshes the index
+      # regardless — which is why internals.md states the residual instead of
+      # claiming the prechecks touch nothing.
       local status_out
-      status_out="$(git status --porcelain --untracked-files=normal)" || {
+      status_out="$(git --no-optional-locks status --porcelain --untracked-files=normal)" || {
         echo "error: git status failed in ${repo}" >&2; exit 3; }
       if [ -z "$status_out" ]; then
         echo "nothing to review: no staged, unstaged, or untracked changes" >&2
@@ -176,7 +182,7 @@ check_scope_nonempty() {
 scope_sentence() {
   case "$scope_flag" in
     --uncommitted)
-      printf '%s' "Review the uncommitted changes in this repository: staged, unstaged, and untracked files. Use \`git status --porcelain --untracked-files=normal\` together with \`git diff\`, \`git diff --cached\`, and the contents of any untracked files." ;;
+      printf '%s' "Review the uncommitted changes in this repository: staged, unstaged, and untracked files. Use \`git --no-optional-locks status --porcelain --untracked-files=normal\` together with \`git diff\`, \`git diff --cached\`, and the contents of any untracked files." ;;
     --base)
       printf '%s' "Review the changes on the current branch against base branch $(shell_quote "$scope_value"): the diff from merge base ${resolved_base} to the working tree, i.e. \`git diff ${resolved_base}\`. Do not review anything already contained in ${resolved_base}." ;;
     --commit)

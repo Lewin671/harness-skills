@@ -83,10 +83,7 @@ mutate "held: ready capability" "    if (a.test_capability !== 'ready') missing.
 mutate "held: patched_result" "    if (!a.patched_result) missing.push('patched_result')" "    "
 mutate "held: vectors_attempted" "    if (!(a.vectors_attempted && a.vectors_attempted.length)) missing.push('vectors_attempted')" "    "
 mutate "plausible needs counterexample" "    if (!hasConcreteCounterexample) {" "    if (false) {"
-mutate "plausible cannot claim execution" "    if (executed) {
-      malformed('attack', id, 'graded plausible while reporting execution — execution_status normalised to unavailable')
-      return { ...a, execution_status: 'unavailable' }
-    }" "    "
+mutate "plausible cannot claim execution" "  if (a.execution_status === 'unavailable') return 'unavailable'" "  if (a.execution_status === 'executed') return 'executed'"
 mutate "probe completeness fields" "['input', 'trace', 'expected_vs_actual', 'predicted_signature']" "['trace']"
 mutate "probe target-id reconciliation" "  if (raw.target_id !== id) {" "  if (false) {" 2
 mutate "attack target-id reconciliation" "  if (raw.target_id !== id) {" "  if (false) {"
@@ -98,7 +95,7 @@ mutate "terminal evidence override" "  if (terminal && state !== 'substantiated'
 mutate "region-probe floor escrow" "  if (admitOptional(W.probe, floorsFor([...candidates, ...syntheticCriticals(acceptedRegionProbes.length + 1)]))) acceptedRegionProbes.push(t)" "  if (admitOptional(W.probe, 0)) acceptedRegionProbes.push(t)"
 mutate "weak verdict replacement" "        if (v.grounding === 'strong') verdictById.set(id, v)" "        if (true) verdictById.set(id, v)"
 mutate "unknown-verdict-id rejection" "    if (!expected.has(id)) { ledger.unknown_verdict_ids.push({ role, id }); continue }" "    if (false) { continue }"
-mutate "duplicate-verdict rejection" "    if (seen.has(id)) { malformed(role, id, 'duplicate record in one batch — first kept'); continue }" "    if (false) { continue }"
+mutate "duplicate-verdict rejection" "    if (seen.has(id)) {" "    if (false) {"
 mutate "low-confidence coverage risk" "  ledger.coverage_risks.push({" "  if (false) ledger.coverage_risks.push({"
 mutate "finder evidence validation" "  const problem = evidenceProblem(c)" "  const problem = null"
 mutate "weighted-unit hard ceiling" "  if (committedWU + wu > budgetWU + EPS) return false" "  "
@@ -110,11 +107,7 @@ mutate "prepaid-wave token gate" "  if (!admitTokens(wu)) return false
 }" "  waveEstimateWU += wu
   return true
 }"
-mutate "escrow draw token gate" "    if (!admitTokens(wu)) return false
-    escrow[pool] -= wu" "    escrow[pool] -= wu"
-mutate "blocked/inconclusive normalization" "    if (!executed) return a
-    malformed('attack', id, \`graded \${a.grade} while reporting execution — execution_status normalised to unavailable\`)
-    return { ...a, execution_status: 'unavailable' }" "    return a"
+mutate "blocked/inconclusive normalization" "    const out = { ...a, execution_status: unexecutedStatus(a, id) }" "    const out = { ...a }"
 mutate "probe outcome exactness" "  if (!p || p.outcome !== 'counterexample_constructed') return false" "  if (!p) return false"
 mutate "escalated verifier identity" "    if (e.r && e.r.candidate_id === e.c.id && e.r.grounding === 'strong') verifierById.set(e.c.id, e.r)" "    if (e.r) verifierById.set(e.c.id, e.r)"
 mutate "null-finder coverage disclosure" "  if (!res) { ledger.unrun_lenses.push(lens); failed('finder', lens, 'finder did not return'); return }" "  if (!res) { return }"
@@ -185,7 +178,7 @@ mutate "candidate line is 1-indexed" "  if (!Number.isInteger(c.line) || c.line 
 mutate "canonical order before batching" "candidates.sort(byRank)" ""
 
 # The attacker must not be invited to produce evidence the script rejects.
-mutate "attack prompt requires the control" "     AND control_passed is true. Requires test_code and command. Anything" "     AND either control_passed is true or specification_citation is given. Anything"
+mutate "attack prompt requires the control" "     AND control_passed is true. Requires test_code, command, and the step-2" "     AND either control_passed is true or specification_citation is given. Also"
 mutate "reproduction: control_result" "  if (!a.control_result) missing.push('control_result')" "  "
 mutate "trim respects tokens too" "       && (committedWU + floorsFor(candidates) > budgetWU + EPS
            || !admitTokens(floorsFor(candidates)))) {" "       && (committedWU + floorsFor(candidates) > budgetWU + EPS
@@ -231,12 +224,76 @@ mutate "under-tier findings are flagged" "    verified_below_final_severity: Boo
 mutate "escalation wave is sampled" "    if (admitTokens(escPendingWU + W.criticalVerifierEscalated)) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }" "    if (true) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }"
 mutate "finder regions precede capping" "finderOut.forEach((res) => absorbRegions(res))" ""
 
+# Arrival order must not pick between two records for the same candidate.
+mutate "duplicate records both discarded" "        into.delete(id)" "        "
+
+# Phase 0 values reach every prompt, and the attack prompt executes three of
+# them.
+mutate "artifact record is fenced" "const ARTIFACT_RECORD = fenced(\`scope:" "const ARTIFACT_RECORD = (\`scope:"
+mutate "object names must be hexadecimal" "  if (!/^[0-9a-fA-F]+\$/.test(String(A[k]))) {" "  if (false) {"
+mutate "prompt values carry no line break" "  if (A[k] !== undefined && /[\\r\\n]/.test(String(A[k]))) {" "  if (false) {"
+
+# A launched attack cannot report a scheduling decision made before it ran.
+mutate "attacker cannot forge a deferral" "  if (a.execution_status === 'unavailable') return 'unavailable'" "  if (a.execution_status !== 'executed') return a.execution_status"
+mutate "blocked must say what stopped it" "    if (out.grade === 'blocked' && !out.reason) {" "    if (false) {"
+
+# The preflight run is what makes test_capability=ready checkable.
+mutate "repro: probe_command" "  if (!a.probe_command) missing.push('probe_command')" "  " 2
+mutate "repro: probe_result" "  if (!a.probe_result) missing.push('probe_result')" "  " 2
+mutate "held: probe_command" "    if (!a.probe_command) missing.push('probe_command')" "    "
+mutate "held: probe_result" "    if (!a.probe_result) missing.push('probe_result')" "    "
+
+# Probe slots are rationed, so an unusable region costs a real one.
+mutate "unusable regions are rejected" "    const problem = regionProblem(r)" "    const problem = null"
+mutate "region must be in reviewed paths" "  if (!includedPaths.includes(r.file)) return \`\${r.file} is not among the reviewed paths\`" "  "
+mutate "region range must not run backwards" "      || r.start_line < 1 || r.end_line < r.start_line) {" "      || false) {"
+
+# The recall channel may only claim what it actually found where it looked.
+mutate "emergent candidate binds to its region" "          const inside = rec.file === o.t.file && rec.line >= o.t.start_line && rec.line <= o.t.end_line" "          const inside = true"
+
+# Which supplemental lens is bought must not ride on finder order.
+mutate "supplemental lens ranks by tally" "    (tally.get(b) - tally.get(a)) || (LENSES.indexOf(a) - LENSES.indexOf(b)))[0]" "    0)[0]"
+
+# The two waves that used to launch every agent at an unpaid prior.
+mutate "attack wave is sampled" "    if (admitTokens(execPendingWU + W.execute)) { execPendingWU += W.execute; execAdmitted.push(t); continue }" "    if (true) { execPendingWU += W.execute; execAdmitted.push(t); continue }"
+mutate "adjudication wave is sampled" "      if (admitPrepaid(W.adjudicator(x.b.length))) { adjAdmitted.push(x); continue }" "      if (true) { adjAdmitted.push(x); continue }"
+mutate "re-adjudication wave is sampled" "        if (admitTokens(rePendingWU + W.adjudicator(x.b.length))) { rePendingWU += W.adjudicator(x.b.length); reAdmitted.push(x); continue }" "        if (true) { rePendingWU += W.adjudicator(x.b.length); reAdmitted.push(x); continue }"
+mutate "adjudication admits one batch first" "if (adjInput.length && !admitPrepaid(W.adjudicator(adjBatchList[0].length))) {" "if (adjInput.length && !admitPrepaid(adjReserveWU)) {"
+
+# The wave estimate must be cleared before a wave re-prices its own members,
+# or an item already charged to it is judged against twice its cost.
+mutate "attack wave clears its estimate" "  // count is the difference between running the one affordable attack and
+  // deferring it.
+  endWave()" "  // count is the difference between running the one affordable attack and
+  // deferring it.
+  if (execSample.length) endWave()"
+mutate "verify wave clears its estimate" "// accuracy floor, which is the one thing this run promises never to trim.
+endWave()" "// accuracy floor, which is the one thing this run promises never to trim.
+if (verifySample.length) endWave()"
+
+# A reviewed path may legitimately be named __proto__.
+mutate "path map has a null prototype" "const scopeBindingByPath = Object.create(null)" "const scopeBindingByPath = {}"
+
+# What the old scope_too_large abort used to say, now said as disclosure.
+mutate "oversized scope is disclosed" "  if (preTrimFloorsWU > 2 * budgetWU) {" "  if (false) {"
+
+# Disclosure counters added with the protections above.
+mutate "checklist counts unusable regions" "    regions_dropped_invalid: ledger.invalid_regions.length," "    regions_dropped_invalid: 0,"
+mutate "checklist counts unnamed predicates" "      r.adjudicated_state === 'unresolved' && !r.unsettled_predicate).length," "      false).length,"
+
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
 #   rollback drops by rank          (pickVictim vs the array tail)
 #   victim tie-break is deterministic (the fingerprint tail in pickVictim)
 #   funding order is total          (the fingerprint tail in byRank)
 #   rate divides by launched units  (launchedWU vs committedWU in ratePerWU)
+#   escrow draw token gate         (admitTokens inside drawOrReserve)
+#
+# The escrow one is newer: every path that draws escrow now re-prices itself
+# at launch time, immediately after drawOrReserve, so the two checks ask the
+# same question and no scenario can separate them. It stays because it stops
+# escrow being spent on a purchase that is about to be refused, and because
+# the launch-time re-check is one edit away from being removed.
 #
 # absorb() now sorts each finder's candidates by consequence before they are
 # ever accepted, so by the time these three run the array is already ordered
@@ -258,7 +315,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=124
+EXPECTED_TOTAL=148
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

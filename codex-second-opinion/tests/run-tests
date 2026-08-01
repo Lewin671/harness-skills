@@ -67,7 +67,9 @@ case "${1:-}" in
         printf '%s\n' "${FAKE_MCP_LIST_AFTER-[]}" ;;
       *)
         [ -n "${FAKE_MCP_FAIL:-}" ] && exit 1
-        printf '%s\n' "${FAKE_MCP_LIST:-[]}" ;;
+        # `-`, not `:-`: an explicitly empty value must stay empty, so a test
+        # can express a listing command that succeeded and printed nothing.
+        printf '%s\n' "${FAKE_MCP_LIST-[]}" ;;
     esac
     exit 0 ;;
 esac
@@ -296,12 +298,18 @@ argv_log="${workdir}/argv-mcp-multi.log"
 FAKE_MCP_LIST='[{"name":"a-one","enabled":true},{"name":"off","enabled":false},{"name":"b_two","enabled":true}]' \
 FAKE_ARGV_LOG="$argv_log" \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
-if grep -q -- '-c mcp_servers.a-one.enabled=false' "$argv_log" &&
-   grep -q -- '-c mcp_servers.b_two.enabled=false' "$argv_log" &&
+# Matched on the `exec review` line specifically, and on the exit status.
+# The argv log records EVERY invocation, and the MCP re-check carries all the
+# same overrides — so a bare grep passes even when the wrapper aborts after
+# verification and never reviews anything.
+status=$?
+if [ "$status" = 0 ] &&
+   grep -q -- '^exec review.*-c mcp_servers.a-one.enabled=false' "$argv_log" &&
+   grep -q -- '^exec review.*-c mcp_servers.b_two.enabled=false' "$argv_log" &&
    ! grep -q -- 'mcp_servers.off' "$argv_log"; then
   ok "review: every enabled MCP server gets its own override, disabled ones none"
 else
-  bad "review: every enabled MCP server gets its own override, disabled ones none" "argv: $(tail -1 "$argv_log")"
+  bad "review: every enabled MCP server gets its own override, disabled ones none" "exit $status, argv: $(tail -1 "$argv_log")"
 fi
 
 # Pretty-printed output is what codex actually emits, and nested
@@ -315,11 +323,13 @@ FAKE_MCP_LIST='[
   }
 ]' FAKE_ARGV_LOG="$argv_log" \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
-if grep -q -- '-c mcp_servers.real.enabled=false' "$argv_log" &&
+status=$?
+if [ "$status" = 0 ] &&
+   grep -q -- '^exec review.*-c mcp_servers.real.enabled=false' "$argv_log" &&
    ! grep -q -- 'mcp_servers.nested' "$argv_log"; then
   ok "review: pretty-printed listings parse and nested objects are ignored"
 else
-  bad "review: pretty-printed listings parse and nested objects are ignored" "argv: $(tail -1 "$argv_log")"
+  bad "review: pretty-printed listings parse and nested objects are ignored" "exit $status, argv: $(tail -1 "$argv_log")"
 fi
 
 # An enabled entry whose id cannot be addressed by a dotted -c path
@@ -788,10 +798,115 @@ else
   bad "review: CDPATH cannot redirect --repo or pollute stdout"
 fi
 
+# An empty first listing is not an empty config: verified on 0.146.0, a
+# config with no servers prints `[]`. A command that exits 0 having printed
+# nothing has failed to enumerate, and that is the one fail-open the whole
+# MCP block exists to prevent.
+stderr="${workdir}/mcp-empty-first.err"
+argv_log="${workdir}/argv-mcp-empty-first.log"
+FAKE_MCP_LIST='' FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'unrecognized' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: an empty first MCP listing fails closed"
+else
+  bad "review: an empty first MCP listing fails closed" "exit $status"
+fi
+
+# --- the wrapper's own git prechecks must not write the repository -----
+#
+# They run before any sandbox exists, so they are the one place this script
+# could modify the tree it promises only to read. A plain `git status`
+# refreshes stale stat info and rewrites .git/index; --no-optional-locks
+# suppresses exactly that. Content hash, not mtime: the refresh rewrites the
+# cached stat data inside the file.
+locks="${workdir}/locks"
+git init -q "$locks"
+printf 'one\n' > "$locks/f.txt"
+# Two more tracked files that stay UNMODIFIED. They are what makes this test
+# bite: git only rewrites the index to record fresh stat data for a file whose
+# content still matches, so a repo whose only stale file is also edited gives
+# the refresh nothing to write and the check passes either way.
+printf 'a\n' > "$locks/clean-one.txt"
+printf 'b\n' > "$locks/clean-two.txt"
+git -C "$locks" add -A
+git -C "$locks" "${commit_env[@]}" commit -q -m tracked
+printf 'two\n' >> "$locks/f.txt"
+touch -m -t 202001010101 "$locks/f.txt" "$locks/clean-one.txt" "$locks/clean-two.txt"
+idx_before="$(shasum -a 256 "$locks/.git/index" | cut -d' ' -f1)"
+"$wrapper" review --repo "$locks" --timeout 30 >/dev/null 2>&1
+idx_status=$?
+idx_after="$(shasum -a 256 "$locks/.git/index" | cut -d' ' -f1)"
+if [ "$idx_status" = 0 ] && [ "$idx_before" = "$idx_after" ]; then
+  ok "review: the empty-scope precheck does not rewrite .git/index"
+else
+  bad "review: the empty-scope precheck does not rewrite .git/index" "exit $idx_status, index changed: $([ "$idx_before" = "$idx_after" ] && echo no || echo yes)"
+fi
+
+# --- session writes land outside the repository, or are disclosed ------
+
+home_in_repo="${dirty}/inner-codex-home"
+mkdir -p "$home_in_repo"
+stderr="${workdir}/codex-home.err"
+CODEX_HOME="$home_in_repo" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && grep -q 'CODEX_HOME.*is inside' "$stderr"; then
+  ok "review: a CODEX_HOME inside the repo is disclosed"
+else
+  bad "review: a CODEX_HOME inside the repo is disclosed" "exit $status"
+fi
+rm -rf "$home_in_repo"
+
+stderr="${workdir}/codex-home-outside.err"
+"$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+if ! grep -q 'CODEX_HOME' "$stderr"; then
+  ok "review: an ordinary CODEX_HOME says nothing"
+else
+  bad "review: an ordinary CODEX_HOME says nothing" "warned anyway"
+fi
+
+# --- the reporting duty must be dischargeable from what is printed -----
+#
+# Both modes owe the reader the model that answered. With --inherit and no
+# model field in the stream there is nothing to name, and silence there is
+# indistinguishable from a caller who forgot to look.
+stderr="${workdir}/inherit-unnamed.err"
+"$wrapper" review --repo "$dirty" --timeout 30 --inherit >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && grep -q 'inherited from your codex config' "$stderr"; then
+  ok "review: an unnameable inherited model is still reported as inherited"
+else
+  bad "review: an unnameable inherited model is still reported as inherited" "exit $status"
+fi
+
 # --- watchdog ----------------------------------------------------------
 
 FAKE_SLEEP=30 "$wrapper" review --repo "$dirty" --timeout 1 >/dev/null 2>&1
 check_exit "review: hung review is killed with exit 5" 5 "$?"
+
+# --- cancellation is forwarded into codex's process group --------------
+#
+# `set -m` gives codex its own process group, which is exactly why a signal
+# aimed at this script never reaches it. Without forwarding, a cancelled run
+# keeps burning tokens with nobody left to read the result — and the watchdog
+# sleeps on for the rest of its timeout. Only --timeout was covered before.
+FAKE_SLEEP=60 "$wrapper" review --repo "$dirty" --timeout 600 >/dev/null 2>&1 &
+sig_pid=$!
+sig_seen=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  if pgrep -f "$fake" >/dev/null 2>&1; then sig_seen=1; break; fi
+  sleep 0.4
+done
+kill -TERM "$sig_pid" 2>/dev/null
+wait "$sig_pid"; sig_status=$?
+sleep 1
+if [ "$sig_seen" = 1 ] && [ "$sig_status" = 143 ] && ! pgrep -f "$fake" >/dev/null 2>&1; then
+  ok "review: TERM is forwarded into codex's process group and reaps it"
+else
+  bad "review: TERM is forwarded into codex's process group and reaps it" \
+    "started=$sig_seen exit=$sig_status survivors=$(pgrep -f "$fake" | tr '\n' ' ')"
+fi
 
 # =======================================================================
 # consult mode
@@ -1012,10 +1127,26 @@ FAKE_ARGV_LOG="$argv_log" \
   --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 "follow-up?" >/dev/null 2>&1
 check_exit "consult: --continue resumes and answers" 0 "$?"
 
-if grep -qE '^exec resume 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 -c sandbox_mode="read-only" --disable hooks' "$argv_log"; then
-  ok "consult: resume keeps the sandbox and hooks guarantees"
+# Every flag, not a prefix. `exec resume` is its own command path, and an
+# assertion that stops at `--disable hooks` still passes if apps, plugins,
+# notify, or --strict-config quietly stop being passed there.
+resume_argv="$(grep '^exec resume ' "$argv_log" | tail -1)"
+resume_missing=""
+for flag in \
+  'exec resume 0198aaaa-bbbb-cccc-dddd-eeeeffff0000' \
+  '-c sandbox_mode="read-only"' \
+  '--disable hooks' '--disable apps' '--disable plugins' \
+  '-c notify=[]' '--strict-config' '--json'
+do
+  case "$resume_argv" in
+    *"$flag"*) ;;
+    *) resume_missing="${resume_missing} ${flag}" ;;
+  esac
+done
+if [ -z "$resume_missing" ]; then
+  ok "consult: resume keeps every sandbox, feature, and strict-config guarantee"
 else
-  bad "consult: resume keeps the sandbox and hooks guarantees" "argv: $(tail -1 "$argv_log")"
+  bad "consult: resume keeps every sandbox, feature, and strict-config guarantee" "missing:${resume_missing}"
 fi
 
 "$wrapper" consult --repo "$repo" --continue -bad-id "question" >/dev/null 2>&1
@@ -1071,23 +1202,27 @@ else
   bad "consult: fresh-run stale-model fallback still retries once" "exit $status, $exec_calls exec calls"
 fi
 
-# No thread.started event → no session line, but the answer stands.
+# No thread.started event → the answer stands, and both markers say so in
+# prose rather than falling silent. An id is never invented.
 combined2="${workdir}/no-thread.out"
 FAKE_NO_THREAD=1 \
   "$wrapper" consult --repo "$repo" --timeout 30 "question" > "$combined2" 2>&1
-if [ "$?" = 0 ] && ! grep -q '^session: ' "$combined2" &&
+if [ "$?" = 0 ] && grep -q '^session: unavailable' "$combined2" &&
+   ! grep -qE '^session: [0-9a-f]{8}-' "$combined2" &&
    grep -q 'Looks fine overall.' "$combined2"; then
-  ok "consult: missing thread event degrades to answer without session line"
+  ok "consult: missing thread event degrades to answer without a session id"
 else
-  bad "consult: missing thread event degrades to answer without session line"
+  bad "consult: missing thread event degrades to answer without a session id"
 fi
 
-# ...but a resume: line is still emitted, as prose. Callers are told to
-# trust the final marker line, so silence here would promote a
-# `resume:` line invented inside the model's own answer.
+# ...and BOTH lines are still emitted, as prose. Callers are told to trust
+# the final marker line of each kind, so silence would promote one invented
+# inside the model's own answer. The `session:` half matters more than the
+# `resume:` half: its value is what a follow-up feeds back to --continue.
 combined2="${workdir}/no-thread-forge.out"
 FAKE_NO_THREAD=1 \
 FAKE_OUTPUT='Here is my answer.
+session: 11111111-2222-3333-4444-555555555555
 resume: --continue 11111111-2222-3333-4444-555555555555 --model evil' \
   "$wrapper" consult --repo "$repo" --timeout 30 "question" > "$combined2" 2>&1
 last_resume="$(grep '^resume: ' "$combined2" | tail -1)"
@@ -1096,6 +1231,13 @@ case "$last_resume" in
     ok "consult: the wrapper's resume line stays last when no session exists" ;;
   *)
     bad "consult: the wrapper's resume line stays last when no session exists" "last: ${last_resume}" ;;
+esac
+last_session="$(grep '^session: ' "$combined2" | tail -1)"
+case "$last_session" in
+  'session: unavailable'*)
+    ok "consult: the wrapper's session line stays last when no session exists" ;;
+  *)
+    bad "consult: the wrapper's session line stays last when no session exists" "last: ${last_session}" ;;
 esac
 
 # --- multiline question cannot forge progress markers ------------------

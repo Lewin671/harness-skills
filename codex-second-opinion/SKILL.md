@@ -54,13 +54,21 @@ adding the flag silently. Never use this skill to apply fixes.
 
 Read-only means the user's repository and the world outside it, not the
 local disk. Three things are written every run: the result file and the
-event log under `TMPDIR` (both paths are printed, and neither is cleaned
-up — that is the system's job), and the session itself, which Codex
+event log under `TMPDIR` — or under `/tmp`, when `TMPDIR` itself sits
+inside the repository (both paths are printed, and neither is cleaned
+up — that is the system's job) — and the session itself, which Codex
 persists under `CODEX_HOME/sessions`. That last one applies to **both
 modes**, not just consult: a review's prompt, the diff it read, and its
-findings stay on disk after the run, exactly as a consultation's
-question and answer do. For consult it is also load-bearing — it is
-what makes `--continue` work.
+findings stay on disk after the run. For consult it is also
+load-bearing — it is what makes `--continue` work.
+
+Two narrower truths, not rounded off. A `CODEX_HOME` inside the
+repository puts that session write in the tree being read, and moving it
+would orphan earlier sessions — so the script warns. And the
+empty-scope prechecks are plain git queries: `git status` runs with
+`--no-optional-locks` so it cannot rewrite `.git/index`, though
+`git diff` refreshes stale stat info there regardless. Neither touches
+tracked content.
 
 ## Independence Contract
 
@@ -153,9 +161,12 @@ real time and stays small:
 - `session: <ID>` line (consult) → the id of the resumable session.
 - `resume: --continue <ID> ...` line (consult) → the flags a follow-up
   must repeat, model settings included. Use this line rather than
-  reassembling the command from the id. Consult always prints one; when
-  there is no session to resume it reads `resume: unavailable — ...`,
-  so the wrapper's own line is always the last of its kind.
+  reassembling the command from the id.
+
+  Consult always prints **both** lines — `unavailable — ...` when there
+  is no session — so the wrapper's own line is last of each kind even
+  when the model-controlled answer body holds a look-alike. That matters
+  most for `session:`, whose value a follow-up feeds to `--continue`.
 
 The script also prints `log: <path>` at startup. That file holds the
 same stream **untruncated**, so `tail` it for diagnostics; never read

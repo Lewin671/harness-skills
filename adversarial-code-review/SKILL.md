@@ -159,20 +159,21 @@ mean **stop and report, do not improvise**:
 | `status` | Meaning | What to do |
 |----------|---------|------------|
 | `ok` | The pipeline completed | Write the report — including when it found nothing. A zero-finding run still probes the high-risk regions and still owes the full ledger; silence only means something alongside the coverage that produced it. |
-| `invalid_args` | The patch was not captured or bound | Redo Phase 0. |
-| `budget_too_small` | A floor does not fit — the coverage floor, or verifying and adjudicating every candidate | Report the shortfall. Do **not** run a degraded review. |
-| `scope_too_large` | Those floors cost over twice the budget | Narrowing the scope is the fix, not a bigger budget. Report the plan and ask. |
+| `invalid_args` | The patch was not captured or bound, or a Phase 0 value is malformed — a non-hex `base_sha` or `patch_sha256`, a line break in `scope`, `intent`, `patch_path` or `repo_root` | Redo Phase 0. |
+| `budget_too_small` | A floor does not fit — the coverage floor, or verifying and adjudicating every candidate at the token cost the run is actually incurring | Report the shortfall. Do **not** run a degraded review. |
 | `triage_failed` / `adjudication_failed` | A load-bearing role did not return | Say so plainly. Never promote candidates on finder output alone. |
 
 ## Phase 4 — Report
 
-Write it as terminal markdown in your final message, using the four
-sections of contract.md §6, headed by the three tradeoff lines and the
-frontier sentence from that same section, plus scope, `base_sha`, short
-patch hash, profile and model roles.
+**Run the post-run write-safety check first**, before composing anything.
+Its result belongs *in* the report, and the report is your final message —
+there is no tool call after that message in which to run it. Disclose any
+unexpected difference in the user's tree, and never silently revert it.
 
-Then run the post-run write-safety check and disclose any unexpected
-difference in the user's tree. Never silently revert it.
+Then write the report as terminal markdown in your final message, using
+the four sections of contract.md §6, headed by the three tradeoff lines
+and the frontier sentence from that same section, plus scope, `base_sha`,
+short patch hash, profile and model roles.
 
 Never report a defect-coverage percentage: the denominator is unknown.
 

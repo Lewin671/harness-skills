@@ -188,11 +188,14 @@ mode_main() {
   # continue: the answer above stands, only the follow-up affordance is
   # lost.
   if [ -z "$session_out" ]; then
-    # Still emit a `resume:` line, as prose that cannot be mistaken for
-    # a command. Callers are told to trust the *final* marker line, and
-    # the answer body is model-controlled: staying silent here would
-    # leave a `resume:` line invented inside that body as the last one
-    # in a merged stream.
+    # Emit BOTH markers, as prose that cannot be mistaken for an id or a
+    # command. Callers are told to trust the *final* marker line of each
+    # kind, and the answer body is model-controlled: staying silent about
+    # either would leave a line invented inside that body as the last one in
+    # a merged stream. The `session:` half was the one originally left
+    # silent, and a forged id there is the worse of the two — it is the value
+    # a caller feeds straight back into --continue.
+    echo "session: unavailable — the stream carried no thread id" >&2
     echo "resume: unavailable — no session id in the stream; start a fresh consultation" >&2
   else
     echo "session: ${session_out}" >&2
