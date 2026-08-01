@@ -114,7 +114,7 @@ mutate "caller can decline execution" "  if (!allowExecution) defer({ target_id:
 mutate "trim instead of abort" "while (candidates.length
        && (committedWU + floorsFor(candidates) > budgetWU + EPS
            || !admitTokens(floorsFor(candidates)))) {" "while (false) {"
-mutate "duplicate candidates collapse" "  if (candidateFingerprints.has(fingerprint)) {" "  if (false) {"
+mutate "duplicate candidates collapse" "  if (candidates.some((x) => x.fingerprint === fingerprint)) {" "  if (false) {"
 mutate "per-lens candidate cap" "  if (seen >= MAX_CANDIDATES_PER_LENS) {" "  if (false) {"
 mutate "execution decision must be stated" "if (typeof A.allow_execution !== 'boolean') {" "if (A.allow_execution !== undefined && typeof A.allow_execution !== 'boolean') {"
 mutate "checklist covers unknown verdict ids" "    unknown_verdict_ids: ledger.unknown_verdict_ids.length," "    unknown_verdict_ids: 0,"
@@ -139,7 +139,7 @@ mutate "supplemental candidate rollback" "  while (candidates.length > beforeSup
          && committedWU + floorsFor(candidates) > budgetWU + EPS) {" "  while (false) {"
 
 # Trimming, and everything that must be derived from the trimmed set.
-mutate "trim ranks rather than takes last" "const pool = candidates.filter((c) => c.proposed_severity === sev).sort(byRank)" "const pool = candidates.filter((c) => c.proposed_severity === sev)"
+mutate "trim ranks rather than takes last" "  const victim = pickVictim(candidates)" "  const victim = candidates[candidates.length - 1]"
 mutate "plans derive from the trimmed set" "const criticals = candidates.filter((c) => c.proposed_severity === 'critical').sort(byRank)" "const criticals = [...candidates, ...trimmed].filter((c) => c.proposed_severity === 'critical').sort(byRank)"
 mutate "co-location excludes trimmed" "  c.co_located = candidates.filter((o) => o.id !== c.id && o.file === c.file && o.line === c.line).map((o) => o.id)" "  c.co_located = [...candidates, ...trimmed].filter((o) => o.id !== c.id && o.file === c.file && o.line === c.line).map((o) => o.id)"
 mutate "found-but-not-verified is counted" "    found_but_not_verified: trimmed.length," "    found_but_not_verified: 0,"
@@ -173,6 +173,12 @@ mutate "supplemental rollback is disclosed" "    trimmed.push(dropped)" "    "
 mutate "unsettled names must be predicates" "  const canRefute = groundedRefutation && unsettledNamesValid && PREDICATES.some((k) =>" "  const canRefute = groundedRefutation && PREDICATES.some((k) =>"
 mutate "frontier names the accuracy floor first" "    const paid = byBudget.find((d) => d.kind === 'candidate_verification' || d.kind === 'supplemental_candidate')
       || byBudget[0]" "    const paid = byBudget[0]"
+mutate "rollback drops by rank" "    const dropped = pickVictim(candidates.slice(beforeSupplemental))" "    const dropped = candidates[candidates.length - 1]"
+mutate "victim tie-break is deterministic" "    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c" "    if (d < 0) worst = c"
+mutate "funding order is total" "  || String(a.fingerprint).localeCompare(String(b.fingerprint))" "  || 0"
+
+mutate "probe evidence is fenced" "\${fenced(\`input: " "\${(\`input: "
+mutate "triage commands are fenced" "? fenced((triage." "? ((triage."
 
 echo
 if [ "${survived}" -eq 0 ]; then

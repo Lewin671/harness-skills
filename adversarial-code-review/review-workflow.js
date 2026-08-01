@@ -1111,7 +1111,6 @@ let nextId = 0
 
 const MAX_CANDIDATES_PER_LENS = 25
 const perLensCount = new Map()
-const candidateFingerprints = new Set()
 
 function addCandidate(c, lens, origin) {
   // Identical records are noise, and a hostile artifact can manufacture them
@@ -1125,7 +1124,11 @@ function addCandidate(c, lens, origin) {
   // minor tier: cheap batch verification and no execution. That turns
   // deduplication into a downgrade channel.
   const fingerprint = JSON.stringify([c && c.file, c && c.line, c && c.title, c && c.evidence_kind, c && c.evidence, c && c.proposed_severity, c && c.confidence])
-  if (candidateFingerprints.has(fingerprint)) {
+  // Checked against the LIVE candidate set, not a side index. A separate
+  // index has to be evicted when a candidate is rolled back for budget, and
+  // an eviction that never runs is a guard nothing can test; asking the array
+  // directly cannot fall out of step with it.
+  if (candidates.some((x) => x.fingerprint === fingerprint)) {
     ledger.invalid_candidates.push({ lens, origin, title: c && c.title, anchor: c && c.evidence && c.evidence.anchor, reason: 'byte-identical duplicate of a candidate already accepted' })
     return null
   }
@@ -1140,7 +1143,8 @@ function addCandidate(c, lens, origin) {
     return null
   }
   nextId += 1
-  candidateFingerprints.add(fingerprint)
+  // Counts every contribution this lens made, including one later rolled back
+  // for budget: the cap bounds what a lens may put into the run, and it did.
   perLensCount.set(lens, seen + 1)
   // What "inside the artifact" actually proved for this anchor. file_level_only
   // means the anchor is in a reviewed file and nothing mechanically placed it
@@ -1157,15 +1161,31 @@ function addCandidate(c, lens, origin) {
   return rec
 }
 
-// Undo what addCandidate recorded. A candidate rolled back for budget is not
-// "already accepted": leaving its fingerprint in the index makes a later
-// region probe that independently rediscovers the same defect look like a
-// duplicate of something no longer in the run, which suppresses it entirely.
-function unrecordCandidate(rec) {
-  if (!rec) return
-  candidateFingerprints.delete(rec.fingerprint)
-  const seen = perLensCount.get(rec.lens) || 0
-  if (seen > 0) perLensCount.set(rec.lens, seen - 1)
+// Which candidate to give up first when the budget cannot verify them all.
+// ONE definition, used by both drop paths. They were written separately and
+// the second one dropped whichever candidate a finder happened to emit last,
+// so a supplemental lens that returned twenty-four majors and then one
+// critical gave up the critical and kept the majors.
+//
+// Least consequential = lowest severity, then outside a high-risk region,
+// then lowest confidence. `in_high_risk_region` is not assigned until after
+// the probe wave, so it reads as false during the rollback; that is correct
+// there, since no region membership is known yet and severity still decides.
+const SEV_WEIGHT = { critical: 2, major: 1, minor: 0 }
+const consequence = (c) => (SEV_WEIGHT[c.proposed_severity] || 0) * 100
+  + (c.in_high_risk_region ? 50 : 0)
+  + (CONF_RANK[c.confidence] || 0) * 10
+// The final tie-break is the content fingerprint, never discovery order or
+// id: two runs whose finders emitted the same claims in a different order
+// must give up the same candidates. Co-located claims tie on everything else.
+function pickVictim(pool) {
+  let worst = null
+  for (const c of pool) {
+    if (!worst) { worst = c; continue }
+    const d = consequence(c) - consequence(worst)
+    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c
+  }
+  return worst
 }
 
 function absorb(res, lens) {
@@ -1208,8 +1228,9 @@ if (wantedLens && P.supplementalLens && admitOptional(W.finder, floorsFor(candid
   // saved no tokens — while the trim would have caught any real overflow.
   while (candidates.length > beforeSupplemental
          && committedWU + floorsFor(candidates) > budgetWU + EPS) {
-    const dropped = candidates.pop()
-    unrecordCandidate(dropped)
+    const dropped = pickVictim(candidates.slice(beforeSupplemental))
+    if (!dropped) break
+    candidates.splice(candidates.indexOf(dropped), 1)
     dropped.dropped_by = 'supplemental_lens_rollback'
     trimmed.push(dropped)
     ledger.deferred.push({
@@ -1295,7 +1316,12 @@ endWave()
 candidates.forEach((c) => { c.in_high_risk_region = inRegion(c) })
 
 const rank = (c) => (c.in_high_risk_region ? 0 : 1) * 100 - CONF_RANK[c.confidence] * 10
-const byRank = (a, b) => rank(a) - rank(b) || `${a.file}:${a.line}`.localeCompare(`${b.file}:${b.line}`)
+// Funding order. The fingerprint tail makes it total: co-located claims tie on
+// file, line and rank, and without it the order they are funded in is just the
+// order the finders happened to return them.
+const byRank = (a, b) => rank(a) - rank(b)
+  || `${a.file}:${a.line}`.localeCompare(`${b.file}:${b.line}`)
+  || String(a.fingerprint).localeCompare(String(b.fingerprint))
 
 // ---------------------------------------------------------------------------
 // Trim to what the budget can actually verify — BEFORE anything is derived
@@ -1327,12 +1353,7 @@ while (candidates.length
   // same ranking the rest of the wave funds by, not discovery order. "Least
   // consequential" has to mean the same thing here as it does everywhere
   // else, or the disclosure misdescribes what was dropped.
-  const order = ['minor', 'major', 'critical']
-  let victim = null
-  for (const sev of order) {
-    const pool = candidates.filter((c) => c.proposed_severity === sev).sort(byRank)
-    if (pool.length) { victim = pool[pool.length - 1]; break }
-  }
+  const victim = pickVictim(candidates)
   if (!victim) break
   candidates.splice(candidates.indexOf(victim), 1)
   victim.dropped_by = 'trim_before_verification'

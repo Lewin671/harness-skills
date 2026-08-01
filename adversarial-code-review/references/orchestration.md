@@ -27,17 +27,26 @@ phase reads different code than the review phase.
 ```bash
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-XXXXXX")"
 
+# Fix the endpoints ONCE, here. Every command below — patch, manifests,
+# changed_ranges — must use these same ones. A branch review that captures
+# base..HEAD but builds its manifest from `git diff HEAD` yields an EMPTY
+# included_paths on a clean tree, and the script then refuses to start.
 # (2) uncommitted — the common case
-base_sha="$(git rev-parse HEAD)"
-git diff HEAD > "${tmp}/patch.diff"
-# tracked changes only; add untracked files without touching the index
-git ls-files --others --exclude-standard -z | while IFS= read -r -d '' f; do
-  git diff --no-index --binary /dev/null "${f}" >> "${tmp}/patch.diff" || true
-done
-
+diff_args=(HEAD); untracked=1
 # (3) branch vs merge-base
-base_sha="$(git merge-base origin/HEAD HEAD)"
-git diff "${base_sha}" HEAD > "${tmp}/patch.diff"
+diff_args=("$(git merge-base origin/HEAD HEAD)" HEAD); untracked=0
+# (4) an explicit range the user named
+diff_args=("${from_ref}" "${to_ref}"); untracked=0
+
+base_sha="$(git rev-parse "${diff_args[0]}")"
+git diff "${diff_args[@]}" > "${tmp}/patch.diff"
+# Untracked files exist only in the working tree, so they belong to the
+# uncommitted scope alone. Added without touching the index.
+if [ "${untracked}" = 1 ]; then
+  git ls-files --others --exclude-standard -z | while IFS= read -r -d '' f; do
+    git diff --no-index --binary /dev/null "${f}" >> "${tmp}/patch.diff" || true
+  done
+fi
 
 patch_sha256="$(shasum -a 256 "${tmp}/patch.diff" | cut -d' ' -f1)"
 ```
@@ -87,23 +96,25 @@ excludes=(':(exclude)*.lock' ':(exclude)package-lock.json'
           ':(exclude)vendor/**' ':(exclude)**/node_modules/**'
           ':(exclude)**/__snapshots__/**' ':(exclude)*.min.js')
 
-git diff HEAD -- . "${excludes[@]}" > "${tmp}/patch.diff"
+git diff "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff"
 
 # The SAME pathspecs must filter untracked files. `git check-ignore` only
 # knows about .gitignore, so it will happily let an untracked vendor/ path or
 # lockfile through the exclusion list.
-git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
-  while IFS= read -r -d '' f; do
-    git diff --no-index --binary /dev/null "${f}" >> "${tmp}/patch.diff" || true
-  done
+if [ "${untracked}" = 1 ]; then
+  git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
+    while IFS= read -r -d '' f; do
+      git diff --no-index --binary /dev/null "${f}" >> "${tmp}/patch.diff" || true
+    done
+fi
 
 patch_sha256="$(shasum -a 256 "${tmp}/patch.diff" | cut -d' ' -f1)"
 
 # Both manifests, from the same pathspecs that produced the patch.
-included="$( { git diff --name-only HEAD -- . "${excludes[@]}"
-               git ls-files --others --exclude-standard -- . "${excludes[@]}"; } | sort -u)"
-everything="$( { git diff --name-only HEAD
-                 git ls-files --others --exclude-standard; } | sort -u)"
+included="$( { git diff --name-only "${diff_args[@]}" -- . "${excludes[@]}"
+               [ "${untracked}" = 1 ] && git ls-files --others --exclude-standard -- . "${excludes[@]}"; } | sort -u)"
+everything="$( { git diff --name-only "${diff_args[@]}"
+                 [ "${untracked}" = 1 ] && git ls-files --others --exclude-standard; } | sort -u)"
 excluded="$(comm -23 <(printf '%s\n' "${everything}") <(printf '%s\n' "${included}"))"
 ```
 
@@ -127,14 +138,15 @@ same filtered pathspecs, and cover all three shapes of change:
 # A wholly deleted file has `+++ /dev/null`, so the new-side rule never fires
 # for it: track the old-side path as well, or its hunk is emitted under an
 # empty filename — or worse, under the PREVIOUS file's name.
-git diff --unified=0 HEAD -- . "${excludes[@]}" |
+git diff --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
   awk '/^--- a\//{o=substr($0,7)}
        /^\+\+\+ /{f=($0=="+++ /dev/null") ? o : substr($0,7)}
        /^@@/{split($3,a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2])+0;
              if(f=="") next;
              if(n>0) print f, s, s+n-1; else print f, (s>0?s:1), (s>0?s:1)}'
 
-# untracked files are changed in their entirety
+# untracked files are changed in their entirety (uncommitted scope only)
+[ "${untracked}" = 1 ] &&
 git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
   while IFS= read -r -d '' f; do printf '%s 1 %s\n' "$f" "$(awk 'END{print NR}' "$f")"; done
 # awk, not `wc -l`: a file with no trailing newline counts 0 lines under wc,
@@ -236,9 +248,18 @@ play. Deriving them first is not a cosmetic ordering question: it makes
 the run launch verifiers, probes and executable attacks for candidates
 it has already decided not to report — spending the budget on work it
 throws away, and calling those candidates unverified in the ledger when
-a verifier did in fact run on them. Within a severity class the victim
-is the worst-ranked member, the same ranking the rest of the wave funds
-by, not whichever finder happened to emit last.
+a verifier did in fact run on them.
+
+Both drop paths — the supplemental-lens rollback and this trim — use **one**
+victim selector: lowest severity, then outside a high-risk region, then
+lowest confidence, and finally the candidate's content fingerprint. They
+were written separately once, and the rollback dropped whichever candidate
+a finder emitted last: a supplemental lens returning twenty-four majors and
+then one critical gave up the critical. The fingerprint is the final
+tie-break rather than arrival order or id, so co-located claims that tie on
+every other field resolve identically in two runs whose finders answered in
+a different order — which is also what decides, at a budget affording one
+probe, which of them gets it.
 
 Report achieved depth as `verification_depth.candidates_found` against
 `candidates_retained`, so a trimmed run cannot be read as a run that
