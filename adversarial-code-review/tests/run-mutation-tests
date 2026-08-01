@@ -72,15 +72,15 @@ mutate "repro: signature_matched" "  if (a.signature_matched !== true) missing.p
 mutate "repro: control run required" "  const controlled = a.control_passed === true" "  const controlled = a.control_passed === true || Boolean(a.specification_citation)"
 mutate "repro: executed" "  if (!executed) missing.push('execution_status=executed')" "  " 2
 mutate "repro: patch binding" "  if (!bound) missing.push('bound_to_base_sha + patch_hash_verified')" "  " 2
-mutate "repro: test_code" "  if (!a.test_code) missing.push('test_code')" "  "
-mutate "repro: command" "  if (!a.command) missing.push('command')" "  "
-mutate "repro: patched_result" "  if (!a.patched_result) missing.push('patched_result')" "  " 2
-mutate "repro: predicted_signature" "  if (!a.predicted_signature) missing.push('predicted_signature')" "  "
+mutate "repro: test_code" "  if (!nonblank(a.test_code)) missing.push('test_code')" "  "
+mutate "repro: command" "  if (!nonblank(a.command)) missing.push('command')" "  "
+mutate "repro: patched_result" "  if (!nonblank(a.patched_result)) missing.push('patched_result')" "  " 2
+mutate "repro: predicted_signature" "  if (!nonblank(a.predicted_signature)) missing.push('predicted_signature')" "  "
 mutate "repro: ready capability" "  if (a.test_capability !== 'ready') missing.push('test_capability=ready')" "  " 2
 mutate "held: executed" "    if (!executed) missing.push('execution_status=executed')" "    "
 mutate "held: patch binding" "    if (!bound) missing.push('bound_to_base_sha + patch_hash_verified')" "    "
 mutate "held: ready capability" "    if (a.test_capability !== 'ready') missing.push('test_capability=ready')" "    "
-mutate "held: patched_result" "    if (!a.patched_result) missing.push('patched_result')" "    "
+mutate "held: patched_result" "    if (!nonblank(a.patched_result)) missing.push('patched_result')" "    "
 mutate "held: vectors_attempted" "    if (!(a.vectors_attempted && a.vectors_attempted.length)) missing.push('vectors_attempted')" "    "
 mutate "plausible needs counterexample" "    if (!hasConcreteCounterexample) {" "    if (false) {"
 mutate "plausible cannot claim execution" "  if (a.execution_status === 'unavailable') return 'unavailable'" "  if (a.execution_status === 'executed') return 'executed'"
@@ -117,7 +117,7 @@ mutate "scope manifest is mandatory" "if (!Array.isArray(A.included_paths) || !A
 mutate "changed-hunk binding" "  if (ranges && !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {" "  if (false) {"
 mutate "disclosure checklist counts" "    verified_findings: results.filter((r) => r.state === 'substantiated').length," "    verified_findings: 0,"
 mutate "predicates must support substantiation" "    && PREDICATES.every((k) => citedAs(verifierRecord, k, 'supports_candidate'))" "    "
-mutate "falsification must cite code" "    && typeof r[k].cited_code === 'string' && r[k].cited_code.trim())" "    )"
+mutate "falsification must cite code" "    && nonblank(r[k].cited_code) && nonblank(r[k].cited_path)" "    && nonblank(r[k].cited_path)"
 mutate "caller can decline execution" "  if (!allowExecution) defer({ target_id: t.target_id, kind: 'executable_attack', anchor: t.label }, 'disabled_by_caller')" "  if (false) {}"
 mutate "trim instead of abort" "while (candidates.length
        && (committedWU + floorsFor(candidates) > budgetWU + EPS
@@ -179,7 +179,7 @@ mutate "canonical order before batching" "candidates.sort(byRank)" ""
 
 # The attacker must not be invited to produce evidence the script rejects.
 mutate "attack prompt requires the control" "     AND control_passed is true. Requires test_code, command, and the step-2" "     AND either control_passed is true or specification_citation is given. Also"
-mutate "reproduction: control_result" "  if (!a.control_result) missing.push('control_result')" "  "
+mutate "reproduction: control_result" "  if (!nonblank(a.control_result)) missing.push('control_result')" "  "
 mutate "trim respects tokens too" "       && (committedWU + floorsFor(candidates) > budgetWU + EPS
            || !admitTokens(floorsFor(candidates)))) {" "       && (committedWU + floorsFor(candidates) > budgetWU + EPS
            )) {"
@@ -238,10 +238,10 @@ mutate "attacker cannot forge a deferral" "  if (a.execution_status === 'unavail
 mutate "blocked must say what stopped it" "    if (out.grade === 'blocked' && !out.reason) {" "    if (false) {"
 
 # The preflight run is what makes test_capability=ready checkable.
-mutate "repro: probe_command" "  if (!a.probe_command) missing.push('probe_command')" "  " 2
-mutate "repro: probe_result" "  if (!a.probe_result) missing.push('probe_result')" "  " 2
-mutate "held: probe_command" "    if (!a.probe_command) missing.push('probe_command')" "    "
-mutate "held: probe_result" "    if (!a.probe_result) missing.push('probe_result')" "    "
+mutate "repro: probe_command" "  if (!nonblank(a.probe_command)) missing.push('probe_command')" "  " 2
+mutate "repro: probe_result" "  if (!nonblank(a.probe_result)) missing.push('probe_result')" "  " 2
+mutate "held: probe_command" "    if (!nonblank(a.probe_command)) missing.push('probe_command')" "    "
+mutate "held: probe_result" "    if (!nonblank(a.probe_result)) missing.push('probe_result')" "    "
 
 # Probe slots are rationed, so an unusable region costs a real one.
 mutate "unusable regions are rejected" "    const problem = regionProblem(r)" "    const problem = null"
@@ -270,6 +270,32 @@ mutate "attack wave clears its estimate" "  // count is the difference between r
 mutate "verify wave clears its estimate" "// accuracy floor, which is the one thing this run promises never to trim.
 endWave()" "// accuracy floor, which is the one thing this run promises never to trim.
 if (verifySample.length) endWave()"
+
+# The three sampled waves whose unconditional reset had no mutant. Same
+# protection as the two above: an item already charged to the open wave must
+# not be charged again when the wave re-prices itself.
+mutate "probe wave clears its estimate" "  // launched.
+  endWave()" "  // launched.
+  if (probeSample.length) endWave()"
+mutate "escalation wave clears its estimate" "  // to the wave estimate.
+  endWave()" "  // to the wave estimate.
+  if (escSample.length) endWave()"
+mutate "re-adjudication clears its estimate" "      // every accepted batch to the wave estimate.
+      endWave()" "      // every accepted batch to the wave estimate.
+      if (reSample.length) endWave()"
+
+# Evidence strings that exist but say nothing, and citations with no shape.
+mutate "reproduction evidence is non-blank" "const nonblank = (v) => typeof v === 'string' && v.trim().length > 0" "const nonblank = (v) => Boolean(v)"
+mutate "citations carry a path" "    && nonblank(r[k].cited_code) && nonblank(r[k].cited_path)" "    && nonblank(r[k].cited_code)"
+mutate "citations carry a line" "    && Number.isInteger(r[k].cited_line) && r[k].cited_line >= 1)" "    )"
+
+# Stage one of the attack must reach the role that assigns state.
+mutate "adjudication sees the probe" "  probe: probeByTarget.get(c.id) || null," "  probe: null,"
+
+# The per-lens cap must not couple to what another lens filed.
+mutate "a lens collapses its own repeats" "    if (ownFingerprints.has(fp)) {" "    if (false) {"
+mutate "cross-lens duplicates spend a slot" "  perLensCount.set(lens, seen + 1)
+  const fingerprint = fingerprintOf(c)" "  const fingerprint = fingerprintOf(c)"
 
 # A reviewed path may legitimately be named __proto__.
 mutate "path map has a null prototype" "const scopeBindingByPath = Object.create(null)" "const scopeBindingByPath = {}"
@@ -366,7 +392,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=167
+EXPECTED_TOTAL=176
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

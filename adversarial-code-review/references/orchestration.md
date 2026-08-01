@@ -35,6 +35,11 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-XXXXXX")"
 # call that runs these commands: environment does not survive between calls.
 cp "$(git rev-parse --git-path index)" "${tmp}/index-copy"
 export GIT_INDEX_FILE="${tmp}/index-copy"
+# And `core.fsmonitor` names a program git EXECUTES while refreshing, outside
+# anything this review controls and before it has taken a baseline. The index
+# copy only redirects the write; this stops the run. Both belong on every
+# working-tree query below, which is why they are environment, not flags.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 
 # Fix the endpoints ONCE, here. Every command below — patch, manifests,
 # changed_ranges — must use these same ones. A branch review that captures
@@ -95,12 +100,19 @@ acr_snapshot() {
   # above: a plain status rewrites .git/index too, which would make the
   # write-safety check itself a write.
   git --no-optional-locks status --porcelain=v1
-  # `./` on every operand. A tracked or untracked file literally named `-`
-  # makes `shasum` read STDIN instead — it returns the hash of nothing,
-  # identically before and after, while `git status` shows the same ` M` both
-  # times. Measured; a `--` terminator does not help, `./-` does.
+  # REGULAR FILES ONLY, and `./` on every operand.
+  #   - `shasum` follows a symlink. Pointed at a FIFO it blocks forever, and
+  #     Phase 0 hangs before the review starts; pointed at a missing target it
+  #     fails into 2>/dev/null and contributes nothing, identically before and
+  #     after. Symlinks are covered by their link text below instead, which is
+  #     what actually changes when one is retargeted.
+  #   - a file literally named `-` makes `shasum` read STDIN — the hash of
+  #     nothing, the same both times, while `git status` shows the same ` M`.
+  #     Measured; a `--` terminator does not help, `./-` does.
   { git ls-files -z; git ls-files --others --exclude-standard -z; } |
-    while IFS= read -r -d '' f; do printf './%s\0' "$f"; done |
+    while IFS= read -r -d '' f; do
+      [ -L "./$f" ] || [ ! -f "./$f" ] || printf './%s\0' "$f"
+    done |
     xargs -0 shasum -a 256 2>/dev/null | sort | shasum -a 256
   # Content hashes miss a mode change, and so does status: a tracked file
   # already reported ` M` reports ` M` after its executable bit flips, and its
@@ -132,6 +144,12 @@ if ! diff -q "${tmp}/tree-before" "${tmp}/tree-after" >/dev/null; then
   diff -u "${tmp}/tree-before" "${tmp}/tree-after"   # disclose, never revert
 fi
 ```
+
+What the two digests divide between them: the first hashes the contents of
+regular files, the second records every listed path with its executable bit,
+whether it is a symlink, and where that link points. A path that is neither —
+a FIFO, a socket, a device — appears in the second and has no content to
+hash, which is the honest treatment rather than a hang.
 
 Even this does not cover gitignored paths — build output, `node_modules`,
 local caches. Say that in the report rather than implying total coverage;

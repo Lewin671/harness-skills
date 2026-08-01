@@ -103,6 +103,36 @@ detects "an untracked file replaced by a symlink"      sh -c 'rm untracked.txt &
 detects "a symlink retargeted to another missing path" sh -c 'ln -sf missing-b dangling-link'
 detects "a symlink retargeted to an existing path"     sh -c 'ln -sf tracked.txt dangling-link'
 
+# HEAD is the third term and nothing above touches it: an empty commit over
+# an already-dirty tree moves HEAD while leaving status and every file hash
+# exactly as they were. Without this, deleting `git rev-parse HEAD` from the
+# recipe leaves the suite green.
+detects "an empty commit over a dirty tree" \
+  git -c user.email=t@t -c user.name=t commit -q --allow-empty -m moved
+
+# A symlink pointing at a FIFO must not be opened: shasum follows it and
+# blocks forever, which would hang Phase 0 before the review starts. The
+# timeout is the assertion — a snapshot that returns at all did not follow it.
+fifo_repo="$(new_repo fifo)"
+mkfifo "${fifo_repo}/pipe"
+ln -s pipe "${fifo_repo}/pipe-link"
+fifo_out="${WORK}/fifo-snapshot"
+( cd "$fifo_repo" && acr_snapshot > "$fifo_out" 2>/dev/null ) &
+fifo_pid=$!
+fifo_done=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 "$fifo_pid" 2>/dev/null || { fifo_done=1; break; }
+  sleep 0.5
+done
+if [ "$fifo_done" = 1 ]; then
+  wait "$fifo_pid" 2>/dev/null
+  ok "a symlink to a FIFO does not block the snapshot"
+else
+  kill -9 "$fifo_pid" 2>/dev/null
+  wait "$fifo_pid" 2>/dev/null
+  bad "a symlink to a FIFO does not block the snapshot" "the snapshot hung"
+fi
+
 # The snapshot must not itself write the repository it is checking. A plain
 # `git status` refreshes stale stat data and rewrites .git/index, which would
 # make the write-safety check a write — and one taken twice, so the before and

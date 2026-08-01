@@ -948,6 +948,19 @@ else
   bad "review: a repository path containing a line break is refused" "exit $status"
 fi
 
+# The scratch path is printed by `log:` and by the result marker, so a line
+# break in TMPDIR forges a later standalone marker than the wrapper's own.
+nl_tmp="${workdir}/tmp"$'\n'"dir"
+mkdir -p "$nl_tmp"
+stderr="${workdir}/nltmp.err"
+TMPDIR="$nl_tmp" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'line break' "$stderr"; then
+  ok "review: a TMPDIR containing a line break is refused"
+else
+  bad "review: a TMPDIR containing a line break is refused" "exit $status"
+fi
+
 # `cd` is a builtin with its own option parsing: `cd -` prints OLDPWD onto the
 # stream that must carry only the result, and `cd -P` is accepted as a flag,
 # leaving the run in whatever directory it started in.

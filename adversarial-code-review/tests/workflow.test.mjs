@@ -69,7 +69,7 @@ const drainer = (total, budgetWU, factor = 1, heavy = {}) => {
 // three drift assertions came to count zero launches and pass regardless.
 const launchesOf = (res) => (res && res.cost && res.cost.launch_detail) || (res && res.launches) || []
 
-const predicate = (holds) => ({ finding: 'stub', cited_code: 'foo.js:1', holds })
+const predicate = (holds) => ({ finding: 'stub', cited_path: 'foo.js', cited_line: 1, cited_code: 'x = y', holds })
 const cand = (file, line, sev, kind, title) => ({
   file, line, title, proposed_severity: sev, confidence: 'high', evidence_kind: kind,
   evidence: kind === 'present_code'
@@ -369,9 +369,24 @@ function makeAgent(state, s) {
 
     if (l.startsWith('verify:')) {
       if (s.verifierNull) return null
+      // Every predicate supports the candidate, but the citation has no
+      // path (or no line) — the charter asks for code quoted "with its path
+      // and line", and one free string satisfies that with the word "foo".
+      if (s.citationOmit) {
+        const ids = expectedIds(prompt)
+        const partial = (h) => {
+          const q = { finding: 'asserted', cited_path: 'foo.js', cited_line: 1, cited_code: 'x = y', holds: h }
+          delete q[s.citationOmit]
+          return q
+        }
+        const one = (id) => ({ candidate_id: id, semantics: partial('supports_candidate'), reachability: partial('supports_candidate'),
+          contract_violation: partial('supports_candidate'), strongest_refutation: 'none', unsettled_predicates: [], grounding: 'strong' })
+        return l.includes('minors') ? { verdicts: ids.map(one) } : one(ids[0])
+      }
       if (s.uncitedVerifier) {
         const ids = expectedIds(prompt)
-        const blank = (h) => ({ finding: 'asserted', cited_code: '   ', holds: h })
+        // Path and line present, quote blank: isolates the quote itself.
+        const blank = (h) => ({ finding: 'asserted', cited_path: 'foo.js', cited_line: 1, cited_code: '   ', holds: h })
         const mk = (id) => ({ candidate_id: id, semantics: blank(s.uncitedVerifier), reachability: blank(s.uncitedVerifier),
           contract_violation: blank(s.uncitedVerifier), strongest_refutation: 'no citation', unsettled_predicates: [], grounding: 'strong' })
         return l.includes('minors') ? { verdicts: ids.map(mk) } : mk(ids[0])
@@ -747,6 +762,25 @@ R.push(await run('candidate text forges the fence', { ...BASE }, { fenceInjectio
     if (!carrying.length) return 'the injected candidate never reached a downstream prompt'
     const unstripped = carrying.find((x) => !x.prompt.includes('UNTRUSTED-RECORD-ESCAPED'))
     return unstripped ? `${unstripped.label} carried a forged fence marker verbatim` : true
+  } }))
+for (const field of ['cited_path', 'cited_line']) {
+  R.push(await run(`citation without ${field}`, { ...BASE }, { citationOmit: field, adjAlwaysSubstantiate: true, probeAlwaysFails: true,
+    // A controlled reproduction substantiates on its own evidence, so only
+    // candidates leaning on the verifier are in scope.
+    expect: (res) => res.substantiated.every((x) => x.attack_grade === 'reproduced')
+      || `a candidate was substantiated on a citation with no ${field}` }))
+}
+// The probe is stage one of the attack. When no execution was bought it is
+// the only attack evidence there is, and the role that assigns state has to
+// see it.
+R.push(await run('adjudication is shown the probe', { ...BASE }, {
+  expect: (res, state) => {
+    const withProbe = res.candidate_results.filter((r) => r.probe && !r.attack)
+    if (!withProbe.length) return 'no candidate had a probe without an attack, so the wiring is untested'
+    const adj = state.prompts.filter((x) => x.label && x.label.startsWith('adjudicate'))
+    if (!adj.length) return 'no adjudication prompt was built'
+    const shown = adj.some((x) => /"outcome":"counterexample_constructed"/.test(x.prompt))
+    return shown || 'a constructed counterexample never reached the adjudicator'
   } }))
 R.push(await run('inherited key as profile', { ...BASE, profile: 'toString' }, {
   expect: (res) => res.status === 'invalid_args' || `an inherited key ran as a profile (${res.run && res.run.profile})` }))
@@ -1415,6 +1449,47 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
         return probes >= 1 || 'no probe ran, so the sampling is untested'
       }))
   }
+}
+{
+  // precision-first funds exactly one region probe, so there is no sample and
+  // the lone probe is re-priced against an estimate that already holds it.
+  // Doubled, it is given up at 2.5x while the honest check still admits it.
+  const dp = drainer(48000, 48, 2.5)
+  R.push(await run('the single region probe is not double-charged', { ...BASE, profile: 'precision-first' },
+    { oneCandidate: true, regionProbeNoEmergent: true, onCall: dp.onCall, drift: true, unpriced: true }, dp.budget,
+    (res) => {
+      if (res.status !== 'ok') return `the run ended ${res.status} before the probe wave could be judged`
+      const probes = launchesOf(res).filter((x) => /^probe:R/.test(x.label)).length
+      return probes === 1
+        || `the only region probe this profile funds was deferred (${probes} ran) although its units were already committed`
+    }))
+}
+{
+  // The other two single-item waves whose estimate must be cleared before
+  // they re-price themselves. Each is ONE agent, so there is no sample — and
+  // an item already charged to the open wave, judged against twice its cost,
+  // is given up despite its units having been committed with the floors.
+  // 2.5x is the measured window: the honest check admits, the doubled one
+  // does not.
+  const de = drainer(48000, 48, 2.5)
+  R.push(await run('the single escrowed escalation is not double-charged', { ...BASE },
+    { oneCandidate: true, regionProbeNoEmergent: true, weakCriticalVerifier: true,
+      onCall: de.onCall, drift: true, unpriced: true }, de.budget,
+    (res) => {
+      if (res.status !== 'ok') return `the run ended ${res.status} before the escalation could be judged`
+      const esc = launchesOf(res).filter((x) => /escalated/.test(x.label)).length
+      return esc === 1 || `the escrowed verifier escalation was deferred (${esc} ran) although its units were already committed`
+    }))
+
+  const dr = drainer(48000, 48, 2.5)
+  R.push(await run('the single re-adjudication is not double-charged', { ...BASE },
+    { oneCandidate: true, regionProbeNoEmergent: true, weakAdjudication: true,
+      onCall: dr.onCall, drift: true, unpriced: true }, dr.budget,
+    (res) => {
+      const adj = launchesOf(res).filter((x) => x.label.startsWith('adjudicate')).length
+      if (adj >= 2) return true
+      return `the escrowed adjudication rerun was deferred (${adj} adjudication launch(es), status ${res.status}) although its units were already committed`
+    }))
 }
 {
   // A verify plan of exactly ONE entry: no sample to take, and the entry is

@@ -626,6 +626,17 @@ common_resolve_scratch() {
     # the repository.
     export TMPDIR="$scratch"
   fi
+
+  # Same reason as the repository path: `log:` and `report:`/`answer:` print
+  # this path, and a line break in it forges a later standalone marker than
+  # the wrapper's own — the one callers are told to trust.
+  local lf=$'\n' cr=$'\r'
+  case "$scratch" in
+    *"$lf"*|*"$cr"*)
+      echo "error: the temporary directory path contains a line break, which would forge marker lines in this script's output" >&2
+      echo "hint: set TMPDIR to a path without one." >&2
+      exit 3 ;;
+  esac
 }
 
 # Run a git command that would otherwise refresh — and therefore rewrite —
