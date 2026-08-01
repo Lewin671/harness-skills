@@ -178,10 +178,21 @@ acr_snapshot() {
     # that does not exist yet — a repository with nothing added — is left
     # unset rather than pointed at an empty file, which git rejects.
     [ -s "${acr_idx}" ] && export GIT_INDEX_FILE="${acr_idx}"
+    # fsmonitor off for the WHOLE function, not just status: `git ls-files`
+    # consults it too (measured), and this function is shown separately for
+    # the post-run check, so it cannot rely on the capture block's export
+    # having been copied with it.
+    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 
     git rev-parse HEAD
-    # --no-optional-locks as well: a plain status rewrites the index it reads,
-    # which would make the write-safety check itself a write.
+    # The INDEX ITSELF, not just what status makes of it. A path already `MM`
+    # can have its staged blob replaced while the working-tree bytes are put
+    # back: HEAD, the porcelain columns, the content hash and the mode hash
+    # all stay as they were. `ls-files --stage` gives mode, object and path,
+    # which changes then — and does NOT change when a mere stat refresh
+    # rewrites the index, so this stays quiet when nothing happened.
+    git ls-files --stage
+    # --no-optional-locks so a plain status does not rewrite the index it reads.
     git --no-optional-locks status --porcelain=v1
     # REGULAR FILES ONLY, and `./` on every operand.
     #   - `shasum` follows a symlink. Pointed at a FIFO it blocks forever, and
@@ -203,9 +214,15 @@ acr_snapshot() {
     # changed. `test -x` / `test -L` are POSIX, unlike stat's format flags.
     { git ls-files -z; git ls-files --others --exclude-standard -z; } |
       while IFS= read -r -d '' f; do
-        printf '%s%s %s %s\n' "$([ -x "./$f" ] && echo x || echo -)" \
-                               "$([ -L "./$f" ] && echo l || echo -)" \
-                               "$(readlink "./$f" 2>/dev/null || true)" "$f"
+        # The whole permission string, not just the executable bit: a visible
+        # file going 0644 -> 0600 changes none of its bytes, none of its
+        # porcelain columns, and neither x nor l. `ls -ld` prints the mode in
+        # its first ten characters on every platform this runs on; git itself
+        # tracks only the executable bit, which is why nothing else here sees
+        # the change.
+        printf '%s %s %s\n' "$(ls -ldL "./$f" 2>/dev/null | cut -c1-10 ||
+                                ls -ld "./$f" 2>/dev/null | cut -c1-10)" \
+                            "$(readlink "./$f" 2>/dev/null || true)" "$f"
       done | sort | shasum -a 256
   )
   rm -f "${acr_idx}"
@@ -227,8 +244,8 @@ fi
 ```
 
 What the two digests divide between them: the first hashes the contents of
-regular files, the second records every listed path with its executable bit,
-whether it is a symlink, and where that link points. A path that is neither —
+regular files, the second records every listed path with its full permission
+string and, for a symlink, where it points. A path that is neither —
 a FIFO, a socket, a device — appears in the second and has no content to
 hash, which is the honest treatment rather than a hang.
 

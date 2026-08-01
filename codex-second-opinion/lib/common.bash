@@ -988,7 +988,12 @@ mode_block_retry() {
 # exit 1, and under set -e a failing substitution in the caller would
 # otherwise abort the script *after* a successful run.
 effective_model_from_log() {
-  grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$log" 2>/dev/null |
+  # The LAST attempt's segment only, for the same reason the session id reads
+  # one: the log accumulates across the stale-model fallback, so a rejected
+  # attempt that named a model and a retry that did not would label the answer
+  # with the model that refused it.
+  awk -v m="$attempt_marker" '$0 == m { buf = "" ; next } { buf = buf $0 "\n" } END { printf "%s", buf }' "$log" 2>/dev/null |
+    grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' |
     tail -1 | sed 's/.*"model"[[:space:]]*:[[:space:]]*"//; s/"$//' || true
 }
 

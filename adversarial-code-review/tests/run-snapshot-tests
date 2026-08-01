@@ -68,6 +68,7 @@ new_repo() {
   # An untracked symlink that ALREADY dangles: status reports `??` for it
   # before and after any retarget, and shasum cannot read either target.
   ln -s missing-a "$d/dangling-link"
+
   printf '%s' "$d"
 }
 
@@ -167,6 +168,56 @@ fi
 # the other column. A snapshot read through a frozen index copy reports the
 # tree as untouched.
 detects_via_index "existing work staged into the index" git add tracked.txt
+# The sharper index case, through the ordinary helper so its status-invariance
+# guard applies: swapping the staged blob under an already-`MM` path leaves
+# HEAD, both porcelain columns, the content hash and the mode hash unchanged.
+# A path that is ALREADY `MM` — staged one way, worktree another. Swapping
+# only the staged blob leaves HEAD, both porcelain columns, the content hash
+# and the mode hash exactly as they were; only the index digest moves. Written
+# out rather than routed through `detects`, which builds the shared fixture.
+mmrepo="$(new_repo mmpath)"
+printf 'staged\n' > "${mmrepo}/mm.txt"
+git -C "$mmrepo" add mm.txt
+printf 'worktree\n' > "${mmrepo}/mm.txt"
+mm_before="$(cd "$mmrepo" && acr_snapshot)"
+mm_status_before="$(cd "$mmrepo" && git status --porcelain=v1)"
+( cd "$mmrepo" && printf 'other-staged\n' > mm.txt && git add mm.txt &&
+  printf 'worktree\n' > mm.txt )
+mm_after="$(cd "$mmrepo" && acr_snapshot)"
+mm_status_after="$(cd "$mmrepo" && git status --porcelain=v1)"
+if [ "$mm_status_before" != "$mm_status_after" ]; then
+  bad "a staged blob replaced under an MM path" "git status alone already caught it, so this case tests nothing"
+elif [ "$mm_before" = "$mm_after" ]; then
+  bad "a staged blob replaced under an MM path" "the snapshot did not change"
+else
+  ok "a staged blob replaced under an MM path"
+fi
+
+# A visible file going 0644 -> 0600: no bytes move, git tracks only the
+# executable bit, and porcelain says the same thing both times.
+detects "permission bits on an already-modified file" chmod 0600 tracked.txt
+
+# core.fsmonitor names a program git executes while refreshing. The snapshot
+# is shown separately for the post-run check, so it cannot rely on an export
+# from the capture block it may not have been copied with — and this suite
+# suppresses ambient config, so only a repo-local setting reaches it.
+fsm="$(new_repo fsmonitor)"
+fsm_marker="${WORK}/fsmonitor-fired"
+cat > "${WORK}/fsmonitor-hook" <<HOOK
+#!/bin/sh
+: > "${fsm_marker}"
+printf '/\0'
+HOOK
+chmod +x "${WORK}/fsmonitor-hook"
+git -C "$fsm" config core.fsmonitor "${WORK}/fsmonitor-hook"
+touch -m -t 202001010101 "${fsm}/tracked.txt"
+rm -f "$fsm_marker"
+( cd "$fsm" && acr_snapshot ) > /dev/null 2>&1
+if [ ! -e "$fsm_marker" ]; then
+  ok "the snapshot does not run a configured fsmonitor program"
+else
+  bad "the snapshot does not run a configured fsmonitor program" "the hook fired"
+fi
 
 # The snapshot must not itself write the repository it is checking. A plain
 # `git status` refreshes stale stat data and rewrites .git/index, which would

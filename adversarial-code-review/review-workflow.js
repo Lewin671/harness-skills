@@ -1622,7 +1622,22 @@ phase('Probe')
 const regionLimit = P.regionProbes === Infinity ? allRegions.length : P.regionProbes
 const regionTargets = []
 allRegions.forEach((r, i) => {
-  const t = { kind: 'region', target_id: `R${i + 1}`, ...r, label: `region ${r.file}:${r.start_line}-${r.end_line}` }
+  // Built field by field, never by spreading the record. A schema-valid
+  // region may carry extra properties, and spreading it over the orchestrator
+  // fields let it set its own `kind` — crashing the prober, which then reads
+  // target.candidate.id — or its own `target_id`, which the prompt
+  // interpolates OUTSIDE the fence as the identifier the agent must echo
+  // back. contract.md section 7: headings carry orchestrator-generated
+  // identifiers only.
+  const t = {
+    kind: 'region',
+    target_id: `R${i + 1}`,
+    file: r.file,
+    start_line: r.start_line,
+    end_line: r.end_line,
+    why: r.why,
+    label: `region ${r.file}:${r.start_line}-${r.end_line}`,
+  }
   if (i < regionLimit) regionTargets.push(t)
   else defer({ target_id: t.target_id, kind: 'region_probe', anchor: t.label }, 'deferred_by_profile')
 })

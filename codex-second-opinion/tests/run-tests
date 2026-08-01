@@ -88,6 +88,10 @@ if [ -n "${FAKE_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_FAIL_ONCE" ]; then
   # attempt's session then sits in the log ahead of the retry's.
   [ -n "${FAKE_FAIL_THREAD:-}" ] &&
     echo '{"type":"thread.started","thread_id":"0198dead-dead-dead-dead-deaddeaddead"}'
+  # FAKE_FAIL_MODEL: name a model before being rejected, so the failed
+  # attempt's metadata sits in the log ahead of the retry's.
+  [ -n "${FAKE_FAIL_MODEL:-}" ] &&
+    echo '{"type":"turn.started","model":"rejected-model-xyz"}'
   echo '{"type":"error","message":"unknown model"}'
   exit 1
 fi
@@ -1616,6 +1620,21 @@ if [ "$status" = 0 ] && case "$last_session" in *deaddead*) false ;; *) true ;; 
 else
   bad "consult: a rejected attempt's session is not advertised after a fallback" \
     "exit $status, $(grep '^session: ' "$combined2" | tail -1)"
+fi
+
+# The same segmentation for the model name. A rejected attempt that named a
+# model and a retry that did not would otherwise label the answer with the
+# model that refused it.
+stderr="${workdir}/fallback-model.err"
+FAKE_FAIL_ONCE="${workdir}/fail-once-model" FAKE_FAIL_MODEL=1 \
+  "$wrapper" consult --repo "$repo" --timeout 30 "question" >/dev/null 2> "$stderr"
+status=$?
+# The note line, not the whole stream: the progress feed legitimately echoes
+# the rejected attempt's raw event.
+if [ "$status" = 0 ] && ! grep '^note: ' "$stderr" | grep -q 'rejected-model-xyz'; then
+  ok "consult: a rejected attempt's model is not reported as the one that answered"
+else
+  bad "consult: a rejected attempt's model is not reported as the one that answered" "exit $status"
 fi
 
 # --- multiline question cannot forge progress markers ------------------

@@ -134,7 +134,7 @@ mutate "checklist covers coverage risks" "    coverage_risks: ledger.coverage_ri
 mutate "rejection needs a falsified predicate" "  if (state === 'refuted' && !canRefute) {" "  if (false) {"
 mutate "anchor must match file:line" "  if (e.anchor !== \`\${c.file}:\${c.line}\`) {" "  if (false) {"
 mutate "candidate must be in reviewed paths" "  if (!includedPaths.includes(c.file)) {" "  if (false) {"
-mutate "reproduction: patch_applied" "  if (a.patch_applied !== true) missing.push('patch_applied=true')" "  " 1
+mutate "reproduction: patch_applied" "  if (a.patch_applied !== true) missing.push('patch_applied=true')" "  " 2
 mutate "reproduction: patched_failed" "  if (a.patched_failed !== true) missing.push('patched_failed=true')" "  "
 mutate "held: patch_applied" "    if (a.patch_applied !== true) missing.push('patch_applied=true')" "    "
 mutate "reject unknown profile" "if (A.profile !== undefined && !Object.prototype.hasOwnProperty.call(PROFILES, A.profile)) {" "if (false) {"
@@ -324,6 +324,12 @@ mutate "rejection states its decisive evidence" "  const canRefute = groundedRef
 mutate "unsettled predicate is non-blank" "  if (v && v.state === 'unresolved' && !nonblank(v.unsettled_predicate)) {" "  if (v && v.state === 'unresolved' && !v.unsettled_predicate) {"
 mutate "blank predicate is not a name" "    unsettled_predicate: v && nonblank(v.unsettled_predicate) ? v.unsettled_predicate : null," "    unsettled_predicate: v ? (v.unsettled_predicate || null) : null,"
 
+# Reachable after all. Two rounds of sweeps missed it because they drifted
+# every role uniformly, which moves the earlier waves' cost too and buries the
+# three weighted units this term is worth. Drift confined to the probes
+# isolates it.
+mutate "probe floor counts the sampled probe" "      ...syntheticCriticals(probeSample.length + probeRestAdmitted.length + 1)])" "      ...syntheticCriticals(probeRestAdmitted.length + 1)])"
+
 # A reviewed path may legitimately be named __proto__.
 mutate "path map has a null prototype" "const scopeBindingByPath = Object.create(null)" "const scopeBindingByPath = {}"
 
@@ -384,20 +390,6 @@ mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.finger
 # therefore be killed by the same assertion, for the same reason, and naming
 # it after the split would be the overstatement this file exists to avoid.
 #
-# UNREACHED, which is NOT the same as equivalent and must not be filed as it:
-#
-#   probe floor counts the sample   (probeSample.length in floorAfter)
-#
-# The sampled probe's emergent candidate is not absorbed until after the
-# remaining probes are admitted, so the floor those admissions price has to
-# include it. The term is right and it DOES change the floor — by about three
-# weighted units on a single admission — so a scenario that put an admission
-# on that boundary would kill a mutant for it. None does: sweeps at 30-72wu
-# and 1.0-2.0x drift move the probe-count threshold identically with and
-# without the term. It is listed here rather than among the equivalents
-# because the honest statement is "no scenario reaches this", not "no scenario
-# could".
-#
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
 #   rate divides by launched units  (launchedWU vs committedWU in ratePerWU)
@@ -441,7 +433,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=189
+EXPECTED_TOTAL=190
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

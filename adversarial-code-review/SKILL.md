@@ -47,13 +47,13 @@ Three layered documents, and you need all three:
 
 `tests/run-tests` holds the contract tests; `tests/run-mutation-tests`
 breaks each protection in turn, on a copy, and requires the suite to go
-red for it — and records, by name, the ones no scenario reaches and the
-ones a mutant cannot distinguish, so the count never stands in for
-coverage it does not have. Two more cover the protections that live in prose, extracting
+red for it — and records, by name, the ones a mutant cannot distinguish
+and why, so the count never stands in for coverage it does not have. Two more cover the protections that live in prose, extracting
 the recipes straight out of orchestration.md so the doc stays their only
 source of truth: `tests/run-snapshot-tests` for the write-safety
-snapshot, `tests/run-capture-tests` for the Phase 0 patch capture — both
-found runtime defects that `bash -n` cannot see. Run all four after
+snapshot, `tests/run-capture-tests` for the patch capture, its exclusions
+and its changed-range map — both found runtime defects that `bash -n`
+cannot see. Run all four after
 editing any of them: a green suite proves nothing on its own, which is
 the same reason this skill refuses to call an unrefuted candidate
 verified.

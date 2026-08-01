@@ -44,6 +44,23 @@ pathlib.Path(sys.argv[2]).write_text('\n'.join(out) + '\n')
 PY
 [ $? -eq 0 ] || { echo "could not extract the capture block from ${DOC}"; exit 1; }
 
+# The filtered recipe and the changed-range generator are executable Phase 0
+# protections too: exclusions have to reach the patch, the untracked files AND
+# both manifests, and the range awk has to handle deletion-only hunks and
+# wholly deleted files. Neither was ever run.
+python3 - "$DOC" "${WORK}/filtered.sh" "${WORK}/ranges.sh" <<'PY2'
+import re, sys, pathlib
+doc = pathlib.Path(sys.argv[1]).read_text()
+blocks = re.findall(r'```bash\n(.*?)```', doc, re.S)
+filtered = [b for b in blocks if 'excludes=(' in b and 'comm -23' in b]
+ranges = [b for b in blocks if '--unified=0' in b]
+if len(filtered) != 1 or len(ranges) != 1:
+    sys.exit(f"expected one filtered block and one range block, found {len(filtered)} and {len(ranges)}")
+pathlib.Path(sys.argv[2]).write_text(filtered[0])
+pathlib.Path(sys.argv[3]).write_text(ranges[0])
+PY2
+[ $? -eq 0 ] || { echo "could not extract the filtered or range block from ${DOC}"; exit 1; }
+
 # Run the recipe in $1 with the scope prelude in $2. Echoes the exit status;
 # leaves the recipe's own variables in ${WORK}/vars for the caller to read.
 run_capture() {
@@ -59,6 +76,8 @@ run_capture() {
   ) || status=$?
   printf '%s' "$status"
 }
+
+commit_env=(-c user.email=t@t -c user.name=t)
 
 new_repo() {
   local d="${WORK}/$1"
@@ -195,6 +214,77 @@ if [ "$status" = 0 ] && [ "$inside_repo" = no ]; then
   ok "a repo-local TMPDIR is relocated before anything is written"
 else
   bad "a repo-local TMPDIR is relocated before anything is written" "exit $status, tmp=${tmp}"
+fi
+
+# --- exclusions reach the patch, the untracked files and both manifests ----
+
+filt="$(new_repo filtered)"
+printf 'lock\n' > "${filt}/package-lock.json"
+mkdir -p "${filt}/vendor"
+printf 'vendored\n' > "${filt}/vendor/lib.js"
+filt_status=0
+(
+  cd "$filt" || exit 1
+  set -euo pipefail
+  diff_args=(HEAD); untracked=1
+  # shellcheck source=/dev/null
+  . "${WORK}/capture.sh"
+  # shellcheck source=/dev/null
+  . "${WORK}/filtered.sh"
+  printf 'tmp=%s\n' "$tmp" > "${WORK}/vars"
+  printf '%s\n' "$included" > "${WORK}/included"
+  printf '%s\n' "$excluded" > "${WORK}/excluded"
+) || filt_status=$?
+# shellcheck source=/dev/null
+. "${WORK}/vars"
+if [ "$filt_status" = 0 ] &&
+   ! grep -q 'package-lock.json' "${tmp}/patch.diff" &&
+   ! grep -q 'vendor/lib.js' "${tmp}/patch.diff" &&
+   grep -q 'tracked.txt' "${tmp}/patch.diff" &&
+   ! grep -qx 'package-lock.json' "${WORK}/included" &&
+   grep -qx 'package-lock.json' "${WORK}/excluded"; then
+  ok "exclusions reach the patch, the untracked files and both manifests"
+else
+  bad "exclusions reach the patch, the untracked files and both manifests" "exit $filt_status"
+fi
+
+# --- changed ranges, including the shapes the awk was written for ----------
+
+rng="$(new_repo ranges)"
+printf 'a\nb\nc\nd\ne\n' > "${rng}/edit.txt"
+printf 'x\ny\nz\n' > "${rng}/gone.txt"
+printf 'p\nq\nr\ns\n' > "${rng}/shrink.txt"
+git -C "$rng" add -A
+git -C "$rng" "${commit_env[@]}" commit -q -m ranges
+printf 'a\nB\nc\nd\ne\n' > "${rng}/edit.txt"     # one changed line
+rm "${rng}/gone.txt"                                  # wholly deleted file
+printf 'p\ns\n' > "${rng}/shrink.txt"               # deletion-only hunk
+printf 'brand\nnew\n' > "${rng}/fresh.txt"          # untracked, two lines
+rng_out="${WORK}/ranges.out"
+rng_status=0
+(
+  cd "$rng" || exit 1
+  set -euo pipefail
+  diff_args=(HEAD); untracked=1; excludes=(':(exclude)no-such-path-zzz')
+  # shellcheck source=/dev/null
+  . "${WORK}/ranges.sh"
+) > "$rng_out" 2>/dev/null || rng_status=$?
+
+check_range() {
+  if grep -qE "^$1\$" "$rng_out"; then ok "changed ranges: $2"; else bad "changed ranges: $2" "$(tr '\n' '|' < "$rng_out")"; fi
+}
+if [ "$rng_status" != 0 ]; then
+  bad "the changed-range recipe runs" "exit $rng_status"
+else
+  ok "the changed-range recipe runs"
+  check_range 'edit\.txt 2 2' 'a one-line edit'
+  # A deletion-only hunk has new-side length 0; it anchors where the deletion
+  # sits rather than being dropped.
+  check_range 'shrink\.txt [0-9]+ [0-9]+' 'a deletion-only hunk'
+  # A wholly deleted file takes its span from the OLD side, under the OLD
+  # path — the new side is /dev/null.
+  check_range 'gone\.txt 1 3' 'a wholly deleted file'
+  check_range 'fresh\.txt 1 2' 'an untracked file, in its entirety'
 fi
 
 echo
