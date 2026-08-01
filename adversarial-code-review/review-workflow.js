@@ -1273,8 +1273,17 @@ function addCandidate(c, lens, origin) {
 // the probe wave, so it reads as false during the rollback; that is correct
 // there, since no region membership is known yet and severity still decides.
 const SEV_WEIGHT = { critical: 2, major: 1, minor: 0 }
+// Region membership from whatever is known RIGHT NOW: triage's regions exist
+// before any finder runs, and finder-noticed ones accumulate as they return.
+// `in_high_risk_region` is not assigned until after the probe wave, so reading
+// that flag here made the high-risk term zero for every ranking that happens
+// earlier — which is both of the bounded selections. A candidate inside a
+// region triage had already flagged could be capped or rolled back while one
+// outside survived.
+const inKnownRegion = (c) => [...(triage.high_risk_regions || []), ...extraRegions]
+  .some((r) => r.file === c.file && c.line >= r.start_line && c.line <= r.end_line)
 const consequence = (c) => (SEV_WEIGHT[c.proposed_severity] || 0) * 100
-  + (c.in_high_risk_region ? 50 : 0)
+  + (inKnownRegion(c) ? 50 : 0)
   + (CONF_RANK[c.confidence] || 0) * 10
 // The final tie-break is the content fingerprint, never discovery order or
 // id: two runs whose finders emitted the same claims in a different order

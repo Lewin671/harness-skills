@@ -208,6 +208,16 @@ function makeAgent(state, s) {
         many.push(...(s.unicodeTie === 'reversed' ? variants.reverse() : variants))
         return { candidates: many, additional_high_risk_regions: [] }
       }
+      // Twenty-five candidates outside any region, then one inside a region
+      // triage flagged before any finder ran. Equal severity and confidence,
+      // so only the high-risk term can save it from the cap.
+      if (s.regionCap) {
+        if (lens !== 'security') return { candidates: [], additional_high_risk_regions: [] }
+        const many = []
+        for (let i = 0; i < 25; i++) many.push(cand('bulk.js', 100 + i, 'minor', 'present_code', `outside ${String(i).padStart(2, '0')}`))
+        many.push(cand('pay.js', 20, 'minor', 'present_code', 'inside the flagged region'))
+        return { candidates: many, additional_high_risk_regions: [] }
+      }
       if (s.capOrder) {
         // ONE lens only: the cap is per-lens, so a second lens offering the
         // same claims would rescue the capped critical and hide the defect.
@@ -848,6 +858,15 @@ R.push(await run('probe duplicates a finder claim', { ...BASE }, { dupEmergent: 
       return seen(res) === seen(uniFwd.res)
         || `locale-equal titles let emission order decide which survived the cap: ${seen(uniFwd.res)} vs ${seen(res)}` } })
 }
+// Ranking must know about high-risk regions by the time it caps, not only
+// after the probe wave. pay.js:10-40 is flagged by triage before any finder
+// runs, so a candidate anchored there outranks twenty-five outside it.
+R.push(await run('cap keeps the candidate inside a flagged region', { ...BASE, budget_wu: 200 }, { regionCap: true,
+  expect: (res) => {
+    if (!(res.ledger.invalid_candidates || []).some((x) => /exceeded/.test(x.reason))) return 'the cap never fired, so the ranking is untested'
+    const all = [...(res.candidate_results || []), ...(res.found_but_not_verified || [])]
+    return all.some((x) => x.anchor === 'pay.js:20')
+      || 'the cap dropped the candidate inside a high-risk region and kept ones outside it' } }))
 R.push(await run('anchor does not match file:line', { ...BASE }, { anchorMismatch: true,
   expect: (res) => res.ledger.invalid_candidates.some((x) => /anchor/.test(x.reason))
     || 'a candidate whose anchor names a different file was accepted' }))

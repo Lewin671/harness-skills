@@ -358,6 +358,13 @@ consequence: severity first, then whether the anchor sits in a high-risk
 region, then confidence, and finally the record's own text so two runs given
 the same claims in different orders keep the same ones.
 
+Region membership counts from the moment it is known, not from the moment it
+is recorded. Triage names its high-risk regions before any finder runs, so a
+selection that happens earlier than the probe wave — a per-lens cap, a
+budget rollback — must already prefer a candidate anchored inside one.
+Reading a field that is not populated until later is indistinguishable from
+having no such rule at all.
+
 **Artifact-derived text is fenced wherever it reaches an agent.** Not
 just the claim body: the file path, the line, the region rationale
 triage wrote, the commands triage read out of the repository, and the

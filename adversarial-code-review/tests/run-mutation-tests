@@ -217,6 +217,9 @@ mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + es
 mutate "candidate probes repriced after the sample" "  if (admitTokens(verifyPendingWU + probeAdmitted.length * W.probe + W.probe)) { probeAdmitted.push(t); continue }" "  if (true) { probeAdmitted.push(t); continue }"
 mutate "region probes sample one first" "    if (admitTokens(probePendingWU + W.probe)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }" "    if (true) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }"
 mutate "tie-breaks are a total order" "const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)" "const cmp = (a, b) => String(a).localeCompare(String(b))"
+mutate "optional purchases respect tokens" "  if (!admitTokens(wu)) return false" "  " 2
+mutate "remaining verifiers respect tokens" "  if (admitTokens(verifyPendingWU + v.wu)) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }" "  if (true) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }"
+mutate "ranking sees flagged regions" "  + (inKnownRegion(c) ? 50 : 0)" "  + (c.in_high_risk_region ? 50 : 0)"
 
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
@@ -245,7 +248,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=111
+EXPECTED_TOTAL=114
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1
