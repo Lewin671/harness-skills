@@ -22,8 +22,12 @@
 # script falls back to the user's config (see defaults_rejected below).
 # `ultra` is deliberately not used: it delegates subtasks, which is not
 # what a single independent second opinion wants.
+#
+# Effort is pinned one tier below the top: `xhigh` mostly buys latency on
+# a run that is already a cross-check, and `high` is a tier far more
+# models accept. Raise it per-run with an explicit --model/--effort pair.
 default_model="${CODEX_SECOND_OPINION_MODEL:-gpt-5.6-sol}"
-default_effort="${CODEX_SECOND_OPINION_EFFORT:-xhigh}"
+default_effort="${CODEX_SECOND_OPINION_EFFORT:-high}"
 
 model="$default_model"
 effort="$default_effort"
@@ -77,7 +81,7 @@ validate_timeout() {
   validated_timeout="$value"
 }
 
-# Generous by default: an xhigh-effort run over a large repo or diff
+# Generous by default: a high-effort run over a large repo or diff
 # legitimately takes many minutes. This is a stuck-process backstop,
 # not a budget.
 timeout_secs="${CODEX_SECOND_OPINION_TIMEOUT:-3000}"
@@ -208,7 +212,7 @@ common_check_model_flags() {
   fi
   if [ "$model_set" -eq 1 ] && [ "$effort_set" -eq 0 ]; then
     echo "error: --model needs an explicit --effort." >&2
-    echo "hint: the pinned default effort ('${default_effort}') is a tier weaker models reject, and naming a model already turns off the automatic fallback that would rescue the run." >&2
+    echo "hint: the pinned default effort ('${default_effort}') is not a tier every model accepts, and naming a model already turns off the automatic fallback that would rescue the run." >&2
     exit 3
   fi
   if [ "$effort_set" -eq 1 ] && [ "$model_set" -eq 0 ]; then

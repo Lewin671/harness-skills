@@ -89,8 +89,8 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   `--model`/`--effort` values, and sanitizes them the same way.
 - Model settings are validated as a closed three-way choice (pinned /
   explicit pair / `--inherit`) rather than as independent flags. Left
-  open, `--model X` alone keeps the pinned `xhigh` — the tier weaker
-  models reject — *and* clears `pinned`, which disables the
+  open, `--model X` alone keeps the pinned effort — which the named
+  model need not accept — *and* clears `pinned`, which disables the
   stale-default retry, so the documented "always pass both" rule was
   the only thing standing between a caller and a guaranteed exit 4.
   `--inherit` mixed with `--model` was order-dependent for the same

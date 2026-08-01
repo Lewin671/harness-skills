@@ -127,9 +127,10 @@ Mode details live beside this file:
   standalone question, the multi-turn discussion loop and its rules,
   reporting duties.
 
-**Prefer `run_in_background: true` for the default xhigh run.** It can
-legitimately take minutes — a two-file, 374-line review diff blew past
-the Bash tool's 10-minute ceiling, and a tiny one still took 100s.
+**Prefer `run_in_background: true`.** A run can legitimately take
+minutes — at `xhigh` a two-file, 374-line review diff blew past the Bash
+tool's 10-minute ceiling, and a tiny one still took 100s. The `high`
+default is cheaper but not reliably under that ceiling.
 Continue Claude's independent analysis while it runs; if no useful work
 remains, end the turn and wait for the completion notification. A
 foreground run is acceptable when the chosen model, effort, and scope make
@@ -166,11 +167,12 @@ model-controlled text and could contain look-alike marker lines.
 
 ## Model
 
-The script defaults to a pinned high-capability model at xhigh reasoning
-effort, optimising for confidence on consequential reviews. Leave that
-default for high-stakes work, but respect an explicit cost, latency, or
-model-diversity preference: a useful second perspective need not always
-use the highest reasoning tier.
+The script defaults to a pinned high-capability model at the `high`
+reasoning tier — strong enough for a cross-check without paying `xhigh`
+latency on every run. Leave that default alone unless there is a reason
+to move: raise it for genuinely high-stakes work with an explicit
+`--model <MODEL> --effort xhigh` pair, and lower it — or switch model
+family — on an explicit cost, latency, or model-diversity preference.
 
 Model settings are a closed three-way choice, and the script rejects
 anything else before spending a token. Override only on an explicit
@@ -178,7 +180,7 @@ request:
 
 - nothing — the pinned defaults.
 - `--model <MODEL> --effort <LEVEL>` — both, together. A weaker model
-  rejects the default `xhigh` effort, and naming a model also turns off
+  may not accept the pinned effort, and naming a model also turns off
   the stale-default fallback that would otherwise rescue the run.
 - `--inherit` — the user's own codex config; not combinable with
   `--model` or `--effort`.

@@ -180,8 +180,9 @@ check_exit "consult: empty --effort is exit 3, not silent inheritance" 3 "$?"
 # --- model settings are a closed three-way choice ----------------------
 #
 # Each rejection here replaces a failure that used to cost a full run:
-# a lone --model keeps the pinned xhigh (which weaker models reject) and
-# clears `pinned`, disabling the fallback that would have rescued it.
+# a lone --model keeps the pinned effort (which the named model need not
+# accept) and clears `pinned`, disabling the fallback that would have
+# rescued it.
 
 argv_log="${workdir}/argv-model-flags.log"
 FAKE_ARGV_LOG="$argv_log" \
@@ -226,6 +227,20 @@ if [ "$status" = 0 ] && grep -q -- '-m gpt-x' "$argv_log" &&
   ok "review: a complete --model/--effort pair is passed through"
 else
   bad "review: a complete --model/--effort pair is passed through" "exit $status"
+fi
+
+# With no flags at all the pinned tier still has to reach codex. The model
+# slug is deliberately not asserted — it is expected to go stale — but the
+# effort tier is a fixed vocabulary, so a silent drift away from it is a
+# real regression: nothing else in the suite would notice.
+argv_log="${workdir}/argv-default-effort.log"
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q 'model_reasoning_effort="high"' "$argv_log"; then
+  ok "review: the pinned default effort reaches codex"
+else
+  bad "review: the pinned default effort reaches codex" "exit $status"
 fi
 
 # Scratch allocation failures must map to the documented exit 3.

@@ -22,9 +22,9 @@ Options:
   --continue <SESSION> resume this session UUID with a follow-up
                        QUESTION instead of starting fresh
   --model <MODEL>      override the pinned high-capability model
-  --effort <LEVEL>     low|medium|high|xhigh|max (default: xhigh). Must
+  --effort <LEVEL>     low|medium|high|xhigh|max (default: high). Must
                        be given together with --model — a weaker model
-                       may not accept the default effort.
+                       may not accept the pinned effort.
   --inherit            use the model and effort from your codex config
                        instead of the pinned defaults; cannot be
                        combined with --model or --effort
@@ -37,9 +37,9 @@ Options:
   --timeout <SECONDS>  abort a hung run (default: 3000; 0 disables;
                        max 86400)
 
-Defaults to a pinned high-capability model at xhigh reasoning effort,
-optimising for confidence on consequential decisions. Use an explicit
-override when cost, latency, or a different model perspective matters.
+Defaults to a pinned high-capability model at the high reasoning tier.
+Use an explicit override when cost, latency, a different model
+perspective, or a higher tier matters.
 
 Environment:
   CODEX_BIN                     path to the codex binary (default: codex)
