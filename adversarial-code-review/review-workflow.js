@@ -240,12 +240,20 @@ let prepaidDebtWU = 0
 function ratePerWU() {
   if (!hasTokenTarget) return 0
   const spent = budget.total - budget.remaining()
+  // Per weighted unit actually LAUNCHED, not committed. Reservations are
+  // atomic and run ahead of spending — the whole finder floor is committed
+  // before the first finder returns — so dividing by committedWU spreads
+  // observed cost over units nobody has spent yet and reports a rate lower
+  // than the one being paid. That dilution is what let a 20x finder wave
+  // still look affordable.
+  //
   // One observation is enough. Waiting for a full weighted unit meant the
   // finder wave — the largest early purchase — was still admitted at the
   // prior, and at 20x drift that alone put 95,000 tokens against a 48,000
   // target. Triage is a real sample; use it.
-  if (committedWU <= 0 || spent <= 0) return tokensPerWU
-  return Math.max(tokensPerWU, spent / committedWU)
+  const launchedWU = launches.reduce((t, x) => t + x.wu, 0)
+  if (launchedWU <= 0 || spent <= 0) return tokensPerWU
+  return Math.max(tokensPerWU, spent / launchedWU)
 }
 
 function admitTokens(wu) {
@@ -1128,9 +1136,34 @@ if (!reserve(finderWU)) {
   }
 }
 
-const finderOut = await parallel(lenses.map((lens) => () =>
-  agent(finderPrompt(lens), { label: `find:${lens}`, phase: 'Find', schema: FINDER_SCHEMA, model: M.cheap })))
-lenses.forEach((lens) => launched(`find:${lens}`, W.finder))
+// The first lens goes alone, and it is the only place the run can learn what
+// a weighted unit really costs before committing the largest early purchase.
+// Calibration cannot see drift that arrives WITH a wave, and a wave is
+// admitted atomically: launching all of the finders together let a 20x finder
+// overshoot the token target by 1.68x and a 40x one by 3.35x, with nothing
+// able to intervene. One sample first bounds that to the sample itself.
+const runFinder = (lens) => agent(finderPrompt(lens), { label: `find:${lens}`, phase: 'Find', schema: FINDER_SCHEMA, model: M.cheap })
+const firstLens = lenses[0]
+const restLenses = lenses.slice(1)
+const firstOut = await parallel([() => runFinder(firstLens)])
+launched(`find:${firstLens}`, W.finder)
+endWave()
+
+// Now the observed rate is real. If the rest of the coverage floor no longer
+// fits at that rate, stop: a review without breadth has nothing to say, and
+// its silence would mean nothing. The weighted units were already reserved
+// atomically above, so this is purely the token half.
+if (restLenses.length && !admitTokens(restLenses.length * W.finder)) {
+  return {
+    status: 'budget_too_small',
+    detail: 'at the token cost this run is actually incurring, the remaining coverage floor does not fit; the first lens was sampled and the rest would overrun the target',
+    needed_wu: committedWU, budget_wu: budgetWU, launches, ledger,
+  }
+}
+const finderOut = [...firstOut, ...(restLenses.length
+  ? await parallel(restLenses.map((lens) => () => runFinder(lens)))
+  : [])]
+restLenses.forEach((lens) => launched(`find:${lens}`, W.finder))
 endWave()
 
 const candidates = []
@@ -1230,7 +1263,15 @@ function absorb(res, lens) {
   if (res.recommended_missing_lens && !lensesRun.includes(res.recommended_missing_lens)) {
     recommendedLenses.push(res.recommended_missing_lens)
   }
-  for (const c of res.candidates || []) addCandidate(c, lens, 'finder')
+  // Most consequential first, so the per-lens cap keeps the claims that matter
+  // rather than the ones that arrived first. A finder that emits twenty-five
+  // minors and then a critical would otherwise lose the critical to the cap —
+  // and a hostile artifact only has to pad the front of the list to hide one.
+  // Ties break on the record's own text so two runs given the same claims in
+  // different orders keep the same ones.
+  const ordered = [...(res.candidates || [])].sort((a, b) =>
+    consequence(b) - consequence(a) || JSON.stringify(a).localeCompare(JSON.stringify(b)))
+  for (const c of ordered) addCandidate(c, lens, 'finder')
 }
 
 finderOut.forEach((res, i) => absorb(res, lenses[i]))

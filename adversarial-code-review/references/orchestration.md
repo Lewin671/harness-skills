@@ -137,17 +137,23 @@ same filtered pathspecs, and cover all three shapes of change:
 # the line the deletion sits against rather than dropping it.
 # A wholly deleted file has `+++ /dev/null`, so the new-side rule never fires
 # for it: track the old-side path as well, or its hunk is emitted under an
-# empty filename — or worse, under the PREVIOUS file's name.
+# empty filename — or worse, under the PREVIOUS file's name. Its span comes
+# from the OLD side too: a 100-line deletion has new-side length 0, and
+# collapsing that to `1 1` would leave an explicit range covering only line 1,
+# which then rejects every candidate anchored anywhere else in the file.
 # Fields are written in the parenthesised form $(0) and $(3) on purpose:
 # Claude Code replaces bare dollar-digit tokens with invocation arguments when
 # it renders a skill, so the unparenthesised spelling would be substituted away
 # before the recipe ever reached awk.
 git diff --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
   awk '/^--- a\//{o=substr($(0),7)}
-       /^\+\+\+ /{f=($(0)=="+++ /dev/null") ? o : substr($(0),7)}
-       /^@@/{split($(3),a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2])+0;
-             if(f=="") next;
-             if(n>0) print f, s, s+n-1; else print f, (s>0?s:1), (s>0?s:1)}'
+       /^\+\+\+ /{f=($(0)=="+++ /dev/null") ? o : substr($(0),7); del=($(0)=="+++ /dev/null")}
+       /^@@/{if(f=="") next;
+             split($(3),a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2])+0;
+             if(del){ split($(2),b,","); os=substr(b[1],2)+0; on=(b[2]==""?1:b[2])+0;
+                      if(on>0) print f, (os>0?os:1), os+on-1; next }
+             if(n>0) print f, s, s+n-1;
+             else print f, (s>0?s:1), (s>0?s:1)}'
 
 # untracked files are changed in their entirety (uncommitted scope only)
 [ "${untracked}" = 1 ] &&
@@ -162,6 +168,11 @@ git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
 # awk, not `wc -l`: a file with no trailing newline counts 0 lines under wc,
 # which produces the range 1..0 and silently rejects every candidate in it.
 ```
+
+A wholly deleted file takes its span from the OLD side, because the new side
+has length zero: collapsing that to a single line would leave an explicit
+range covering only line 1, which then rejects every candidate anchored
+anywhere else in the file — worse than having no entry at all.
 
 A file the map does not mention falls back to file-level binding rather
 than having all its candidates rejected. That is deliberate: an
@@ -239,13 +250,24 @@ original prior after the run has already observed a higher rate is how an
 atomically-admitted wave overshoots a hard target: at 7x drift a 48,000-token
 target saw 75,250 spent. Once anything has been spent, projections use the
 worse of the prior and the observed rate — never the cheaper one — so the
-trim and every admission tighten exactly as drift reveals itself. That turns
-the worst measured overshoot from 1.98x the target into a refusal to start,
-which is the honest outcome when the coverage floor genuinely does not fit.
+trim and every admission tighten exactly as drift reveals itself. The rate is measured per weighted unit
+actually **launched**, not committed: reservations run ahead of spending, so
+dividing by committed units spreads observed cost over units nobody has paid
+yet and reports a rate lower than the one being incurred.
 
-It is still not a guarantee about an already-open wave: a wave is admitted
-atomically and cannot be re-checked mid-flight. The promise is bounded
-overshoot, not none.
+Calibration cannot see drift that arrives *with* a wave, and a wave is
+admitted atomically. That is why the **first lens runs alone**: it is the
+sample that prices everything after it. Launching the whole finder wave
+together let four finders at 20x their estimate spend 1.68x the token target,
+and at 40x, 3.35x, with nothing able to intervene. Sampling one first bounds
+the exposure to that one sample; if the rest of the coverage floor no longer
+fits at the observed rate, the run stops, because a review without breadth
+has nothing to say.
+
+What remains is a single agent drifting inside its own open wave — an
+executable attack costs ten weighted units and cannot be re-checked once
+launched. Measured worst case is 1.25x the target, and the suite holds it
+there. The promise is bounded overshoot, not none.
 
 If the budget cannot fund the **coverage** floor, do not run: a review
 without breadth has nothing to say and its silence means nothing.

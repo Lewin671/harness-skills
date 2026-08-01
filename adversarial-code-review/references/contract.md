@@ -344,6 +344,14 @@ things that were actually counted.
 
 ## 7. What This Contract Assumes
 
+**Order must never decide what gets examined.** A finder controls the order
+it emits claims in, so anything that keeps "the first N" hands that finder —
+or whatever wrote the code it read — a way to push a real defect out of the
+run behind padding. Where a bound exists, the survivors are chosen by
+consequence: severity first, then whether the anchor sits in a high-risk
+region, then confidence, and finally the record's own text so two runs given
+the same claims in different orders keep the same ones.
+
 **Artifact-derived text is fenced wherever it reaches an agent.** Not
 just the claim body: the file path, the line, the region rationale
 triage wrote, the commands triage read out of the repository, and the

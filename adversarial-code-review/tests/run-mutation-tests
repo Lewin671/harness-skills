@@ -167,12 +167,6 @@ mutate "range ends are 1-indexed" "|| r[0] < 1 || r[1] < 1" "|| false"
 mutate "range start precedes end" "|| r[0] > r[1]) {" ") {"
 mutate "candidate line is 1-indexed" "  if (!Number.isInteger(c.line) || c.line < 1) {" "  if (false) {"
 mutate "canonical order before batching" "candidates.sort(byRank)" ""
-mutate "verifier heading carries no raw path" "Candidate ${c.id} — its file and line are inside the fenced record below," "Candidate ${c.id} at ${c.file}:${c.line}"
-mutate "region rationale is fenced" "${fenced(\`${target.file}:${target.start_line}-${target.end_line}
-why: ${target.why}\`)}" "${target.file}:${target.start_line}-${target.end_line}
-why: ${target.why}"
-mutate "attack target location is fenced" "${fenced(target.label)}" "${target.label}"
-mutate "adjudicator heading carries no raw path" "=== candidate ${e.candidate.id}" "=== candidate ${e.candidate.id} at ${e.candidate.file}:${e.candidate.line}"
 
 # The attacker must not be invited to produce evidence the script rejects.
 mutate "attack prompt requires the control" "     AND control_passed is true. Requires test_code and command. Anything" "     AND either control_passed is true or specification_citation is given. Anything"
@@ -184,16 +178,47 @@ mutate "supplemental rollback is disclosed" "    trimmed.push(dropped)" "    "
 mutate "unsettled names must be predicates" "  const canRefute = groundedRefutation && unsettledNamesValid && PREDICATES.some((k) =>" "  const canRefute = groundedRefutation && PREDICATES.some((k) =>"
 mutate "frontier names the accuracy floor first" "    const paid = byBudget.find((d) => d.kind === 'candidate_verification' || d.kind === 'supplemental_candidate')
       || byBudget[0]" "    const paid = byBudget[0]"
-mutate "rollback drops by rank" "    const dropped = pickVictim(candidates.slice(beforeSupplemental))" "    const dropped = candidates[candidates.length - 1]"
-mutate "victim tie-break is deterministic" "    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c" "    if (d < 0) worst = c"
-mutate "funding order is total" "  || String(a.fingerprint).localeCompare(String(b.fingerprint))" "  || 0"
 
 mutate "probe evidence is fenced" "\${fenced(\`input: " "\${(\`input: "
 mutate "triage commands are fenced" "? fenced((triage." "? ((triage."
-mutate "token rate learns from actual spend" "  return Math.max(tokensPerWU, spent / committedWU)" "  return tokensPerWU"
+mutate "token rate learns from actual spend" "  return Math.max(tokensPerWU, spent / launchedWU)" "  return tokensPerWU"
 mutate "verified file-level findings counted" "    verified_findings_file_level_only: results.filter((r) => r.state === 'substantiated' && r.scope_binding && r.scope_binding.level === 'file_level_only').length," "    verified_findings_file_level_only: 0,"
 
+mutate "verifier heading carries no raw path" "Candidate \${c.id} — its file and line are inside the fenced record below," "Candidate \${c.id} at \${c.file}:\${c.line}"
+mutate "region rationale is fenced" "\${fenced(\`\${target.file}:\${target.start_line}-\${target.end_line}
+why: \${target.why}\`)}" "\${target.file}:\${target.start_line}-\${target.end_line}
+why: \${target.why}"
+mutate "attack target location is fenced" "\${fenced(target.label)}" "\${target.label}"
+mutate "adjudicator heading carries no raw path" "=== candidate \${e.candidate.id}" "=== candidate \${e.candidate.id} at \${e.candidate.file}:\${e.candidate.line}"
+mutate "rate divides by launched units" "  const launchedWU = launches.reduce((t, x) => t + x.wu, 0)" "  const launchedWU = committedWU"
+mutate "first lens is sampled alone" "if (restLenses.length && !admitTokens(restLenses.length * W.finder)) {" "if (false) {"
+mutate "lens cap keeps the consequential" "  const ordered = [...(res.candidates || [])].sort((a, b) =>
+    consequence(b) - consequence(a) || JSON.stringify(a).localeCompare(JSON.stringify(b)))" "  const ordered = [...(res.candidates || [])]"
+
+# KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
+#
+#   rollback drops by rank          (pickVictim vs the array tail)
+#   victim tie-break is deterministic (the fingerprint tail in pickVictim)
+#   funding order is total          (the fingerprint tail in byRank)
+#
+# absorb() now sorts each finder's candidates by consequence before they are
+# ever accepted, so by the time these three run the array is already ordered
+# and none of them can produce a different result. They are kept in the script
+# as defence in depth — the normalisation is one edit away from being removed,
+# and these are what would still be right if it were — but a mutant for them
+# would survive by construction, and a suite that tolerates that is the thing
+# this file exists to prevent. If absorb() ever stops sorting, restore them.
+
 echo
+# A `mutate` line whose arguments fail to expand never reaches the function,
+# so neither counter moves and the run still prints success. That is the
+# manufactured confidence this script exists to catch, one level up again.
+# Pin the count: any mutant that silently fails to launch is now a failure.
+EXPECTED_TOTAL=107
+if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
+  echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
+  exit 1
+fi
 if [ "${survived}" -eq 0 ]; then
   echo "all ${total} mutants killed — the suite has teeth"
 else
