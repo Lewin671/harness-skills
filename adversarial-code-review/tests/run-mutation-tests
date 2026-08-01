@@ -160,8 +160,19 @@ mutate "candidate carries its binding level" "  const scope_binding = matched
 # Malformed range data is a caller bug, never read as absent coverage.
 mutate "changed_ranges must be an object" "  if (typeof A.changed_ranges !== 'object' || Array.isArray(A.changed_ranges)) {" "  if (false) {"
 mutate "changed_ranges entries are arrays" "    if (!Array.isArray(ranges)) {" "    if (false) {"
-mutate "changed_ranges pairs are well formed" "      if (!Array.isArray(r) || r.length !== 2
-          || !Number.isFinite(r[0]) || !Number.isFinite(r[1]) || r[0] > r[1]) {" "      if (false) {"
+mutate "range pair is an array" "!Array.isArray(r) || r.length !== 2" "false || r.length !== 2"
+mutate "range pair has exactly two ends" "r.length !== 2" "false"
+mutate "range ends are integers" "|| !Number.isInteger(r[0]) || !Number.isInteger(r[1])" "|| false"
+mutate "range ends are 1-indexed" "|| r[0] < 1 || r[1] < 1" "|| false"
+mutate "range start precedes end" "|| r[0] > r[1]) {" ") {"
+mutate "candidate line is 1-indexed" "  if (!Number.isInteger(c.line) || c.line < 1) {" "  if (false) {"
+mutate "canonical order before batching" "candidates.sort(byRank)" ""
+mutate "verifier heading carries no raw path" "Candidate ${c.id} — its file and line are inside the fenced record below," "Candidate ${c.id} at ${c.file}:${c.line}"
+mutate "region rationale is fenced" "${fenced(\`${target.file}:${target.start_line}-${target.end_line}
+why: ${target.why}\`)}" "${target.file}:${target.start_line}-${target.end_line}
+why: ${target.why}"
+mutate "attack target location is fenced" "${fenced(target.label)}" "${target.label}"
+mutate "adjudicator heading carries no raw path" "=== candidate ${e.candidate.id}" "=== candidate ${e.candidate.id} at ${e.candidate.file}:${e.candidate.line}"
 
 # The attacker must not be invited to produce evidence the script rejects.
 mutate "attack prompt requires the control" "     AND control_passed is true. Requires test_code and command. Anything" "     AND either control_passed is true or specification_citation is given. Anything"

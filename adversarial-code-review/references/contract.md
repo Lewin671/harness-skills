@@ -344,6 +344,16 @@ things that were actually counted.
 
 ## 7. What This Contract Assumes
 
+**Artifact-derived text is fenced wherever it reaches an agent.** Not
+just the claim body: the file path, the line, the region rationale
+triage wrote, the commands triage read out of the repository, and the
+evidence a prober built. A path is written by whoever wrote the code
+under review, so it can contain a newline and a sentence of its own;
+interpolated into a prompt heading it becomes a top-level instruction to
+the agent reading it, including the one holding execution privileges.
+Headings carry orchestrator-generated identifiers only, and everything
+the artifact touched travels inside the fence as data.
+
 **It is not a defence against a hostile artifact.** Every field it
 checks — grounding, citations, hash verification, whether a test ran and
 what it returned — is supplied by an agent that read the artifact. The

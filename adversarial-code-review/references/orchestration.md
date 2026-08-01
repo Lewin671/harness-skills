@@ -138,10 +138,14 @@ same filtered pathspecs, and cover all three shapes of change:
 # A wholly deleted file has `+++ /dev/null`, so the new-side rule never fires
 # for it: track the old-side path as well, or its hunk is emitted under an
 # empty filename — or worse, under the PREVIOUS file's name.
+# Fields are written in the parenthesised form $(0) and $(3) on purpose:
+# Claude Code replaces bare dollar-digit tokens with invocation arguments when
+# it renders a skill, so the unparenthesised spelling would be substituted away
+# before the recipe ever reached awk.
 git diff --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
-  awk '/^--- a\//{o=substr($0,7)}
-       /^\+\+\+ /{f=($0=="+++ /dev/null") ? o : substr($0,7)}
-       /^@@/{split($3,a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2])+0;
+  awk '/^--- a\//{o=substr($(0),7)}
+       /^\+\+\+ /{f=($(0)=="+++ /dev/null") ? o : substr($(0),7)}
+       /^@@/{split($(3),a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2])+0;
              if(f=="") next;
              if(n>0) print f, s, s+n-1; else print f, (s>0?s:1), (s>0?s:1)}'
 
@@ -171,8 +175,12 @@ inside the change.
 
 **Malformed** range data is not treated as absent data. A
 `changed_ranges` that is not an object, an entry that is not an array,
-or a pair that is not `[start, end]` with `start <= end`, all return
-`invalid_args`. Absence is an expected gap; a broken range builder is a
+or a pair that is not `[start, end]` of **1-indexed integers** with
+`start <= end`, all return `invalid_args`. The 1-indexed part is not
+pedantry: a `[0, 0]` range would otherwise mechanically bind a candidate
+at line 0 — a line no file has — and the run would certify that anchor
+as hunk-bound. Candidate line numbers are checked the same way, in the
+reader as well as the schema. Absence is an expected gap; a broken range builder is a
 caller bug, and reading it as absence would quietly drop hunk binding
 across the entire run.
 
@@ -249,6 +257,14 @@ the run launch verifiers, probes and executable attacks for candidates
 it has already decided not to report — spending the budget on work it
 throws away, and calling those candidates unverified in the ledger when
 a verifier did in fact run on them.
+
+Once trimming is done the candidate array is sorted into canonical order,
+before anything is cut from it. Adjudication batches are chunks of that
+array, so leaving it in finder-arrival order let the order two finders
+happened to answer in decide which candidates shared a batch — and with
+weak verdicts and a single escrowed rerun, that changed which candidate
+came out substantiated. Sorting the severity buckets was not enough; the
+batches are cut from the array, not the buckets.
 
 Both drop paths — the supplemental-lens rollback and this trim — use **one**
 victim selector: lowest severity, then outside a high-risk region, then
