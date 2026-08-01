@@ -130,7 +130,8 @@ Do this in the main agent; the Workflow script cannot run commands.
    and say the executable half was declined.
 6. **Announce** the target, profile, budget, model roles and the
    estimated launch count before spending anything. A typical run lands
-   around 16–19 subagent launches, above this session's default
+   around 15–19 subagent launches — fewest on precision-first,
+   most on recall-first — above this session's default
    workflow-size guideline — say so. State which way `allow_execution`
    was settled. If it is `true`, say it in these terms: the review will
    apply the patch in a throwaway worktree and run the repository's own

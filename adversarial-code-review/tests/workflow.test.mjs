@@ -987,6 +987,14 @@ for (const r of R) {
         && r.res.verification_depth.unverified_by_budget > 0) {
       fail++; problems.push(`${r.name}: bought ${r.res.search_breadth.regions_probed} region probe(s) while ${r.res.verification_depth.unverified_by_budget} candidate(s) went unverified for budget`)
     }
+    // The file-level-only counts are exact, not approximate: a reader uses
+    // them to know how many findings rest on the weaker binding.
+    const flAll = r.res.candidate_results.filter((x) => x.scope_binding && x.scope_binding.level === 'file_level_only')
+    const flVerified = flAll.filter((x) => x.state === 'substantiated')
+    if (dc0 && (dc0.reported_candidates_file_level_only !== flAll.length
+        || dc0.verified_findings_file_level_only !== flVerified.length)) {
+      fail++; problems.push(`${r.name}: file-level-only counts disagree — checklist ${dc0.reported_candidates_file_level_only}/${dc0.verified_findings_file_level_only}, actual ${flAll.length}/${flVerified.length}`)
+    }
     // Nothing found may simply vanish: every candidate is either carried into
     // the results or disclosed as dropped for budget.
     if (r.res.verification_depth) {
@@ -1020,6 +1028,14 @@ for (const r of R) {
   if (over) { fail++; problems.push(`${r.name}: weighted-unit overspend`) }
   if (!r.drift && c && c.token_target && c.output_tokens > c.token_target) {
     fail++; problems.push(`${r.name}: spent ${c.output_tokens} tokens against a ${c.token_target} target`)
+  }
+  // Under drift the script can promise correct ADMISSION and nothing about an
+  // already-open wave's actual spend — but "no guarantee" is not "no bound".
+  // Projecting later waves at the observed rate rather than the original prior
+  // is what keeps this finite: without it a 7x run spent 1.57x its target and
+  // a 20x run 1.98x. Exempting drift entirely hid exactly that.
+  if (r.drift && c && c.token_target && c.output_tokens > 1.5 * c.token_target) {
+    fail++; problems.push(`${r.name}: drift overspend unbounded — ${Math.round(c.output_tokens)} against a ${c.token_target} target`)
   }
 
   for (const x of r.res.candidate_results || []) {

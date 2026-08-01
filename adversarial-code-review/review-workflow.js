@@ -163,7 +163,10 @@ const hunkRangesFor = (file) => {
   const r = changedRanges && changedRanges[file]
   return Array.isArray(r) && r.length ? r : null
 }
-const scopeBindingByPath = {}
+// Null-prototype: a reviewed path may legitimately be named `__proto__`, and
+// on a plain object that assignment sets the prototype instead of creating an
+// own property — the path would then vanish from the disclosure entirely.
+const scopeBindingByPath = Object.create(null)
 for (const file of includedPaths) {
   const ranges = hunkRangesFor(file)
   scopeBindingByPath[file] = ranges
@@ -227,9 +230,27 @@ const launches = []
 // per-site version of this rule was wrong at three sites out of four.
 let prepaidDebtWU = 0
 
+// The prior is a guess; the run finds out what a weighted unit actually costs
+// as it goes. Projecting future waves at the ORIGINAL prior after the run has
+// already observed a higher rate is how an atomically-admitted wave overshoots
+// the hard target: at 7x drift a 48,000-token target saw 75,250 spent. Once
+// enough has been spent to measure, project at the worse of the two rates, so
+// the trim and every admission get more conservative exactly as drift reveals
+// itself. It never projects cheaper than the prior.
+function ratePerWU() {
+  if (!hasTokenTarget) return 0
+  const spent = budget.total - budget.remaining()
+  // One observation is enough. Waiting for a full weighted unit meant the
+  // finder wave — the largest early purchase — was still admitted at the
+  // prior, and at 20x drift that alone put 95,000 tokens against a 48,000
+  // target. Triage is a real sample; use it.
+  if (committedWU <= 0 || spent <= 0) return tokensPerWU
+  return Math.max(tokensPerWU, spent / committedWU)
+}
+
 function admitTokens(wu) {
   if (!hasTokenTarget) return true
-  return (waveEstimateWU + wu + prepaidDebtWU) * tokensPerWU <= budget.remaining()
+  return (waveEstimateWU + wu + prepaidDebtWU) * ratePerWU() <= budget.remaining()
 }
 
 function reserve(wu) {
@@ -1851,7 +1872,7 @@ const results = candidates.map((c) => {
 const regionResults = allRegions.map((r, i) => {
   const id = `R${i + 1}`
   const p = probeByTarget.get(id)
-  const emergent = candidates.find((c) => c.from_region === id)
+  const emergent = [...candidates, ...trimmed].find((c) => c.from_region === id)
   return {
     target_id: id,
     anchor: `${r.file}:${r.start_line}-${r.end_line}`,
@@ -1909,7 +1930,12 @@ return {
     lenses_recommended_not_run: recommendedLenses.filter((l) => l !== supplementalLensRun),
     regions_total: allRegions.length,
     regions_probed: regionResults.filter((r) => r.probed).length,
-    emergent_candidates: candidates.filter((c) => c.origin === 'region_probe').length,
+    // Retained AND trimmed: a probe that found something found it, whether or
+    // not the budget could then verify it. The escrow currently makes a
+    // trimmed emergent candidate unreachable — a probe is only bought when the
+    // floor for one more critical still fits — but the count should not depend
+    // on that holding.
+    emergent_candidates: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe').length,
   },
 
   verification_depth: {

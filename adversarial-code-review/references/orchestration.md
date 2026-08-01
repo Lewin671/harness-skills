@@ -152,7 +152,13 @@ git diff --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
 # untracked files are changed in their entirety (uncommitted scope only)
 [ "${untracked}" = 1 ] &&
 git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
-  while IFS= read -r -d '' f; do printf '%s 1 %s\n' "$f" "$(awk 'END{print NR}' "$f")"; done
+  while IFS= read -r -d '' f; do
+    n="$(awk 'END{print NR}' "$f")"
+    # An EMPTY file has zero lines, and "1 0" is not a range. Emitting it
+    # makes the whole run return invalid_args; omitting the entry lets the
+    # documented file-level fallback cover the file instead.
+    [ "${n}" -gt 0 ] && printf '%s 1 %s\n' "$f" "${n}"
+  done
 # awk, not `wc -l`: a file with no trailing newline counts 0 lines under wc,
 # which produces the range 1..0 and silently rejects every candidate in it.
 ```
@@ -213,7 +219,8 @@ generated-client update sit at opposite ends of value per token.
 
 Announce the profile, the budget, and the estimated launch count before
 invoking the script. A run near the default budget typically lands
-around 16–19 subagent launches, which is above this
+around 15–19 subagent launches — precision-first buys the
+fewest, recall-first the most — which is above this
 session's default workflow-size guideline — say so, since the user can
 raise "Dynamic workflow size" in `/config` and should not discover the
 fan-out afterwards.
@@ -225,6 +232,20 @@ fan-out afterwards.
 - **Accuracy floor** — a verifier for every surviving candidate, plus
   reserved adjudication capacity. Without it breadth produces
   candidates that can never become findings.
+
+The token target is projected at a rate the run **calibrates as it goes**.
+The weighted-unit priors are estimates, and projecting later waves at the
+original prior after the run has already observed a higher rate is how an
+atomically-admitted wave overshoots a hard target: at 7x drift a 48,000-token
+target saw 75,250 spent. Once anything has been spent, projections use the
+worse of the prior and the observed rate — never the cheaper one — so the
+trim and every admission tighten exactly as drift reveals itself. That turns
+the worst measured overshoot from 1.98x the target into a refusal to start,
+which is the honest outcome when the coverage floor genuinely does not fit.
+
+It is still not a guarantee about an already-open wave: a wave is admitted
+atomically and cannot be re-checked mid-flight. The promise is bounded
+overshoot, not none.
 
 If the budget cannot fund the **coverage** floor, do not run: a review
 without breadth has nothing to say and its silence means nothing.

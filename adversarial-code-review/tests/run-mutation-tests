@@ -76,7 +76,7 @@ mutate "probe completeness fields" "['input', 'trace', 'expected_vs_actual', 'pr
 mutate "probe target-id reconciliation" "  if (raw.target_id !== id) {" "  if (false) {" 2
 mutate "attack target-id reconciliation" "  if (raw.target_id !== id) {" "  if (false) {"
 mutate "not_attempted vs inconclusive" "    : (probeFailed ? 'blocked' : 'not_attempted')" "    : 'inconclusive'"
-mutate "prepaid token debt" "  return (waveEstimateWU + wu + prepaidDebtWU) * tokensPerWU <= budget.remaining()" "  return (waveEstimateWU + wu) * tokensPerWU <= budget.remaining()"
+mutate "prepaid token debt" "  return (waveEstimateWU + wu + prepaidDebtWU) * ratePerWU() <= budget.remaining()" "  return (waveEstimateWU + wu) * ratePerWU() <= budget.remaining()"
 mutate "grounded-refutation guard" "  if (state === 'substantiated' && !canSubstantiate && !terminal) {" "  if (false) {"
 mutate "refutation grounding must be strong" "verifierRecord && verifierRecord.grounding === 'strong'" "verifierRecord"
 mutate "terminal evidence override" "  if (terminal && state !== 'substantiated') {" "  if (false) {"
@@ -190,6 +190,8 @@ mutate "funding order is total" "  || String(a.fingerprint).localeCompare(String
 
 mutate "probe evidence is fenced" "\${fenced(\`input: " "\${(\`input: "
 mutate "triage commands are fenced" "? fenced((triage." "? ((triage."
+mutate "token rate learns from actual spend" "  return Math.max(tokensPerWU, spent / committedWU)" "  return tokensPerWU"
+mutate "verified file-level findings counted" "    verified_findings_file_level_only: results.filter((r) => r.state === 'substantiated' && r.scope_binding && r.scope_binding.level === 'file_level_only').length," "    verified_findings_file_level_only: 0,"
 
 echo
 if [ "${survived}" -eq 0 ]; then
