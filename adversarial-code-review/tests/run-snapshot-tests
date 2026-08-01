@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Does the Phase 0 write-safety snapshot actually see a change?
+#
+# `acr_snapshot` is the only protection in this skill that lives in prose: the
+# main agent copies it out of orchestration.md and runs it, so nothing in
+# review-workflow.js or its contract tests exercises it. Two real defects
+# reached review that way — a mode-only change that both snapshots agreed on,
+# and a file named `-` that `shasum` read from stdin instead of from disk.
+#
+# The function is EXTRACTED from orchestration.md rather than copied here. A
+# copy is a second source of truth, and the one that gets fixed is never
+# reliably the one that ships.
+#
+# Exit 0 when every mutation of the tree is detected. 1 otherwise.
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+DOC="${HERE}/../references/orchestration.md"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/acr-snap-XXXXXX")"
+trap 'rm -rf "${WORK}"' EXIT
+
+# Ambient config must not reach the fixtures: hooksPath, templates, gpg
+# signing can all interfere or prompt.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+
+# The first ```bash block that defines acr_snapshot, up to its closing brace.
+python3 - "$DOC" "${WORK}/snapshot.sh" <<'PY'
+import re, sys, pathlib
+doc = pathlib.Path(sys.argv[1]).read_text()
+blocks = re.findall(r'```bash\n(.*?)```', doc, re.S)
+picked = [b for b in blocks if 'acr_snapshot() {' in b]
+if len(picked) != 1:
+    sys.exit(f"expected exactly one acr_snapshot definition in the doc, found {len(picked)}")
+body = picked[0]
+# Drop the doc's own invocation; the harness calls it per fixture.
+body = '\n'.join(l for l in body.splitlines() if not l.startswith('acr_snapshot >'))
+pathlib.Path(sys.argv[2]).write_text(body + '\n')
+PY
+extract_status=$?
+if [ "$extract_status" -ne 0 ]; then
+  echo "could not extract acr_snapshot from ${DOC} — the recipe moved or was reworded"
+  exit 1
+fi
+# shellcheck source=/dev/null
+. "${WORK}/snapshot.sh"
+
+pass=0 fail=0
+ok()  { pass=$((pass + 1)); printf 'ok   - %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf 'FAIL - %s%s\n' "$1" "${2:+ ($2)}"; }
+
+# A repo whose tracked files are ALREADY dirty in the ways that defeat a
+# status-only check: one modified file, one untracked file. Every mutation
+# below happens on top of that, so `git status --porcelain` is byte-identical
+# before and after in each case — which is the whole point.
+new_repo() {
+  local d="${WORK}/$1"
+  git init -q "$d"
+  printf 'tracked\n' > "$d/tracked.txt"
+  printf 'exec\n'    > "$d/script.sh"
+  printf 'dashy\n'   > "$d/-"
+  git -C "$d" add -A
+  git -C "$d" -c user.email=t@t -c user.name=t commit -q -m base
+  # Everything a case will touch is ALREADY dirty, so `git status` reports the
+  # same thing before and after and only the hashes can notice.
+  printf 'already modified\n' >> "$d/tracked.txt"
+  printf 'already modified\n' >> "$d/script.sh"
+  printf 'already modified\n' >> "$d/-"
+  printf 'already here\n'      > "$d/untracked.txt"
+  printf '%s' "$d"
+}
+
+# name, mutation applied inside the repo. Each must be DETECTED.
+detects() {
+  local name="$1" dir; shift
+  dir="$(new_repo "$(printf '%s' "$name" | tr -c 'a-zA-Z0-9' '-')")"
+  local before after status_before status_after
+  before="$(cd "$dir" && acr_snapshot)"
+  status_before="$(cd "$dir" && git status --porcelain=v1)"
+  ( cd "$dir" && "$@" )
+  after="$(cd "$dir" && acr_snapshot)"
+  status_after="$(cd "$dir" && git status --porcelain=v1)"
+  if [ "$before" = "$after" ]; then
+    bad "$name" "the snapshot did not change"
+    return
+  fi
+  # A case that `git status` alone already catches proves nothing about the
+  # hashing: it would pass with the content and mode hashes deleted.
+  if [ "$status_before" != "$status_after" ]; then
+    bad "$name" "git status alone already caught it, so this case tests nothing"
+    return
+  fi
+  ok "$name"
+}
+
+detects "contents of an already-modified tracked file" sh -c 'printf overwritten > tracked.txt'
+detects "contents of an already-untracked file"        sh -c 'printf overwritten > untracked.txt'
+detects "executable bit on an already-modified file"   chmod +x tracked.txt
+detects "executable bit on a second already-modified file" chmod +x script.sh
+detects "contents of an already-modified file named -" sh -c 'printf overwritten > ./-'
+detects "an untracked file replaced by a symlink"      sh -c 'rm untracked.txt && ln -s /etc/hosts untracked.txt'
+
+# And the negative: an untouched tree must produce an identical snapshot, or
+# every case above passes for free.
+stable="$(new_repo stable)"
+a="$(cd "$stable" && acr_snapshot)"
+b="$(cd "$stable" && acr_snapshot)"
+if [ "$a" = "$b" ]; then
+  ok "an untouched tree snapshots identically"
+else
+  bad "an untouched tree snapshots identically" "the snapshot is not stable"
+fi
+
+echo
+echo "${pass} passed, ${fail} failed"
+[ "$fail" -eq 0 ]

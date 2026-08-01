@@ -312,41 +312,50 @@ mutate "frontier ranks deferred verifiers" "    const ACCURACY_KINDS = ['candida
 
 mutate "checklist counts unnamed predicates" "      r.adjudicated_state === 'unresolved' && !r.unsettled_predicate).length," "      false).length,"
 
+# Previously excluded as equivalent, restored and measured instead. absorb()
+# sorts each finder's OWN list, which does not make the concatenated array
+# globally ordered — so neither the victim selector nor the funding order can
+# be assumed redundant.
+mutate "rollback drops by rank" "    const dropped = pickVictim(candidates.slice(beforeSupplemental))" "    const dropped = candidates[candidates.length - 1]"
+mutate "victim tie-break is deterministic" "    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c" "    if (d < 0) worst = c"
+mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.fingerprint))" "  || 0"
+
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
-#   rollback drops by rank          (pickVictim vs the array tail)
-#   victim tie-break is deterministic (the fingerprint tail in pickVictim)
-#   funding order is total          (the fingerprint tail in byRank)
 #   rate divides by launched units  (launchedWU vs committedWU in ratePerWU)
-#   escrow draw token gate         (admitTokens inside drawOrReserve)
+#   escrow draw token gate          (admitTokens inside drawOrReserve)
 #
-# The escrow one is newer: every path that draws escrow now re-prices itself
-# at launch time, immediately after drawOrReserve, so the two checks ask the
-# same question and no scenario can separate them. It stays because it stops
-# escrow being spent on a purchase that is about to be refused, and because
-# the launch-time re-check is one edit away from being removed.
+# Three others used to sit here on the strength of absorb() sorting each
+# finder's candidates. That argument was wrong: absorb sorts each finder's OWN
+# list, which leaves the concatenated array in finder-processing order — and
+# that is exactly where a selector with no content tie-break falls back to
+# "whoever answered first". They are live mutants again, killed by scenarios
+# that swap which lens filed which claim.
 #
-# absorb() now sorts each finder's candidates by consequence before they are
-# ever accepted, so by the time these three run the array is already ordered
-# and none of them can produce a different result. They are kept in the script
-# The rate one is the same story with a different cause: the per-wave rate
-# added this round dominates the cumulative term, so which denominator the
-# cumulative term uses can no longer change an admission. It stays because it
-# is the correct denominator — reservations run ahead of spending — and
-# because the per-wave rate is one edit away from being removed too.
+# The rate one is arithmetic, not a guess. ratePerWU takes the worst of the
+# prior, the cumulative mean and the per-wave maximum — and a mean over
+# completed waves can never exceed the maximum over those same waves, so the
+# cumulative term never wins that max() and its denominator cannot change an
+# admission. committedWU is only ever LARGER than launchedWU, so the mutant
+# makes an already dominated term smaller still. Measured as well: triage
+# drift from 15x to 40x returns the same verdict either way, because the
+# per-wave rate already carries it.
 #
-# All four are kept in the script as defence in depth — the normalisation is
-# one edit away from being removed,
-# and these are what would still be right if it were — but a mutant for them
-# would survive by construction, and a suite that tolerates that is the thing
-# this file exists to prevent. If absorb() ever stops sorting, restore them.
+# The escrow one: every path that draws escrow re-prices itself at launch
+# time, immediately after drawOrReserve, so the two checks ask the same
+# question and no scenario can separate them.
+#
+# Both are kept as defence in depth — each is what would still be right if the
+# thing that currently dominates it were removed — but a mutant for either
+# would survive by construction, and a suite that tolerates a silent survivor
+# is the thing this file exists to prevent.
 
 echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=164
+EXPECTED_TOTAL=167
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

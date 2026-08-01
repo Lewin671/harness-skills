@@ -122,8 +122,8 @@ shell_quote() {
 # re-check, whose blind spots would then coincide and hide it twice.
 # `?` is not a TOML bare key, so it can never collide with a real id.
 #
-# A payload whose braces or brackets never balance — truncated output —
-# prints `!` instead. Both matter: a cut mid-entry leaves that entry
+# A payload whose braces or brackets never balance — truncated output — or
+# that carries bytes outside its JSON root, prints `!` instead. Both matter: a cut mid-entry leaves that entry
 # unclosed and therefore unemitted, while a cut cleanly *between*
 # entries is brace-balanced and would otherwise look like a complete
 # listing that simply has no servers after the cut. Either way the
@@ -144,6 +144,15 @@ mcp_enabled_ids() {
       s = $0; n = length(s)
       for (i = 1; i <= n; i++) {
         c = substr(s, i, 1)
+        # Bytes outside the JSON root are not part of a listing. A payload
+        # like `[{...}] trailing-garbage` balances its brackets and passes
+        # every value check, but it is not what codex prints — and whatever
+        # mangled it may equally have dropped an enabled server before the
+        # part that arrived. A second root counts too.
+        if (depth == 0 && bdepth == 0 && c !~ /[ \t\r]/) {
+          if (started || (c != "[" && c != "{")) garbage = 1
+          if (c == "[" || c == "{") started = 1
+        }
         if (c == "\"") {
           # Consume the whole string token, honouring backslash escapes,
           # so that a brace or colon inside it cannot move the parser.
@@ -180,7 +189,7 @@ mcp_enabled_ids() {
         }
       }
     }
-    END { if (depth != 0 || bdepth != 0) print "!" }'
+    END { if (depth != 0 || bdepth != 0 || garbage) print "!" }'
 }
 
 # Every `"enabled"` key in the payload must carry a bare true or false.
@@ -474,9 +483,32 @@ EOF
 common_resolve_scratch() {
   scratch="${TMPDIR:-/tmp}"
   scratch="$(cd "$scratch" 2>/dev/null && pwd -P)" || scratch="/tmp"
-  local worktree_root
+  # Three roots, not one. In a linked worktree the administrative git
+  # directory lives under the MAIN repository's .git/worktrees/<name>, well
+  # outside `--show-toplevel`, and the common dir is elsewhere again — so a
+  # path checked against the worktree root alone can still sit inside the
+  # repository's own storage. All three are repository paths and none of them
+  # is a place for this run's scratch files or codex's sessions.
+  local worktree_root repo_paths=() p resolved
   worktree_root="$(git rev-parse --show-toplevel)"
   worktree_root="$(cd "$worktree_root" && pwd -P)"
+  repo_paths+=("$worktree_root")
+  for p in "$(git rev-parse --absolute-git-dir 2>/dev/null || true)" \
+           "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"; do
+    [ -n "$p" ] || continue
+    resolved="$(cd "$p" 2>/dev/null && pwd -P)" || continue
+    repo_paths+=("$resolved")
+  done
+
+  # True when $1 is one of those roots or sits beneath it.
+  inside_repo() {
+    local candidate="$1" root
+    for root in "${repo_paths[@]}"; do
+      [ "$candidate" = "$root" ] && return 0
+      case "$candidate/" in "$root"/*) return 0 ;; esac
+    done
+    return 1
+  }
 
   # Codex persists every run's session under CODEX_HOME/sessions. Inside the
   # worktree that write lands in the very tree being read: it dirties git
@@ -505,22 +537,20 @@ common_resolve_scratch() {
     probe="$parent"
   done
   [ -n "$probe" ] && resolved_home="$(cd "$probe" 2>/dev/null && pwd -P)"
-  if [ -n "$resolved_home" ] && { [ "$resolved_home" = "$worktree_root" ] ||
-     case "$resolved_home/" in "$worktree_root"/*) true ;; *) false ;; esac; }; then
-    echo "error: CODEX_HOME (${codex_home}) resolves inside ${worktree_root}." >&2
+  if [ -n "$resolved_home" ] && inside_repo "$resolved_home"; then
+    echo "error: CODEX_HOME (${codex_home}) resolves inside ${worktree_root} or its git storage." >&2
     echo "error: codex writes every session under CODEX_HOME/sessions, so this ${run_noun} would write the repository it is reading; refusing to start." >&2
     echo "hint: point CODEX_HOME outside the repository for this run." >&2
     exit 3
   fi
-  if [ "$scratch" = "$worktree_root" ] || case "$scratch/" in "$worktree_root"/*) true ;; *) false ;; esac; then
+  if inside_repo "$scratch"; then
     echo "warning: TMPDIR is inside the repo; using /tmp instead" >&2
     scratch="/tmp"
     # Recheck the fallback: on a repo rooted at (or above) the real
     # /tmp — /private/tmp on macOS — the substitute is just as unsafe,
     # and there is nowhere non-repo left to write.
     scratch="$(cd "$scratch" 2>/dev/null && pwd -P)" || scratch=""
-    if [ -z "$scratch" ] || [ "$scratch" = "$worktree_root" ] ||
-       case "$scratch/" in "$worktree_root"/*) true ;; *) false ;; esac; then
+    if [ -z "$scratch" ] || inside_repo "$scratch"; then
       echo "error: no temporary directory outside the repo; set TMPDIR elsewhere" >&2
       exit 3
     fi
@@ -541,9 +571,10 @@ common_resolve_scratch() {
 # working tree is not, with or without that flag (measured). Pointing
 # GIT_INDEX_FILE at a byte copy keeps the answer identical — same index
 # content, same diff — while the refresh lands on the copy, which is then
-# discarded. Falling back to a plain run when the copy cannot be made keeps
-# an unwritable TMPDIR from turning a scope check into a hard failure; the
-# only thing lost is the index-write protection, which is where it started.
+# discarded. There is no fallback to the plain command: see below for why
+# running it unprotected would buy nothing but a rewritten index. A
+# repository with no index at all is different, and runs as-is: there is
+# nothing there to protect.
 git_readonly_index() {
   local real copy status=0
   real="$(git rev-parse --git-path index 2>/dev/null)" || real=""

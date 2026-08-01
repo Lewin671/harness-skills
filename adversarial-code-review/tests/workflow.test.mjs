@@ -183,6 +183,21 @@ function makeAgent(state, s) {
         many.push(cand('bulk.js', 700, 'critical', 'present_code', 'roll critical'))
         return { candidates: many, additional_high_risk_regions: [] }
       }
+      // Two lenses each file one claim that ties the other on every ranking
+      // field, and one pair that is co-located as well. absorb() sorts each
+      // finder's OWN list, so across finders the array is still in
+      // finder-processing order — which is exactly where a selector without a
+      // content tie-break falls back to "whoever answered first". `tieSwap`
+      // exchanges the two lenses' contributions without changing the set.
+      if (s.tieAcrossLenses) {
+        const lo = cand('bulk.js', 800, 'minor', 'present_code', 'tie low')
+        const hi = cand('bulk.js', 900, 'minor', 'present_code', 'tie high')
+        const colA = cand('bulk.js', 500, 'minor', 'present_code', 'co-located alpha')
+        const colB = cand('bulk.js', 500, 'minor', 'present_code', 'co-located bravo')
+        if (lens === 'logic correctness') return { candidates: s.tieSwap ? [lo, colB] : [hi, colA], additional_high_risk_regions: [] }
+        if (lens === 'concurrency and async') return { candidates: s.tieSwap ? [hi, colA] : [lo, colB], additional_high_risk_regions: [] }
+        return { candidates: [], additional_high_risk_regions: [] }
+      }
       // Two lenses file the SAME claim at different severities. Collapsing
       // them on text alone keeps whichever arrived first, so a minor-labelled
       // decoy can swallow the critical and demote it to batch verification.
@@ -853,6 +868,40 @@ R.push({ ...ordRev, expect: (res) => {
   return kept(res) === kept(ordFwd.res)
     || `discovery order changed what trimming kept: ${kept(ordFwd.res)} vs ${kept(res)}`
 } })
+// Two protections that only bite ACROSS finders, because absorb() normalises
+// each finder's own list. Both need the swap — same claims, different filer —
+// and they need different budgets: the victim selector only speaks when
+// something is trimmed, and the funding order only speaks when the whole
+// co-located pair survives to be ordered.
+{
+  const seq = (r) => (r.res.candidate_results || []).map((x) => `${x.anchor}|${x.title}`).join(' ')
+  const droppedSet = (r) => (r.res.found_but_not_verified || []).map((f) => `${f.anchor}|${f.title}`).sort().join(' ')
+
+  const trimSwapped = await run('cross-finder tie, trimmed, filers swapped', { ...BASE, budget_wu: 11.5 },
+    { tieAcrossLenses: true, tieSwap: true })
+  R.push(trimSwapped)
+  R.push(await run('cross-finder tie picks the same victim', { ...BASE, budget_wu: 11.5 },
+    { tieAcrossLenses: true,
+      expect: (res) => {
+        const here = { res }
+        if (!(res.found_but_not_verified || []).length) return 'nothing was trimmed, so the victim selector is untested'
+        return droppedSet(here) === droppedSet(trimSwapped)
+          || `which finder filed the claim decided what was given up:\n  a ${droppedSet(here)}\n  b ${droppedSet(trimSwapped)}`
+      } }))
+
+  const orderSwapped = await run('co-located pair, filers swapped', { ...BASE },
+    { tieAcrossLenses: true, tieSwap: true })
+  R.push(orderSwapped)
+  R.push(await run('co-located pair funds in a stable order', { ...BASE },
+    { tieAcrossLenses: true,
+      expect: (res) => {
+        const here = { res }
+        const coLocated = res.candidate_results.filter((x) => x.anchor === 'bulk.js:500')
+        if (coLocated.length !== 2) return `expected both co-located claims to survive, got ${coLocated.length}`
+        return seq(here) === seq(orderSwapped)
+          || `which finder filed the claim decided the funding order:\n  a ${seq(here)}\n  b ${seq(orderSwapped)}`
+      } }))
+}
 // A predicate name that is not one of the three defeats exact matching, so
 // the rejection must fail closed rather than proceed on contested evidence.
 R.push(await run('unsettled predicate misnamed', { ...BASE }, { verifierBadUnsettledName: true, adjAlwaysRefute: true,
@@ -874,8 +923,25 @@ R.push(await run('rollback drops by rank, not arrival', { ...BASE, profile: 'rec
     expect: (res) => {
       const dropped = (res.found_but_not_verified || [])
       if (!dropped.length) return 'nothing was rolled back, so the ranking is untested'
-      return !dropped.some((f) => f.proposed_severity === 'critical')
-        || 'the supplemental rollback gave up a critical while retaining majors' }}))
+      if (dropped.some((f) => f.proposed_severity === 'critical')) {
+        return 'the supplemental rollback gave up a critical while retaining majors'
+      }
+      // Severity alone cannot tell the two selectors apart: absorb() has
+      // already ordered this finder's list, so the array tail is a major
+      // either way. What separates them is WHICH major goes. Both drop paths
+      // are required to use one selector, and it takes the fingerprint
+      // minimum — line 600 upward here — while the tail is line 623 downward.
+      // Two rules that disagree about "least consequential" make the
+      // disclosure describe something other than what was dropped.
+      const lineOf = (a) => Number(String(a).split(':')[1])
+      const goneLines = dropped.map((f) => lineOf(f.anchor)).filter((n) => n >= 600 && n < 700)
+      if (!goneLines.length) return 'no supplemental major was rolled back, so the selector is untested'
+      const keptLines = res.candidate_results
+        .map((r) => lineOf(r.anchor)).filter((n) => n >= 600 && n < 700)
+      if (!keptLines.length) return 'every supplemental major was rolled back, so the selector is untested'
+      return Math.max(...goneLines) < Math.min(...keptLines)
+        || `the rollback gave up ${JSON.stringify(goneLines)} while keeping ${JSON.stringify(keptLines)}; that is the array tail, not the shared victim selector`
+    }}))
 // Two channels that reach the agent holding execution privileges: evidence a
 // prober built, and commands triage read out of the repository. Both are
 // attacker-controlled text.

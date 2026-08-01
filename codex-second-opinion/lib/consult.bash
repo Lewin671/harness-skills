@@ -227,6 +227,11 @@ mode_main() {
     else
       resume_flags=" --model $(shell_quote "$model") --effort $(shell_quote "$effort")"
     fi
-    echo "resume: --continue ${session_out}${resume_flags}" >&2
+    #  - Name the repository too. The descriptor is advertised as ready to
+    #    run, and a follow-up typed from anywhere but this directory would
+    #    otherwise default to `--repo .` and either consult the wrong tree or
+    #    exit 3. The resolved path, not the caller's spelling, so it does not
+    #    depend on where the replay happens.
+    echo "resume: --continue ${session_out}${resume_flags} --repo $(shell_quote "$PWD")" >&2
   fi
 }

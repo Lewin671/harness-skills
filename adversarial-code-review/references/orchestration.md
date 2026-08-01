@@ -83,7 +83,12 @@ changed underneath. Hash the contents:
 acr_snapshot() {
   git rev-parse HEAD
   git status --porcelain=v1
+  # `./` on every operand. A tracked or untracked file literally named `-`
+  # makes `shasum` read STDIN instead — it returns the hash of nothing,
+  # identically before and after, while `git status` shows the same ` M` both
+  # times. Measured; a `--` terminator does not help, `./-` does.
   { git ls-files -z; git ls-files --others --exclude-standard -z; } |
+    while IFS= read -r -d '' f; do printf './%s\0' "$f"; done |
     xargs -0 shasum -a 256 2>/dev/null | sort | shasum -a 256
   # Content hashes miss a mode change, and so does status: a tracked file
   # already reported ` M` reports ` M` after its executable bit flips, and its
@@ -91,8 +96,8 @@ acr_snapshot() {
   # changed. `test -x` / `test -L` are POSIX, unlike stat's format flags.
   { git ls-files -z; git ls-files --others --exclude-standard -z; } |
     while IFS= read -r -d '' f; do
-      printf '%s%s %s\n' "$([ -x "$f" ] && echo x || echo -)" \
-                          "$([ -L "$f" ] && echo l || echo -)" "$f"
+      printf '%s%s %s\n' "$([ -x "./$f" ] && echo x || echo -)" \
+                          "$([ -L "./$f" ] && echo l || echo -)" "$f"
     done | sort | shasum -a 256
 }
 acr_snapshot > "${tmp}/tree-before"

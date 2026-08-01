@@ -828,6 +828,22 @@ else
   bad "review: a non-boolean enabled field in the re-check fails closed" "exit $status"
 fi
 
+# Bytes outside the JSON root. Brackets balance and every boolean is well
+# formed, so both existing gates pass — but the payload is not a listing, and
+# whatever mangled it may equally have dropped an enabled server.
+stderr="${workdir}/mcp-trailing.err"
+argv_log="${workdir}/argv-mcp-trailing.log"
+FAKE_MCP_LIST='[{"name":"off","enabled":false}] trailing-garbage' \
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -qE 'incomplete|unrecognized' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: bytes outside the JSON root fail closed"
+else
+  bad "review: bytes outside the JSON root fail closed" "exit $status"
+fi
+
 # The quiet truncation: cut after a complete DISABLED entry. Nothing in the
 # visible part is enabled, so the `true` grep never fires and a shape check
 # alone reads it as a clean listing — while every server in the suffix that
@@ -1054,6 +1070,28 @@ else
   bad "review: an ordinary CODEX_HOME says nothing" "warned anyway"
 fi
 
+# A linked worktree's administrative git directory sits under the MAIN
+# repository, outside `--show-toplevel` — so a containment check against the
+# worktree root alone lets CODEX_HOME sit in the repository's own storage.
+lw_main="${workdir}/lw-main"
+git init -q "$lw_main"
+printf 'x\n' > "$lw_main/f.txt"
+git -C "$lw_main" add -A
+git -C "$lw_main" "${commit_env[@]}" commit -q -m i
+lw_linked="${workdir}/lw-linked"
+git -C "$lw_main" worktree add -q -b lw "$lw_linked" >/dev/null 2>&1
+printf 'dirty\n' > "$lw_linked/untracked.txt"
+lw_gitdir="$(git -C "$lw_linked" rev-parse --absolute-git-dir)"
+stderr="${workdir}/lw.err"
+CODEX_HOME="${lw_gitdir}/codex-home" \
+  "$wrapper" review --repo "$lw_linked" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr"; then
+  ok "review: a CODEX_HOME in a linked worktree's git dir fails closed"
+else
+  bad "review: a CODEX_HOME in a linked worktree's git dir fails closed" "exit $status"
+fi
+
 # --- the reporting duty must be dischargeable from what is printed -----
 #
 # Both modes owe the reader the model that answered. With --inherit and no
@@ -1230,7 +1268,7 @@ fi
 resume_out="${workdir}/resume-env.out"
 CODEX_SECOND_OPINION_MODEL=env-model CODEX_SECOND_OPINION_EFFORT=medium \
   "$wrapper" consult --repo "$repo" --timeout 30 "q" > /dev/null 2> "$resume_out"
-if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --model env-model --effort medium$' "$resume_out"; then
+if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --model env-model --effort medium --repo ' "$resume_out"; then
   ok "consult: resume descriptor carries an environment-selected model"
 else
   bad "consult: resume descriptor carries an environment-selected model" "$(grep '^resume: ' "$resume_out")"
@@ -1239,7 +1277,7 @@ fi
 resume_out="${workdir}/resume-pair.out"
 "$wrapper" consult --repo "$repo" --timeout 30 --model gpt-x --effort low "q" \
   > /dev/null 2> "$resume_out"
-if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --model gpt-x --effort low$' "$resume_out"; then
+if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --model gpt-x --effort low --repo ' "$resume_out"; then
   ok "consult: resume descriptor repeats an explicit model pair"
 else
   bad "consult: resume descriptor repeats an explicit model pair" "$(grep '^resume: ' "$resume_out")"
@@ -1247,7 +1285,7 @@ fi
 
 resume_out="${workdir}/resume-inherit.out"
 "$wrapper" consult --repo "$repo" --timeout 30 --inherit "q" > /dev/null 2> "$resume_out"
-if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --inherit$' "$resume_out"; then
+if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --inherit --repo ' "$resume_out"; then
   ok "consult: resume descriptor repeats --inherit"
 else
   bad "consult: resume descriptor repeats --inherit" "$(grep '^resume: ' "$resume_out")"
@@ -1259,7 +1297,7 @@ fi
 resume_out="${workdir}/resume-fallback.out"
 FAKE_FAIL_ONCE="${workdir}/fail-once-resume" \
   "$wrapper" consult --repo "$repo" --timeout 30 "q" > /dev/null 2> "$resume_out"
-if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --inherit$' "$resume_out"; then
+if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --inherit --repo ' "$resume_out"; then
   ok "consult: resume descriptor switches to --inherit after a fallback"
 else
   bad "consult: resume descriptor switches to --inherit after a fallback" "$(grep '^resume: ' "$resume_out")"

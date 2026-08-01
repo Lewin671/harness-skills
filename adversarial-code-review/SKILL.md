@@ -47,9 +47,12 @@ Three layered documents, and you need all three:
 
 `tests/run-tests` holds the contract tests; `tests/run-mutation-tests`
 breaks each protection in turn, on a copy, and requires the suite to go
-red for it. Run both after editing the script — a green suite proves
-nothing on its own, which is the same reason this skill refuses to call
-an unrefuted candidate verified.
+red for it; `tests/run-snapshot-tests` covers the one protection that
+lives in prose, extracting the write-safety snapshot straight out of
+orchestration.md so the doc stays its only source of truth. Run all
+three after editing either — a green suite proves nothing on its own,
+which is the same reason this skill refuses to call an unrefuted
+candidate verified.
 
 ## Positioning
 
