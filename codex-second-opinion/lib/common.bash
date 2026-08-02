@@ -260,6 +260,21 @@ mcp_enabled_ids() {
         # server to switch off. Both measured.
         if (depth == 0 && bdepth == 1 && c != "{" && c != "}" && c != "," &&
             c != "]" && c !~ /[ \t\r]/) garbage = 1
+        # Separators BETWEEN entries, by the same rule the entry level uses.
+        # `[,{...}]` and `[{...}{...}]` are both malformed and both parsed
+        # fine before this: the array level tracked no separator state at all,
+        # so only the elements themselves were ever checked.
+        if (depth == 0 && bdepth == 1) {
+          if (c == ",") {
+            if (arr_open || arr_comma) garbage = 1
+            arr_comma = 1
+          } else if (c == "{") {
+            if (!arr_open && !arr_comma) garbage = 1
+            arr_open = 0; arr_comma = 0
+          }
+        }
+        # A fresh root array has no entry and no comma behind it yet.
+        if (c == "[" && bdepth == 0) { arr_open = 1; arr_comma = 0 }
         if (c == "\"") {
           # Consume the whole string token, honouring backslash escapes,
           # so that a brace or colon inside it cannot move the parser.
@@ -310,7 +325,17 @@ mcp_enabled_ids() {
         }
         # A comma before a close is a trailing comma: `[{...},]`.
         if (c == ",") {
-          if (entry()) pending_comma = 1
+          if (entry()) {
+            # A comma with one already pending is `,,`; a comma straight after
+            # `{` is a leading one. Both balance, spell every boolean
+            # correctly and satisfy the key/value count, and the parser
+            # emitted no marker for them — so
+            # `[{"name":"off","enabled":false,,"x":1}]` read as a complete
+            # listing with nothing enabled and the run started on it.
+            # Measured. Only a separator check sees this.
+            if (pending_comma || just_opened) garbage = 1
+            pending_comma = 1
+          }
           trailing = 1
           value_started = 0
           continue
@@ -825,8 +850,34 @@ common_resolve_scratch() {
   # Resolved through the nearest EXISTING ancestor: codex creates
   # CODEX_HOME on first use, so a directory that does not exist yet is
   # about to, exactly where its parent says.
-  local codex_home probe parent resolved_home=""
+  local codex_home probe parent resolved_home="" codex_home_abs=""
   codex_home="${CODEX_HOME:-${HOME:-}/.codex}"
+  # Same rule as the repository and scratch paths, and for the same reason:
+  # this value is PRINTED — the consult resume note names it so a follow-up
+  # can be replayed — and `shell_quote` keeps a newline intact inside its
+  # quotes. Measured: the note then spans two physical lines and the second
+  # can be a standalone `answer:`/`session:` marker, arriving after the real
+  # ones, which is exactly the line callers are told to trust.
+  # Codex does NOT use `/.codex` when HOME is unset — verified,
+  # `env -u HOME -u CODEX_HOME codex mcp list --json` still loads the real
+  # ~/.codex. So this script cannot say where sessions would land, and the
+  # containment check it is about to run would be about the wrong directory.
+  if [ -z "${CODEX_HOME:-}" ] && [ -z "${HOME:-}" ]; then
+    echo "error: neither CODEX_HOME nor HOME is set, so where codex would write its sessions cannot be determined" >&2
+    echo "hint: set CODEX_HOME explicitly, outside the repository." >&2
+    exit 3
+  fi
+  # Held in variables, exactly as common_check_model_flags and the repository
+  # path check do. `$(printf '\n')` strips the very newline it is meant to
+  # match, leaving a pattern of `**` that rejects EVERY path — measured, and
+  # the file warns about it two functions away, which is where I took the
+  # wrong spelling from.
+  local cdx_lf=$'\n' cdx_cr=$'\r'
+  case "$codex_home" in
+    *"$cdx_lf"*|*"$cdx_cr"*)
+      echo "error: CODEX_HOME contains a line break, which would forge marker lines in this script's output" >&2
+      exit 3 ;;
+  esac
   case "$codex_home" in
     /*) probe="$codex_home" ;;
     # A relative CODEX_HOME resolves against the current directory, which is
@@ -842,6 +893,8 @@ common_resolve_scratch() {
   # instead of through it — so resolved_path does both, and the resolved
   # ancestor is still checked separately below.
   probe="$(resolved_path "$probe")"
+  # Where the path LANDS, kept before the ancestor walk consumes it.
+  codex_home_abs="$probe"
   while [ -n "$probe" ] && [ ! -d "$probe" ]; do
     parent="${probe%/*}"
     [ "$parent" = "$probe" ] && parent=""
@@ -852,8 +905,16 @@ common_resolve_scratch() {
   # somewhere the parent does not: an outside CODEX_HOME whose sessions link
   # into the repository writes into it just the same. Resolved with pwd -P,
   # which follows the link.
+  # Only when CODEX_HOME ITSELF exists. `probe` walked up to the nearest
+  # existing ancestor, so for a home that codex has yet to create this was
+  # testing the ANCESTOR's unrelated `sessions` child: with
+  # CODEX_HOME=/outside/parent/new-home and /outside/parent/sessions linked
+  # into the repository, the run refused although codex would write
+  # /outside/parent/new-home/sessions, entirely outside it.
   local resolved_sessions=""
-  resolved_sessions="$(cd -- "${probe}/sessions" 2>/dev/null && pwd -P)" || resolved_sessions=""
+  if [ -d "$codex_home_abs" ]; then
+    resolved_sessions="$(cd -- "${codex_home_abs}/sessions" 2>/dev/null && pwd -P)" || resolved_sessions=""
+  fi
 
   if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; } \
      || { [ -n "$resolved_sessions" ] && inside_repo "$resolved_sessions"; } \
@@ -1031,7 +1092,17 @@ execute_codex() {
       trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
       wait "$sleeper" 2>/dev/null || exit 0
 
-      pgid="$(cat "$pidfile" 2>/dev/null || true)"
+      # Bounded re-read, as forward_termination does. The pgid is published
+      # moments after the run starts, and a deadline arriving in that window
+      # found the file missing, skipped termination, wrote no marker and left
+      # the run with no watchdog at all — codex could then start with nothing
+      # able to end it, against the timeout this flag promises.
+      pgid=""
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pgid="$(cat "$pidfile" 2>/dev/null || true)"
+        [ -n "$pgid" ] && break
+        sleep 0.2
+      done
       if [ -n "$pgid" ] && kill -0 "-${pgid}" 2>/dev/null; then
         : > "$marker"
         # Signal the whole process group, not just codex. Codex spawns

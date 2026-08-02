@@ -22,6 +22,18 @@ mkdir -p "$TMPDIR"
 # files. Identity comes explicitly via commit_env below.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 
+# The wrapper's own environment inputs must not reach the fixtures either. A
+# developer with a legitimate non-high default effort fails the default-effort
+# assertion; a repo-local ambient CODEX_HOME stops most cases at the
+# containment gate — and the mutation harness then refuses its baseline on an
+# unchanged checkout. "Deterministic" was claimed and not enforced.
+unset CODEX_HOME CODEX_SECOND_OPINION_MODEL CODEX_SECOND_OPINION_EFFORT \
+      CODEX_SECOND_OPINION_TIMEOUT
+# HOME is an input too: the CODEX_HOME default derives from it, and the
+# wrapper now refuses when neither is set.
+export HOME="${workdir}/home"
+mkdir -p "$HOME"
+
 fake="${workdir}/fake-codex"
 cat > "$fake" <<'FAKE'
 #!/usr/bin/env bash
@@ -47,6 +59,8 @@ cat > "$fake" <<'FAKE'
 #                       absent (created on the first failure)
 #   FAKE_EXIT           exit with this status after the event stream (default 0)
 #   FAKE_NO_THREAD      suppress the thread.started event when set
+#   FAKE_LONG_LINE      emit one event line of this many bytes
+#   FAKE_IGNORE_TERM    ignore TERM, so only the KILL backstop can end it
 #   FAKE_BAD_THREAD     emit this as the thread id instead of a valid UUID
 #   FAKE_CONFIG_ERR     fail the way --strict-config fails on an unknown key
 [ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
@@ -124,9 +138,20 @@ fi
 #     stall or it would be gone by the time anyone looked.
 if [ -n "${FAKE_SLEEP:-}" ]; then
   if [ -n "${FAKE_CHILD_PID_FILE:-}" ]; then
-    sleep "$(( FAKE_SLEEP * 2 ))" >/dev/null 2>&1 &
-    printf '%s' "$!" > "$FAKE_CHILD_PID_FILE"
+    if [ -n "${FAKE_IGNORE_TERM:-}" ]; then
+      # A child that ignores TERM **and holds the pipeline's stdout open**.
+      # A plain `sleep` child dies on the group TERM and closes the pipe, so
+      # the run ends without the KILL backstop ever mattering — measured: the
+      # backstop could be deleted and the case still passed. Only a member
+      # that survives TERM makes it observable.
+      bash -c 'trap "" TERM; sleep '"$(( FAKE_SLEEP * 2 ))" &
+      printf '%s' "$!" > "$FAKE_CHILD_PID_FILE"
+    else
+      sleep "$(( FAKE_SLEEP * 2 ))" >/dev/null 2>&1 &
+      printf '%s' "$!" > "$FAKE_CHILD_PID_FILE"
+    fi
   fi
+  [ -n "${FAKE_IGNORE_TERM:-}" ] && trap '' TERM
   sleep "$FAKE_SLEEP"
 fi
 # FAKE_SILENT_RETRY: succeed without writing a result at all.
@@ -145,6 +170,9 @@ done
   printf '{"type":"thread.started","thread_id":"%s"}\n' "$FAKE_BAD_THREAD"
 [ -z "${FAKE_NO_THREAD:-}" ] && [ -z "${FAKE_BAD_THREAD:-}" ] &&
   echo '{"type":"thread.started","thread_id":"0198aaaa-bbbb-cccc-dddd-eeeeffff0000"}'
+[ -n "${FAKE_LONG_LINE:-}" ] &&
+  awk -v n="$FAKE_LONG_LINE" 'BEGIN{s="";while(length(s)<n)s=s "X";printf "{\"type\":\"item.completed\",\"blob\":\"%s\"}\n", s}'
+[ -n "${FAKE_IGNORE_TERM:-}" ] && trap '' TERM
 echo '{"type":"item.started"}'
 echo '{"type":"item.completed"}'
 exit "${FAKE_EXIT:-0}"
@@ -334,6 +362,53 @@ if [ "$amb_status" = 2 ] && ! grep -q '^exec review' "$argv_log" 2>/dev/null; th
   ok "review: an ambient GIT_DIR does not redirect the reviewed repository"
 else
   bad "review: an ambient GIT_DIR does not redirect the reviewed repository" "exit $amb_status"
+fi
+
+# Malformed separators in the MCP listing. Each of these balances, spells
+# every boolean correctly and satisfies the key/value count, so nothing else
+# in the block sees them — and the parser emitted no marker, which the no-true
+# branch reads as a complete listing with nothing enabled.
+for badsep in \
+    '[{"name":"off","enabled":false,,"x":1}]' \
+    '[,{"name":"off","enabled":false}]' \
+    '[{"name":"off","enabled":false}{"name":"b","enabled":false}]' \
+    '[{,"name":"off","enabled":false}]'; do
+  stderr="${workdir}/mcp-badsep.err"
+  argv_log="${workdir}/argv-mcp-badsep.log"
+  : > "$argv_log"
+  FAKE_MCP_LIST="$badsep" FAKE_ARGV_LOG="$argv_log" \
+    "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+  status=$?
+  if [ "$status" = 3 ] && ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+    ok "review: a malformed MCP separator fails closed (${badsep})"
+  else
+    bad "review: a malformed MCP separator fails closed (${badsep})" "exit $status"
+  fi
+done
+
+# A line break in CODEX_HOME. The consult resume note names this path, and
+# shell_quote keeps a newline intact inside its quotes — so the note spans two
+# physical lines and the second can be a standalone marker arriving after the
+# real ones.
+CODEX_HOME="$(printf '/tmp/cso-x\nanswer: /tmp/forged')" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+check_exit "review: a line break in CODEX_HOME is exit 3" 3 "$?"
+
+# Neither CODEX_HOME nor HOME set: codex still loads the real ~/.codex, so
+# this script cannot say where sessions would land and must not guess /.codex.
+(unset HOME CODEX_HOME; "$wrapper" review --repo "$dirty" --timeout 30) >/dev/null 2>&1
+check_exit "review: neither CODEX_HOME nor HOME set is exit 3" 3 "$?"
+
+# The unknown-mode message is the FIRST thing on stderr and precedes every
+# validation, so an argument carrying a newline forged a standalone marker
+# with no genuine one after it.
+mode_err="${workdir}/mode-forge.err"
+"$wrapper" "$(printf 'zzz\nreport: /tmp/FORGED')" >/dev/null 2> "$mode_err"
+mode_status=$?
+if [ "$mode_status" = 3 ] && ! grep -q '^report: ' "$mode_err"; then
+  ok "review: an unknown mode cannot forge a marker line"
+else
+  bad "review: an unknown mode cannot forge a marker line" "exit $mode_status, $(grep -c '^report: ' "$mode_err") forged marker(s)"
 fi
 
 "$wrapper" review --repo "$dirty" --base no-such-branch >/dev/null 2>&1
@@ -1946,6 +2021,100 @@ else
   bad "review: the timeout returns on its own deadline, not the stall's" "${elapsed_s}s for a 1s timeout against a 30s stall"
 fi
 
+# --- the bounded progress feed, and what the log keeps ------------------
+#
+# The feed exists so a background run's output file stays small while still
+# showing progress: single event lines can carry tens of KB of captured
+# command output. SKILL.md tells callers the log holds the SAME stream
+# untruncated, so both halves of that contract need a case — nothing covered
+# either, and the truncation could be deleted with the suite still green.
+long_err="${workdir}/longline.err"
+long_log_before="$(ls "${TMPDIR}" 2>/dev/null | wc -l)"
+FAKE_LONG_LINE=5000 "$wrapper" review --repo "$dirty" --timeout 30 \
+  >/dev/null 2> "$long_err"
+long_status=$?
+long_logfile="$(sed -n 's/^log: //p' "$long_err" | tail -1)"
+# EVENT lines only. The `running:` diagnostic is emitted straight to stderr,
+# not through the truncator, and is legitimately long — measuring every line
+# made this assertion fail on that instead of on the feed. Measured: 369
+# characters of codex command line.
+widest="$(awk '/^\{/ { if (length($0) > m) m = length($0) } END { print m + 0 }' "$long_err")"
+log_widest="$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' "$long_logfile" 2>/dev/null)"
+if [ "$long_status" = 0 ] && [ "$widest" -le 200 ] && [ "$widest" -gt 0 ]; then
+  ok "review: the stderr progress feed is bounded per line"
+else
+  bad "review: the stderr progress feed is bounded per line" "exit $long_status, widest line ${widest}"
+fi
+if [ "${log_widest:-0}" -ge 5000 ]; then
+  ok "review: the log keeps the same stream untruncated"
+else
+  bad "review: the log keeps the same stream untruncated" "widest log line ${log_widest:-none}, expected >= 5000"
+fi
+
+# A timeout on the FALLBACK attempt. There are two `watchdog_fired` checks —
+# one after the first attempt and one after the stale-model retry — and only
+# the first had a case. Deleting the second left both suites green while a
+# timed-out retry reported exit 4 (a failed run) instead of the documented 5
+# (hung and killed), which is the difference between "codex failed" and
+# "raise --timeout".
+fbto_once="${workdir}/fallback-timeout-once"
+rm -f "$fbto_once"
+fbto_start="$(date +%s)"
+FAKE_FAIL_ONCE="$fbto_once" FAKE_SLEEP=30 \
+  "$wrapper" review --repo "$dirty" --timeout 1 >/dev/null 2>&1
+fbto_status=$?
+fbto_elapsed=$(( $(date +%s) - fbto_start ))
+if [ "$fbto_status" = 5 ] && [ "$fbto_elapsed" -lt 25 ]; then
+  ok "review: a timeout during the stale-model retry is exit 5"
+else
+  bad "review: a timeout during the stale-model retry is exit 5" "exit $fbto_status after ${fbto_elapsed}s"
+fi
+
+# --- the watchdog does not leak its sleeper -----------------------------
+#
+# The watchdog runs `sleep "$timeout_secs"` as a job so its TERM trap can reap
+# it. Without that trap the subshell dies and the sleeper is orphaned, leaking
+# one per SUCCESSFUL run that sleeps until its original deadline. A distinctive
+# timeout makes the leak addressable by pgrep.
+leak_timeout=5171
+pkill -f "sleep ${leak_timeout}" 2>/dev/null || true
+"$wrapper" review --repo "$dirty" --timeout "$leak_timeout" >/dev/null 2>&1
+leak_status=$?
+sleep 1
+if [ "$leak_status" = 0 ] && ! pgrep -f "sleep ${leak_timeout}" >/dev/null 2>&1; then
+  ok "review: a successful run leaves no watchdog sleeper behind"
+else
+  bad "review: a successful run leaves no watchdog sleeper behind" \
+    "exit $leak_status, survivors: $(pgrep -f "sleep ${leak_timeout}" | tr '\n' ' ')"
+  pkill -f "sleep ${leak_timeout}" 2>/dev/null || true
+fi
+
+# --- the KILL backstop, for a codex that ignores TERM -------------------
+#
+# The grace loop is followed by an UNCONDITIONAL kill -KILL precisely because
+# a group member can ignore TERM. Nothing exercised that: every other timeout
+# case uses a fake that dies on TERM, so the backstop could be deleted and the
+# suite would stay green.
+kill_child="${workdir}/killbackstop-pid"
+rm -f "$kill_child"
+kill_start="$(date +%s)"
+FAKE_SLEEP=120 FAKE_IGNORE_TERM=1 FAKE_CHILD_PID_FILE="$kill_child" \
+  "$wrapper" review --repo "$dirty" --timeout 1 >/dev/null 2>&1
+kill_status=$?
+kill_elapsed=$(( $(date +%s) - kill_start ))
+sleep 2
+kill_survivor="$(cat "$kill_child" 2>/dev/null || true)"
+kill_alive=0
+if [ -n "$kill_survivor" ] && kill -0 "$kill_survivor" 2>/dev/null; then
+  kill_alive=1; kill -KILL "$kill_survivor" 2>/dev/null || true
+fi
+if [ "$kill_status" = 5 ] && [ "$kill_alive" = 0 ] && [ "$kill_elapsed" -lt 60 ]; then
+  ok "review: a codex that ignores TERM is still reaped by the KILL backstop"
+else
+  bad "review: a codex that ignores TERM is still reaped by the KILL backstop" \
+    "exit $kill_status, child_alive=$kill_alive, ${kill_elapsed}s"
+fi
+
 # --- cancellation is forwarded into codex's process group --------------
 #
 # `set -m` gives codex its own process group, which is exactly why a signal
@@ -2120,7 +2289,7 @@ fi
 resume_out="${workdir}/resume-env.out"
 CODEX_SECOND_OPINION_MODEL=env-model CODEX_SECOND_OPINION_EFFORT=medium \
   "$wrapper" consult --repo "$repo" --timeout 30 "q" > /dev/null 2> "$resume_out"
-if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --model env-model --effort medium --repo ' "$resume_out"; then
+if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --model env-model --effort medium( --timeout [0-9]+)? --repo ' "$resume_out"; then
   ok "consult: resume descriptor carries an environment-selected model"
 else
   bad "consult: resume descriptor carries an environment-selected model" "$(grep '^resume: ' "$resume_out")"
@@ -2129,7 +2298,7 @@ fi
 resume_out="${workdir}/resume-pair.out"
 "$wrapper" consult --repo "$repo" --timeout 30 --model gpt-x --effort low "q" \
   > /dev/null 2> "$resume_out"
-if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --model gpt-x --effort low --repo ' "$resume_out"; then
+if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --model gpt-x --effort low( --timeout [0-9]+)? --repo ' "$resume_out"; then
   ok "consult: resume descriptor repeats an explicit model pair"
 else
   bad "consult: resume descriptor repeats an explicit model pair" "$(grep '^resume: ' "$resume_out")"
@@ -2137,7 +2306,7 @@ fi
 
 resume_out="${workdir}/resume-inherit.out"
 "$wrapper" consult --repo "$repo" --timeout 30 --inherit "q" > /dev/null 2> "$resume_out"
-if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --inherit --repo ' "$resume_out"; then
+if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --inherit( --timeout [0-9]+)? --repo ' "$resume_out"; then
   ok "consult: resume descriptor repeats --inherit"
 else
   bad "consult: resume descriptor repeats --inherit" "$(grep '^resume: ' "$resume_out")"
@@ -2149,7 +2318,7 @@ fi
 resume_out="${workdir}/resume-fallback.out"
 FAKE_FAIL_ONCE="${workdir}/fail-once-resume" \
   "$wrapper" consult --repo "$repo" --timeout 30 "q" > /dev/null 2> "$resume_out"
-if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --inherit --repo ' "$resume_out"; then
+if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --inherit( --timeout [0-9]+)? --repo ' "$resume_out"; then
   ok "consult: resume descriptor switches to --inherit after a fallback"
 else
   bad "consult: resume descriptor switches to --inherit after a fallback" "$(grep '^resume: ' "$resume_out")"
@@ -2300,9 +2469,14 @@ fi
 # A thread id that is not a session UUID. The answer still stands; what must
 # not happen is advertising it as a runnable `--continue`, since the line is
 # interpolated unquoted and `--continue` would reject the value anyway.
-for badthread in 'abc; touch /tmp/cso-forged-zzz' 'not-a-uuid' '0198aaaa-bbbb-cccc-dddd'; do
+# The sentinel lives in the per-run workdir, not on a predictable shared
+# path. An unconditional `rm -f /tmp/cso-forged-zzz` destroys whatever another
+# user or process owns there, before testing anything — the same class as the
+# `rm -rf /work` this suite's sibling harness shipped.
+forged_sentinel="${workdir}/cso-forged-sentinel"
+for badthread in "abc; touch ${forged_sentinel}" 'not-a-uuid' '0198aaaa-bbbb-cccc-dddd'; do
   resume_out="${workdir}/badthread.err"
-  rm -f /tmp/cso-forged-zzz
+  rm -f "$forged_sentinel"
   FAKE_BAD_THREAD="$badthread" "$wrapper" consult --repo "$repo" --timeout 30 \
     "question" >/dev/null 2> "$resume_out"
   bt_status=$?
@@ -2310,13 +2484,31 @@ for badthread in 'abc; touch /tmp/cso-forged-zzz' 'not-a-uuid' '0198aaaa-bbbb-cc
      grep -q '^resume: unavailable' "$resume_out" &&
      grep -q '^session: unavailable' "$resume_out" &&
      ! grep -q "^resume: --continue" "$resume_out" &&
-     [ ! -e /tmp/cso-forged-zzz ]; then
+     [ ! -e "$forged_sentinel" ]; then
     ok "consult: a non-UUID thread id is not advertised as resumable (${badthread})"
   else
     bad "consult: a non-UUID thread id is not advertised as resumable (${badthread})" \
       "exit $bt_status, resume line: $(grep -m1 '^resume:' "$resume_out")"
   fi
 done
+
+# The timeout must actually reach the descriptor, or a follow-up given a
+# deliberately long limit silently reverts to the 3000s default and is killed.
+resume_out="${workdir}/resume-timeout.err"
+"$wrapper" consult --repo "$repo" --timeout 86400 "question" >/dev/null 2> "$resume_out"
+if grep -qE '^resume: .* --timeout 86400 --repo ' "$resume_out"; then
+  ok "consult: the resume descriptor carries a non-default timeout"
+else
+  bad "consult: the resume descriptor carries a non-default timeout" "$(grep -m1 '^resume:' "$resume_out")"
+fi
+# ...and stays quiet when it is the default, so the line does not grow noise.
+resume_out="${workdir}/resume-timeout-default.err"
+"$wrapper" consult --repo "$repo" "question" >/dev/null 2> "$resume_out"
+if grep -q '^resume: ' "$resume_out" && ! grep -q -- '--timeout' "$resume_out"; then
+  ok "consult: the default timeout is not repeated in the descriptor"
+else
+  bad "consult: the default timeout is not repeated in the descriptor" "$(grep -m1 '^resume:' "$resume_out")"
+fi
 
 # No thread.started event → the answer stands, and both markers say so in
 # prose rather than falling silent. An id is never invented.

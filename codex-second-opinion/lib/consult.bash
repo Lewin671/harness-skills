@@ -267,6 +267,14 @@ mode_main() {
     #    have used.
     local resume_mcp=""
     [ "$allow_mcp" -eq 1 ] && resume_mcp=" --allow-mcp"
+    #  - And the timeout, when it is not the default. It can come from
+    #    --timeout or from a one-shot CODEX_SECOND_OPINION_TIMEOUT, neither of
+    #    which survives into the shell that replays this line — so a
+    #    consultation deliberately given 86400s, or 0 to disable the watchdog,
+    #    silently reverts to 3000 and a legitimate long follow-up is killed
+    #    while following the prescribed workflow.
+    local resume_timeout=""
+    [ "$timeout_secs" != 3000 ] && resume_timeout=" --timeout ${timeout_secs}"
     # CODEX_HOME does not travel in a flag, and the session lives under it.
     # A consultation started with a non-default one — often because this
     # script told the user to relocate it — is unresumable from a shell that
@@ -276,6 +284,6 @@ mode_main() {
     if [ -n "${CODEX_HOME:-}" ]; then
       echo "note: this consultation used CODEX_HOME=$(shell_quote "$CODEX_HOME"); set it the same way before replaying the line below" >&2
     fi
-    echo "resume: --continue ${session_out}${resume_flags}${resume_mcp} --repo $(shell_quote "$PWD")" >&2
+    echo "resume: --continue ${session_out}${resume_flags}${resume_mcp}${resume_timeout} --repo $(shell_quote "$PWD")" >&2
   fi
 }

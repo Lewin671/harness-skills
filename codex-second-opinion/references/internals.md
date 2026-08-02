@@ -107,6 +107,15 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
 - The result comes from `-o` (the agent's last message), not stdout:
   the event stream on stdout is `--json`, one bounded line per event,
   because the default human stream echoes entire file dumps.
+- "Three things are written every run" counts what is KEPT: the result
+  file, the log, and the session. It is not a count of every write. Each
+  run also creates a private `mktemp -d` state directory under `TMPDIR`
+  and writes `pgid`, `status` and, on a timeout, the marker file into it,
+  removing the directory before it returns; `git_readonly_index` writes a
+  throwaway index copy there too, and codex writes scratch of its own.
+  Naming these as transient rather than folding them into the count is
+  the honest form: an exhaustive list would go stale on the next codex
+  release, and a count that silently excluded them was simply wrong.
 - The result file must live outside the repo, or Codex's own file
   sweeps pick it up and pollute the result. A repo-local TMPDIR is
   detected and replaced with /tmp for the same reason.

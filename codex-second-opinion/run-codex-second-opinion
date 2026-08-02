@@ -63,7 +63,13 @@ case "$mode" in
     top_usage
     exit 3 ;;
   *)
-    echo "error: unknown mode: ${mode}" >&2
+    # Flattened before printing. This is the FIRST thing written to stderr and
+    # it happens before any validation, so a mode argument carrying a newline
+    # emitted a standalone `report:` line of its own — and an invalid
+    # invocation produces no genuine marker afterwards, so the forged one is
+    # the final line of its kind that a merged-stream reader is told to trust.
+    # Measured.
+    echo "error: unknown mode: $(printf '%s' "${mode}" | tr '\r\n' '  ')" >&2
     top_usage
     exit 3 ;;
 esac

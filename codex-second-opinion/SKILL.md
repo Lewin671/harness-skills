@@ -46,21 +46,23 @@ sandbox too, so any that are enabled get switched off for the duration of
 the run, and the script confirms with Codex that they actually went down
 before starting. It refuses to start when they cannot be enumerated or
 the switch-off cannot be confirmed. A listing that fails those checks is
-never read as an empty one — but the checks are structural, not a JSON
-validator, and `references/internals.md` bounds which shapes they catch. `--allow-mcp` inverts that: it leaves those servers
-reachable, and is only for a user who has explicitly accepted that their
-tools may mutate external systems. A request for a second opinion does
-not itself grant that approval: report what happened and ask instead of
-adding the flag silently. Never use this skill to apply fixes.
+never read as an empty one; the checks are structural rather than a JSON
+validator, and internals.md bounds which shapes they catch.
+`--allow-mcp` inverts that: it leaves those servers reachable, and is
+only for a user who has explicitly accepted that their tools may mutate
+external systems. A request for a second opinion does not grant that
+approval: report and ask rather than adding it silently. Never use this
+skill to apply fixes.
 
 Read-only means the user's repository and the world outside it, not the
-local disk. Three things are written every run: the result file and the
-event log under `TMPDIR` — or `/tmp`, if `TMPDIR` is inside the repo;
-both paths are printed and neither is cleaned up — and the session,
-which Codex persists under `CODEX_HOME/sessions`. That last one applies to **both
-modes**, not just consult: a review's prompt, the diff it read, and its
-findings stay on disk after the run. For consult it is also
-load-bearing — it is what makes `--continue` work.
+local disk. Three things are written every run and *kept*: the result
+file and the event log under `TMPDIR` — or `/tmp`, if `TMPDIR` is inside
+the repo; both paths are printed and neither is cleaned up — and the
+session, which Codex persists under `CODEX_HOME/sessions`. That count is
+what is KEPT; transient scratch sits outside it (internals.md). The
+session applies to
+**both modes**: a review's prompt, the diff it read, and its findings stay
+on disk. For consult it is also load-bearing — it makes `--continue` work.
 
 Two placements are refused rather than worked around: a `CODEX_HOME`
 inside the repository (it cannot be relocated without orphaning earlier

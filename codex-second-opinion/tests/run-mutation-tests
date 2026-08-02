@@ -38,8 +38,20 @@ survived=0
 total=0
 
 # name, file (relative to the skill dir), from, to
+# CSO_MUT_ONLY runs just the mutants whose name contains this substring. A
+# full sweep is ~50 minutes here, and iterating on one mutant should not cost
+# that. It can never be mistaken for a full run: filtered runs print a PARTIAL
+# banner and exit non-zero whatever the result, and the count pin below is
+# skipped because it no longer means anything.
+filtered=0
 mutate() {
   local name="$1" file="$2" from="$3" to="$4"
+  if [ -n "${CSO_MUT_ONLY:-}" ]; then
+    case "$name" in
+      *"$CSO_MUT_ONLY"*) : ;;
+      *) filtered=$((filtered + 1)); return ;;
+    esac
+  fi
   total=$((total + 1))
   local work="${TMP}/work"
   rm -rf "$work"
@@ -187,8 +199,14 @@ mutate "a bare repo is not a work tree" lib/common.bash \
   '[ "$work_tree" = "true" ] ||' '[ "$work_tree" != "zzz" ] ||'
 mutate "an empty result is a failure" lib/common.bash \
   'if [ ! -s "$out" ]; then' 'if false; then'
+# BOTH checks. `mutate` replaces the first occurrence only, and there are
+# two: one after the first attempt and one after the stale-model retry. With
+# only the first mutated, deleting the second left both suites green while a
+# timed-out FALLBACK attempt reported exit 4 instead of the documented 5.
 mutate "a timeout surfaces as 5, not 4" lib/common.bash \
-  '[ "$watchdog_fired" -eq 1 ] && exit_timed_out' ':'
+  '  [ "$watchdog_fired" -eq 1 ] && exit_timed_out' '  :'
+mutate "a timeout on the fallback attempt is 5 too" lib/common.bash \
+  '      [ "$watchdog_fired" -eq 1 ] && exit_timed_out' '      :'
 mutate "model and effort must arrive together" lib/common.bash \
   'if [ "$model_set" -eq 1 ] && [ "$effort_set" -eq 0 ]; then' 'if false; then'
 mutate "line breaks in model/effort are refused" lib/common.bash \
@@ -197,6 +215,30 @@ mutate "a line break in the repo path is refused" lib/common.bash \
   'case "$PWD" in' 'case "no-such-value-zzz" in'
 mutate "the result ends in a newline" lib/common.bash \
   '[ -z "$(tail -c 1 "$out")" ] || echo' ':'
+
+# Malformed separators. Each balances, spells its booleans correctly and
+# satisfies the key/value count, so only a separator check sees them.
+mutate "repeated and leading commas in an entry" lib/common.bash \
+  '            if (pending_comma || just_opened) garbage = 1' '            ;'
+mutate "separators between array entries" lib/common.bash \
+  '          if (c == ",") {
+            if (arr_open || arr_comma) garbage = 1
+            arr_comma = 1
+          } else if (c == "{") {
+            if (!arr_open && !arr_comma) garbage = 1
+            arr_open = 0; arr_comma = 0
+          }' '          ;'
+# CODEX_HOME is printed, and shell_quote keeps a newline inside its quotes.
+mutate "a line break in CODEX_HOME is refused" lib/common.bash \
+  '    *"$cdx_lf"*|*"$cdx_cr"*)' '    no-such-pattern-zzz)'
+# codex still loads the real ~/.codex with HOME unset, so /.codex is a guess.
+mutate "an unknowable codex home is refused" lib/common.bash \
+  '  if [ -z "${CODEX_HOME:-}" ] && [ -z "${HOME:-}" ]; then' '  if false; then'
+mutate "the unknown mode is flattened" run-codex-second-opinion \
+  '$(printf '"'"'%s'"'"' "${mode}" | tr '"'"'\r\n'"'"' '"'"'  '"'"')' '${mode}'
+# The resume descriptor is advertised as ready to run.
+mutate "a non-default timeout reaches the descriptor" lib/consult.bash \
+  '    [ "$timeout_secs" != 3000 ] && resume_timeout=" --timeout ${timeout_secs}"' '    :'
 
 # --- mode-specific ---------------------------------------------------------
 mutate "an empty uncommitted scope exits 2" lib/review.bash \
@@ -256,7 +298,12 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. Pin the count:
 # any mutant that silently fails to launch is a failure in itself.
-EXPECTED_TOTAL=43
+EXPECTED_TOTAL=50
+if [ -n "${CSO_MUT_ONLY:-}" ]; then
+  echo "PARTIAL RUN — ${filtered} mutant(s) filtered out by CSO_MUT_ONLY='${CSO_MUT_ONLY}'."
+  echo "${survived}/${total} of the selected mutants survived. This is NOT a full sweep."
+  exit 1
+fi
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1
