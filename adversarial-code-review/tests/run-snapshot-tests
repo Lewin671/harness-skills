@@ -71,6 +71,15 @@ new_repo() {
   # Two symlinks whose targets contain newlines. Serialised as newline-
   # delimited fields and then sorted, swapping their halves produces the same
   # set of lines — and symlinks are not in the content digest at all.
+  # A link whose target ends in a newline, and a write-only regular file.
+  # Present so the encoding is exercised on a target ending in a newline.
+  # There is no case for CHANGING it: `readlink` prints the target followed
+  # by its own newline, so `trail` and `trail\n` produce identical bytes on
+  # this platform — a tool limit, recorded in orchestration.md, not something
+  # the record's encoding can recover.
+  ln -s $'trail\n' "$d/nl-trail"
+  printf 'writeonly\n' > "$d/wo.txt"
+  chmod 0200 "$d/wo.txt"
   ln -s "$(printf 'a\nX')" "$d/nl-one"
   ln -s "$(printf 'b\nY')" "$d/nl-two"
 
@@ -140,6 +149,13 @@ detects "a symlink retargeted to an existing path"     sh -c 'ln -sf tracked.txt
 # Retargeting links whose targets contain newlines — the shape the per-record
 # hashing exists for. It is a regression case for that encoding, not a
 # demonstrated collision: none was found.
+# The permissions OF THE LINK, not of what it points at.
+detects "a symlink's own permissions" sh -c 'chmod -h 0777 dangling-link 2>/dev/null || chmod 0777 dangling-link'
+# An unreadable file becoming readable, and a readable one becoming
+# unreadable: the content of a write-only file cannot be hashed, but its
+# unreadability is part of the record.
+detects "a visible file becoming unreadable" chmod 0200 tracked.txt
+detects "an unreadable file becoming readable" chmod 0644 wo.txt
 detects "newline-bearing link targets retargeted" \
   sh -c 'ln -sfn "$(printf "b\nX")" nl-one && ln -sfn "$(printf "a\nY")" nl-two'
 

@@ -468,6 +468,16 @@ function makeAgent(state, s) {
       // Falsifies the OBLIGATION specifically, with the other two supporting:
       // the intentional-change shape, where a control proves the patch caused
       // the difference and the verifier shows nothing was owed.
+      // The same shape, still WEAK after its one permitted rerun. A refutation
+      // that could not ground itself has settled nothing, so it must not hold
+      // a controlled reproduction at unresolved.
+      if (s.verifierWeakObligationRefute) {
+        const ids = expectedIds(prompt)
+        const one = (id) => ({ candidate_id: id, semantics: predicate('supports_candidate'),
+          reachability: predicate('supports_candidate'), contract_violation: predicate('falsifies_candidate'),
+          strongest_refutation: 'unsure', unsettled_predicates: [], grounding: 'weak' })
+        return l.includes('minors') ? { verdicts: ids.map(one) } : one(ids[0])
+      }
       if (s.verifierObligationRefute) {
         const ids = expectedIds(prompt)
         const one = (id) => ({ candidate_id: id, semantics: predicate('supports_candidate'),
@@ -1248,6 +1258,16 @@ R.push(await run('reproduction against a refuted obligation', { ...BASE },
       if (kept.length) return `${kept[0].candidate_id} was rejected despite a controlled reproduction`
       return res.ledger.forced_unresolved.some((f) => /settles causality/.test(f.why))
         || 'the conflict was resolved without saying which evidence disagreed'
+    } }))
+R.push(await run('reproduction against a weakly refuted obligation', { ...BASE },
+  { verifierWeakObligationRefute: true, escalatedVerifierWrongId: true, adjAlwaysRefute: true,
+    expect: (res) => {
+      const terminal = res.candidate_results.filter((r) => r.attack_grade === 'reproduced'
+        && r.execution_status === 'executed')
+      if (!terminal.length) return 'no controlled reproduction ran, so the grounding rule is untested'
+      const held = terminal.filter((r) => r.state !== 'substantiated')
+      return held.length === 0
+        || `${held[0].candidate_id} is ${held[0].state}: a refutation that never grounded itself held a controlled reproduction`
     } }))
 R.push(await run('a candidate is genuinely refuted', { ...BASE }, { verifierCleanRefute: true, adjAlwaysRefute: true,
   expect: (res) => {

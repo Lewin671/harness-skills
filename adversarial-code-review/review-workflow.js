@@ -932,8 +932,13 @@ Decisive rules:
 - Failure to refute is NOT substantiation. If the verifier merely could not
   settle a predicate, the state is unresolved.
 - A plausible alternative reading is NOT a refutation.
-- Grade "reproduced" is terminal evidence: substantiate the candidate
-  regardless of the refutation.
+- Grade "reproduced" is terminal evidence for what it settles: that THIS
+  patch is why the test fails. Substantiate the candidate over a refutation
+  of semantics or reachability. It does NOT settle whether the old behaviour
+  was owed — a test written for the previous behaviour of an intentional
+  change reproduces perfectly — so where the verifier grounds a cited
+  falsification of contract_violation and a controlled reproduction exists,
+  the evidence conflicts and the state is unresolved.
 - Grade "held" is real evidence against, but only for the vectors actually
   attempted.
 - Grades "blocked" and "inconclusive" carry NO information about the code.
@@ -2156,6 +2161,10 @@ if (acceptedExec.length) {
   let execPendingWU = 0
   for (const t of execRest) {
     if (admitTokens(execPendingWU + W.execute)) { execPendingWU += W.execute; execAdmitted.push(t); continue }
+    // Give the units back. admitOptional committed ten of them per target
+    // when the wave was accepted; nothing launches for this one now, and
+    // `committed_wu` is what the report calls the run's achieved cost.
+    committedWU -= W.execute
     defer({ target_id: t.target_id, kind: 'executable_attack', anchor: t.label }, 'deferred_by_budget')
   }
   const out = [...execSampleOut, ...(execAdmitted.length ? await parallel(execAdmitted.map((t) => () => runAttack(t))) : [])]
@@ -2441,7 +2450,13 @@ const results = candidates.map((c) => {
   // reachability — the two things it does settle — and not a grounded, cited
   // falsification of the obligation. Where both exist the evidence conflicts,
   // which is what `unresolved` is for.
-  const obligationFalsified = citedAs(verifierRecord, 'contract_violation', 'falsifies_candidate')
+  // `groundedRefutation` explicitly: citedAs checks the citation, not whether
+  // the analysis behind it could ground itself. A refutation still weak after
+  // its one permitted rerun has settled nothing, and letting it block the
+  // override would leave a controlled reproduction unresolved on the strength
+  // of an attempt the contract already discounts.
+  const obligationFalsified = groundedRefutation
+    && citedAs(verifierRecord, 'contract_violation', 'falsifies_candidate')
     && unsettledNamesValid && !unsettledNames.includes('contract_violation')
   if (terminal && obligationFalsified && state !== 'unresolved') {
     ledger.forced_unresolved.push({

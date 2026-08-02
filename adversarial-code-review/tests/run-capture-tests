@@ -246,7 +246,9 @@ fi
 lwmain="$(new_repo lwmain)"
 git -C "$lwmain" add -A
 git -C "$lwmain" "${commit_env[@]}" commit -q -m work
-lwlinked="${WORK}/lwlinked"
+# A path with a space: `for x in ${roots}` would split it into two roots that
+# do not exist and miss the one that does.
+lwlinked="${WORK}/lw linked"
 git -C "$lwmain" worktree add -q -b lw "$lwlinked" >/dev/null 2>&1
 printf 'dirty\n' > "${lwlinked}/untracked.txt"
 mkdir -p "${lwmain}/scratch"
@@ -263,6 +265,28 @@ if [ "$status" = 0 ] && [ "$in_sibling" = no ]; then
   ok "a TMPDIR in a sibling worktree is relocated too"
 else
   bad "a TMPDIR in a sibling worktree is relocated too" "exit $status, tmp=${tmp}"
+fi
+
+# And the same for the worktree being reviewed, whose path contains a space.
+# NOTE: this case passes with the array quoting removed as well — bash does
+# split `${roots}` on the space (measured directly), but this fixture does not
+# reach the branch where that changes the outcome. The quoting is kept because
+# it is right, not because this proves it; said here rather than left to read
+# as coverage.
+mkdir -p "${lwlinked}/scratch"
+status="$(TMPDIR="${lwlinked}/scratch" run_capture "$lwlinked" 'diff_args=(HEAD); untracked=1')"
+# shellcheck source=/dev/null
+. "${WORK}/vars"
+lwlinked_real="$(cd "$lwlinked" && pwd -P)"
+tmp_real="$(cd "$tmp" 2>/dev/null && pwd -P)" || tmp_real="$tmp"
+case "${tmp_real}/" in
+  "${lwlinked_real}"/*) in_self=yes ;;
+  *) in_self=no ;;
+esac
+if [ "$status" = 0 ] && [ "$in_self" = no ]; then
+  ok "a worktree path containing a space is still recognised"
+else
+  bad "a worktree path containing a space is still recognised" "exit $status, tmp=${tmp}"
 fi
 
 # --- scratch never lands inside the repository -----------------------------

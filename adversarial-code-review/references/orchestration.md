@@ -40,10 +40,16 @@ export GIT_NO_LAZY_FETCH=1
 # Every worktree root, not just this one. A linked worktree shares its object
 # store with the main checkout and any siblings, and a TMPDIR under one of
 # those is inside the repository by any reading that matters.
-acr_roots="$(git worktree list --porcelain | awk '/^worktree /{print substr($(0),10)}')"
-for acr_repo in ${acr_roots} \
-                "$(git rev-parse --absolute-git-dir)" \
-                "$(git rev-parse --path-format=absolute --git-common-dir)"; do
+# Read into an array. `for x in ${roots}` splits on whitespace, and a
+# worktree path may contain some — the containment check would then look for
+# two directories that do not exist and miss the one that does.
+acr_roots=()
+while IFS= read -r acr_wt; do
+  [ -n "${acr_wt}" ] && acr_roots+=("${acr_wt}")
+done < <(git worktree list --porcelain | awk '/^worktree /{print substr($(0),10)}')
+acr_roots+=("$(git rev-parse --absolute-git-dir)")
+acr_roots+=("$(git rev-parse --path-format=absolute --git-common-dir)")
+for acr_repo in "${acr_roots[@]}"; do
   acr_repo="$(cd "$acr_repo" 2>/dev/null && pwd -P)" || continue
   # Trailing slash stripped before the pattern is built: a worktree at `/`
   # would otherwise give `//*`, which matches nothing — so a repository
@@ -221,9 +227,21 @@ acr_snapshot() {
     #     Measured; a `--` terminator does not help, `./-` does.
     { git ls-files -z; git ls-files --others --exclude-standard -z; } |
       while IFS= read -r -d '' f; do
-        [ -L "./$f" ] || [ ! -f "./$f" ] || printf './%s\0' "$f"
-      done |
-      xargs -0 shasum -a 256 2>/dev/null | sort | shasum -a 256
+        [ -L "./$f" ] && continue
+        [ -f "./$f" ] || continue
+        if [ -r "./$f" ]; then
+          shasum -a 256 "./$f"
+        else
+          # Not silently dropped. `2>/dev/null` on the whole batch hid an
+          # unreadable file completely, so an agent could overwrite a
+          # write-only one and both snapshots would agree. Its CONTENT still
+          # cannot be hashed — nothing can hash what it cannot read — but its
+          # existence and its unreadability are recorded, so the file
+          # appearing, vanishing or becoming readable is visible. The residual
+          # is stated below rather than hidden.
+          printf 'UNREADABLE  ./%s\n' "$f"
+        fi
+      done | sort | shasum -a 256
     # Content hashes miss a mode change, and so does status: a tracked file
     # already reported ` M` reports ` M` after its executable bit flips, and its
     # bytes never moved. Both snapshots would match while the repository
@@ -243,10 +261,18 @@ acr_snapshot() {
         # notice. No specific colliding pair was demonstrated; a digest cannot
         # contain a newline, so hashing each record removes the question
         # rather than answering it case by case.
-        printf '%s %s %s' "$(ls -ldL "./$f" 2>/dev/null | cut -c1-10 ||
-                             ls -ld "./$f" 2>/dev/null | cut -c1-10)" \
-                          "$(readlink "./$f" 2>/dev/null || true)" "$f" |
-          shasum -a 256
+        # `ls -ld`, never `-L`, for a symlink: dereferencing reports the
+        # TARGET's permissions, so a chmod on the link itself is invisible.
+        # And the target is piped raw, not through `$( )`, which strips
+        # trailing newlines — retargeting `missing` to `missing\n` would
+        # otherwise produce an identical record.
+        if [ -L "./$f" ]; then
+          { printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-10)" "$f"
+            readlink "./$f" 2>/dev/null || true; } | shasum -a 256
+        else
+          printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-10)" "$f" |
+            shasum -a 256
+        fi
       done | sort | shasum -a 256
   )
   rm -f "${acr_idx}"
@@ -277,6 +303,15 @@ Two kinds of path stay outside it, and both belong in the report rather than
 behind an implied "total coverage":
 
 - **gitignored paths** — build output, `node_modules`, local caches.
+- **a symlink target differing only by a trailing newline.** `readlink`
+  prints the target and then a newline of its own, so `x` and `x\n` are the
+  same bytes coming out of it — measured. The target is piped in raw rather
+  than through `$( )`, which keeps every internal newline, but this one is a
+  limit of the tool and not of the encoding.
+- **the contents of a file the snapshot cannot read.** Its existence and
+  unreadability are recorded, so it appearing, vanishing or changing mode is
+  detected — but nothing can hash bytes it cannot read, and a rewrite of a
+  write-only file that stays write-only is invisible.
 - **anything inside a checked-out submodule.** The `ls-files` here is the
   superproject's, and a dirty submodule reports the same one-line marker in
   status however much changes inside it.
