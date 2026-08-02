@@ -204,9 +204,18 @@ mcp_enabled_ids() {
         # every value check, but it is not what codex prints — and whatever
         # mangled it may equally have dropped an enabled server before the
         # part that arrived. A second root counts too.
+        #
+        # An ARRAY root, not just any container. Verified on 0.146.0, the
+        # listing is `[...]`. An object root is a different shape with no
+        # agreed reading: `{"github":{"name":"github","enabled":true}}` is a
+        # map whose servers sit a level deeper than entry level, so a parser
+        # that reads only depth 1 emits nothing while the enabled server is
+        # right there — no override is added and codex starts with it
+        # reachable. Refusing an unrecognised shape is the whole point of
+        # this pass; guessing which of two readings a `{` meant is not.
         if (depth == 0 && bdepth == 0 && c !~ /[ \t\r]/) {
-          if (started || (c != "[" && c != "{")) garbage = 1
-          if (c == "[" || c == "{") started = 1
+          if (started || c != "[") garbage = 1
+          if (c == "[") started = 1
         }
         if (c == "\"") {
           # Consume the whole string token, honouring backslash escapes,

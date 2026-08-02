@@ -264,7 +264,18 @@ acr_snapshot() {
     # all stay as they were. `ls-files --stage` gives mode, object and path,
     # which changes then — and does NOT change when a mere stat refresh
     # rewrites the index, so this stays quiet when nothing happened.
-    git ls-files --stage
+    # `-z` and hashed: a tracked path may contain a newline, and the raw form
+    # would split one record across lines that another path's halves could
+    # complete.
+    git ls-files --stage -z | shasum -a 256
+    # Index FLAGS, which --stage does not print at all. `git update-index
+    # --assume-unchanged <path>` leaves HEAD, the porcelain columns, every
+    # content and mode hash AND the staged mode/object identical — only the
+    # `-v` tag goes H -> h. It is not a cosmetic bit: git then stops noticing
+    # working-tree edits to that path, so an agent that sets it has made its
+    # own later writes invisible to the very status this snapshot relies on.
+    # skip-worktree (S) does the same by another route.
+    git ls-files -v -z | shasum -a 256
     # --no-optional-locks so a plain status does not rewrite the index it reads.
     git --no-optional-locks status --porcelain=v1
     # REGULAR FILES ONLY, and `./` on every operand.

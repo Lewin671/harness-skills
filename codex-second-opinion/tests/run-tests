@@ -993,6 +993,26 @@ else
   bad "review: an all-disabled listing with a nested true still runs" "exit $status"
 fi
 
+# An OBJECT root. `{"github":{"name":"github","enabled":true}}` is a map whose
+# servers sit one level below entry level, so a parser reading depth 1 emits
+# nothing while an enabled server is right there — no override is added and
+# the run starts with it reachable. This is the fail-open that removing the
+# mcp_count==0 refusal opened up, and refusing the unrecognised ROOT SHAPE is
+# what closes it without also refusing a legitimate nested `true`.
+for objroot in '{"github":{"name":"github","enabled":true}}' '{"name":"single","enabled":true}'; do
+  stderr="${workdir}/mcp-objroot.err"
+  argv_log="${workdir}/argv-mcp-objroot.log"
+  FAKE_MCP_LIST="$objroot" FAKE_ARGV_LOG="$argv_log" \
+    "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+  status=$?
+  if [ "$status" = 3 ] && grep -qE 'incomplete|unrecognized' "$stderr" &&
+     ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+    ok "review: an object-root MCP listing fails closed (${objroot})"
+  else
+    bad "review: an object-root MCP listing fails closed (${objroot})" "exit $status"
+  fi
+done
+
 # The same shape must NOT become a way to hide a real server: an entry that is
 # genuinely enabled at depth 1 still has to be switched off, nested object or
 # not.

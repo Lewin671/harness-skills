@@ -57,6 +57,11 @@ new_repo() {
   printf 'tracked\n' > "$d/tracked.txt"
   printf 'exec\n'    > "$d/script.sh"
   printf 'dashy\n'   > "$d/-"
+  # Committed and left ALONE. An index-flag case needs a path git currently
+  # reports nothing about: setting assume-unchanged on an already-dirty file
+  # removes its ` M` line, which `git status` sees on its own and the case
+  # would then prove nothing about the index digest.
+  printf 'untouched\n' > "$d/clean-tracked.txt"
   git -C "$d" add -A
   git -C "$d" -c user.email=t@t -c user.name=t commit -q -m base
   # Everything a case will touch is ALREADY dirty, so `git status` reports the
@@ -163,6 +168,16 @@ detects "newline-bearing link targets retargeted" \
 # an already-dirty tree moves HEAD while leaving status and every file hash
 # exactly as they were. Without this, deleting `git rev-parse HEAD` from the
 # recipe leaves the suite green.
+# Index FLAGS. `--assume-unchanged` leaves HEAD, the porcelain columns, every
+# content and mode hash AND the staged mode/object identical — only the `-v`
+# tag moves. It is what an agent would set to make its own later writes
+# invisible to git status, so a snapshot that cannot see it is blind to the
+# blinding. skip-worktree gets there another way.
+detects "a path marked assume-unchanged" \
+  git update-index --assume-unchanged clean-tracked.txt
+detects "a path marked skip-worktree" \
+  git update-index --skip-worktree clean-tracked.txt
+
 detects "an empty commit over a dirty tree" \
   git -c user.email=t@t -c user.name=t commit -q --allow-empty -m moved
 
