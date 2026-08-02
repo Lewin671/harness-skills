@@ -703,6 +703,10 @@ function makeAgent(state, s) {
         return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'unresolved', final_severity: 'minor',
           decisive_evidence: 'stub', unsettled_predicate: '  ', grounding: 'strong' })) }
       }
+      if (s.adjVaguePredicate) {
+        return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'unresolved', final_severity: 'minor',
+          decisive_evidence: 'stub', unsettled_predicate: 'needs more investigation', grounding: 'strong' })) }
+      }
       if (s.adjUnresolvedNoPredicate) {
         return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'unresolved', final_severity: 'minor',
           decisive_evidence: 'stub', grounding: 'strong' })) }
@@ -1435,7 +1439,7 @@ R.push(await run('unresolved predicate is blank', { ...BASE }, { adjBlankPredica
     const named = res.candidate_results.filter((r) => r.unsettled_predicate !== null
       && !String(r.unsettled_predicate).trim())
     if (named.length) return `${named[0].candidate_id} reports a blank string as its unsettled predicate`
-    return res.ledger.malformed_results.some((m) => /did not name the predicate/.test(m.why))
+    return res.ledger.malformed_results.some((m) => /did not name which of/.test(m.why))
       || 'a blank predicate was neither reported nor recorded as malformed'
   } }))
 // verifierCleanRefute is what makes canRefute reachable at all: without a
@@ -1449,12 +1453,31 @@ R.push(await run('unresolved verdict names no predicate', { ...BASE }, { adjUnre
   expect: (res) => {
     // Against the FINAL state: a candidate the terminal-evidence override
     // lifted out of unresolved is not in the section this counter is about.
+    const PN = ['semantics', 'reachability', 'contract_violation']
     const owed = res.candidate_results.filter((r) => r.state === 'unresolved'
-      && !(r.unsettled_predicate && String(r.unsettled_predicate).trim()))
+      && !(r.unsettled_predicate && PN.some((k) => String(r.unsettled_predicate).includes(k))))
     const n = res.disclosure_checklist.unresolved_without_named_predicate
     return (n === owed.length && n > 0)
       || `the checklist counts ${n} unnamed predicates against ${owed.length} final unresolved records`
   } }))
+// Nonblank and naming nothing. "needs more investigation" passes every
+// blankness check and leaves the Unresolved section saying only that
+// something is unresolved — which is the section the contract calls
+// worthless without a predicate. The verifier's plural field is an enum the
+// schema enforces; this one is prose (the prompt asks for the predicate AND
+// what would settle it), so nothing but an explicit check holds it.
+R.push(await run('unresolved predicate names nothing', { ...BASE }, { adjVaguePredicate: true,
+  expect: (res) => {
+    const vague = res.candidate_results.filter((r) => r.state === 'unresolved'
+      && r.unsettled_predicate === 'needs more investigation')
+    if (!vague.length) return 'no candidate carried the vague predicate, so the check is untested'
+    if (!(res.disclosure_checklist.unresolved_without_named_predicate >= vague.length)) {
+      return `${vague.length} predicate(s) naming nothing counted as named in the checklist`
+    }
+    return res.ledger.malformed_results.some((m) => /did not name which of/.test(m.why))
+      || 'a predicate naming none of the three was neither reported nor recorded as malformed'
+  } }))
+
 // A verdict the grounding guard forces back to unresolved lands in the same
 // section and owes the same predicate, even though the adjudicator said
 // substantiated.

@@ -333,7 +333,7 @@ mutate "downgrade keeps the attacker's evidence" "    grade: (hasConcreteCounter
 # A verdict has to say what decided it, and name what it could not settle.
 mutate "verdict states its decisive evidence" "  const canSubstantiate = groundedRefutation && selfConsistent && decisiveStated" "  const canSubstantiate = groundedRefutation && selfConsistent"
 mutate "rejection states its decisive evidence" "  const canRefute = groundedRefutation && unsettledNamesValid && decisiveStated && PREDICATES.some((k) =>" "  const canRefute = groundedRefutation && unsettledNamesValid && PREDICATES.some((k) =>"
-mutate "unsettled predicate is non-blank" "  if (v && v.state === 'unresolved' && !nonblank(v.unsettled_predicate)) {" "  if (v && v.state === 'unresolved' && !v.unsettled_predicate) {"
+mutate "unsettled predicate names one of the three" "  if (v && v.state === 'unresolved' && !namesPredicate(v.unsettled_predicate)) {" "  if (v && v.state === 'unresolved' && !nonblank(v.unsettled_predicate)) {"
 mutate "blank predicate is not a name" "    unsettled_predicate: v && nonblank(v.unsettled_predicate) ? v.unsettled_predicate : null," "    unsettled_predicate: v ? (v.unsettled_predicate || null) : null,"
 
 # Reachable after all. Two rounds of sweeps missed it because they drifted
@@ -348,7 +348,7 @@ mutate "the probe's prediction reaches the check" "  return p && p.constructed ?
 
 # Every FINAL unresolved record owes a named predicate, not only the ones the
 # adjudicator itself called unresolved.
-mutate "forced unresolved owes a predicate" "      r.state === 'unresolved' && !nonblank(r.unsettled_predicate)).length," "      r.adjudicated_state === 'unresolved' && !nonblank(r.unsettled_predicate)).length,"
+mutate "forced unresolved owes a predicate" "      r.state === 'unresolved' && !namesPredicate(r.unsettled_predicate)).length," "      r.adjudicated_state === 'unresolved' && !namesPredicate(r.unsettled_predicate)).length,"
 
 # A citation without a statement is a location, not support.
 mutate "predicates must state a finding" "    && nonblank(r[k].finding)" "    "
@@ -420,7 +420,7 @@ mutate "emergent count excludes uncredited" "    emergent_candidates: [...candid
 mutate "uncredited emergents are counted" "    emergent_candidates_outside_their_region: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe' && !c.from_region).length," "    emergent_candidates_outside_their_region: 0,"
 mutate "frontier ranks deferred verifiers" "    const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate', 'candidate_verifier', 'adjudication_batch']" "    const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate']"
 
-mutate "checklist counts unnamed predicates" "      r.state === 'unresolved' && !nonblank(r.unsettled_predicate)).length," "      false).length,"
+mutate "checklist counts unnamed predicates" "      r.state === 'unresolved' && !namesPredicate(r.unsettled_predicate)).length," "      false).length,"
 
 # Previously excluded as equivalent, restored and measured instead. absorb()
 # sorts each finder's OWN list, which does not make the concatenated array

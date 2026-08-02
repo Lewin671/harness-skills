@@ -1060,6 +1060,87 @@ else
   bad "review: --commit reaches codex as the resolved object name" "exit $status, argv: $(grep '^exec review' "$argv_log" | head -1)"
 fi
 
+# --base runs from the merge base to the WORKING TREE, because that is the
+# scope codex itself reviews: `git diff <merge-base>` with no second revision.
+# Checking against HEAD instead declares an empty scope exactly when HEAD is
+# already at the base and the only changes are uncommitted — the common case
+# of "review my work before I commit it on this branch".
+wtbase="${workdir}/wtbase"
+git init -q "$wtbase"
+printf 'one\n' > "$wtbase/f.txt"
+git -C "$wtbase" add -A
+git -C "$wtbase" "${commit_env[@]}" commit -q -m base
+wtbase_branch="$(git -C "$wtbase" rev-parse --abbrev-ref HEAD)"
+printf 'uncommitted\n' >> "$wtbase/f.txt"
+stderr="${workdir}/wtbase.err"
+argv_log="${workdir}/argv-wtbase.log"
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$wtbase" --base "$wtbase_branch" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review --base' "$argv_log" 2>/dev/null; then
+  ok "review: --base reviews through the working tree when HEAD is at the base"
+else
+  bad "review: --base reviews through the working tree when HEAD is at the base" "exit $status, $(head -1 "$stderr")"
+fi
+
+# A MERGE commit. `git show` on one uses combined-diff semantics and prints
+# nothing when each parent's changes survive intact, so an ordinary merge
+# would be misreported as an empty commit and the review skipped. Against the
+# first parent it is a real diff.
+mrg="${workdir}/merge"
+git init -q "$mrg"
+printf 'base\n' > "$mrg/shared.txt"
+git -C "$mrg" add -A
+git -C "$mrg" "${commit_env[@]}" commit -q -m base
+mrg_main="$(git -C "$mrg" rev-parse --abbrev-ref HEAD)"
+git -C "$mrg" checkout -q -b side
+printf 'from side\n' > "$mrg/side.txt"
+git -C "$mrg" add -A
+git -C "$mrg" "${commit_env[@]}" commit -q -m side
+git -C "$mrg" checkout -q "$mrg_main"
+printf 'from main\n' > "$mrg/main.txt"
+git -C "$mrg" add -A
+git -C "$mrg" "${commit_env[@]}" commit -q -m main
+git -C "$mrg" "${commit_env[@]}" merge -q --no-ff -m merge side >/dev/null 2>&1
+mrg_head="$(git -C "$mrg" rev-parse HEAD)"
+# The fixture is only meaningful if `git show` really is empty here.
+if [ -n "$(git -C "$mrg" show --pretty=format: --name-only "$mrg_head")" ]; then
+  bad "review: a merge commit is not misreported as empty" "fixture: git show is non-empty, so the two paths agree"
+else
+  stderr="${workdir}/merge.err"
+  argv_log="${workdir}/argv-merge.log"
+  FAKE_ARGV_LOG="$argv_log" \
+    "$wrapper" review --repo "$mrg" --commit "$mrg_head" --timeout 30 >/dev/null 2> "$stderr"
+  status=$?
+  if [ "$status" = 0 ] && grep -q -- "^exec review --commit ${mrg_head}" "$argv_log" 2>/dev/null; then
+    ok "review: a merge commit is not misreported as empty"
+  else
+    bad "review: a merge commit is not misreported as empty" "exit $status, $(head -1 "$stderr")"
+  fi
+fi
+
+# A repository whose config hides untracked files. `status.showUntrackedFiles=no`
+# makes a plain `git status --porcelain` print nothing for a tree whose only
+# change is an untracked file, so --uncommitted would report nothing to review
+# and skip a scope codex would have read in full.
+hid="${workdir}/hidden-untracked"
+git init -q "$hid"
+printf 'seed\n' > "$hid/seed.txt"
+git -C "$hid" add -A
+git -C "$hid" "${commit_env[@]}" commit -q -m base
+git -C "$hid" config status.showUntrackedFiles no
+printf 'new\n' > "$hid/only-untracked.txt"
+stderr="${workdir}/hidden.err"
+argv_log="${workdir}/argv-hidden.log"
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$hid" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: an untracked-only change is reviewed even when config hides it"
+else
+  bad "review: an untracked-only change is reviewed even when config hides it" "exit $status, $(head -1 "$stderr")"
+fi
+
 # A repository path carrying a line break would break the resume descriptor
 # out of its own line and forge a later standalone `session:` marker than the
 # wrapper's own — the value a follow-up feeds straight back to --continue.

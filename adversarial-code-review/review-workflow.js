@@ -1067,6 +1067,18 @@ function evidenceProblem(c) {
 // can override a refuting adjudicator.
 const nonblank = (v) => typeof v === 'string' && v.trim().length > 0
 
+// The three predicates every claim is decomposed into. Module scope because
+// two different checks need them: the verifier's `unsettled_predicates` is an
+// enum the schema enforces, while the adjudicator's `unsettled_predicate` is
+// prose — the prompt asks for the predicate AND what would settle it — so
+// nothing but this can hold it to naming one.
+const PREDICATE_NAMES = ['semantics', 'reachability', 'contract_violation']
+
+// "needs more investigation" is nonblank and names nothing. An Unresolved
+// section that does not say WHICH predicate stayed unknown is the section the
+// contract calls worthless, so blankness is not the bar — naming is.
+const namesPredicate = (v) => nonblank(v) && PREDICATE_NAMES.some((k) => v.includes(k))
+
 // A high-risk region is a probe TARGET, and probe slots are rationed: the
 // profile funds the first few and defers the rest. So a region naming a file
 // nobody reviewed, or an inverted range that no candidate can ever fall
@@ -2378,7 +2390,7 @@ const results = candidates.map((c) => {
   // forbids treating as support. Rejection needs at least one falsified, for
   // the mirror-image reason: dropping a candidate into Rejected on evidence
   // nobody could ground loses a real defect with no way back.
-  const PREDICATES = ['semantics', 'reachability', 'contract_violation']
+  const PREDICATES = PREDICATE_NAMES
   const holdsOf = (r, k) => (r && r[k] && r[k].holds) || null
   // "cited" is load-bearing in both directions: a predicate that names no code
   // is an assertion, and the contract accepts assertions from nobody.
@@ -2486,8 +2498,9 @@ const results = candidates.map((c) => {
     })
     state = 'substantiated'
   }
-  if (v && v.state === 'unresolved' && !nonblank(v.unsettled_predicate)) {
-    malformed('adjudicator', c.id, 'unresolved verdict did not name the predicate that stayed unsettled')
+  if (v && v.state === 'unresolved' && !namesPredicate(v.unsettled_predicate)) {
+    malformed('adjudicator', c.id,
+      `unresolved verdict did not name which of ${PREDICATE_NAMES.join(' / ')} stayed unsettled`)
   }
   if (!v) {
     ledger.forced_unresolved.push({ candidate_id: c.id, anchor: `${c.file}:${c.line}`, why: 'no adjudication verdict for this candidate' })
@@ -2709,7 +2722,7 @@ return {
     // unresolved lands in the Unresolved Candidates section with no predicate
     // named either — and that is the section which is worthless without one.
     unresolved_without_named_predicate: results.filter((r) =>
-      r.state === 'unresolved' && !nonblank(r.unsettled_predicate)).length,
+      r.state === 'unresolved' && !namesPredicate(r.unsettled_predicate)).length,
     actions_deferred: ledger.deferred.length,
     agent_failures: ledger.agent_failures.length,
     malformed_results: ledger.malformed_results.length,
