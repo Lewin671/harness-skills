@@ -365,10 +365,17 @@ one actually bought. Three lines, above the four sections — the
 *achieved* numbers, never the intended ones:
 
 ```text
-Tradeoff:          balanced; 42.1/48 weighted units; 11.8k output tokens
+Tradeoff:          balanced; 42.1/48 weighted units; 11.8k drawn from the token pool
 Search breadth:    5/7 eligible lenses; 4/5 high-risk regions probed; 1 supplemental lens skipped
 Verification depth: 9/12 candidates adjudicated; 2 executed, 4 probe-only, 3 unverified by budget
 ```
+
+The token figure is the POOL reading, not this review's own spend. The
+pool is shared with the main loop and any concurrent workflow, and the
+runtime exposes no finer measurement — so it is an upper bound, exact
+only when nothing else ran alongside. Say "drawn from the pool", never
+"this review spent": an achieved number that quietly includes someone
+else's work is the same overstatement as an intended one.
 
 Plus one frontier sentence naming what the next increment of budget
 would buy first — for example, "next budget would execute C7, then add

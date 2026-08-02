@@ -46,12 +46,23 @@ export GIT_NO_LAZY_FETCH=1
 # `-z`, not the line form: measured, a worktree path containing a NEWLINE is
 # emitted raw and unquoted, so a line-oriented reader sees two records and the
 # real path in neither — and that root then goes unchecked.
+# The exit status rides the stream as a final NUL record. A process
+# substitution's status is UNREACHABLE — `set -euo pipefail` does not see it,
+# so a git that fails or is killed reads as a repository with no worktrees and
+# every containment check silently passes. `&&`/`||` rather than `;` because
+# set -e inside the substitution would kill it before the marker was written.
 acr_roots=()
+acr_wt_status=missing
 while IFS= read -r -d '' acr_rec; do
   case "${acr_rec}" in
     'worktree '*) acr_roots+=("${acr_rec#worktree }") ;;
+    'acr_status '*) acr_wt_status="${acr_rec#acr_status }" ;;
   esac
-done < <(git worktree list --porcelain -z)
+done < <(git worktree list --porcelain -z && printf 'acr_status 0\0' || printf 'acr_status %s\0' "$?")
+if [ "${acr_wt_status}" != 0 ]; then
+  echo "could not enumerate worktrees (${acr_wt_status}); refusing to place scratch blind" >&2
+  exit 1
+fi
 acr_roots+=("$(git rev-parse --absolute-git-dir)")
 acr_roots+=("$(git rev-parse --path-format=absolute --git-common-dir)")
 for acr_repo in "${acr_roots[@]}"; do
@@ -108,17 +119,25 @@ git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" > "${tmp}/patch.
 # Untracked files exist only in the working tree, so they belong to the
 # uncommitted scope alone. Added without touching the index.
 if [ "${untracked}" = 1 ]; then
-  # Read the list FIRST, then loop. A `while` on the right of a pipe runs in a
-  # subshell, so nothing it does can stop the outer shell; and the status has
-  # to be captured with `|| st=$?` because exit 1 here is the ordinary case —
-  # `--no-index` reports "they differ" that way, and under `set -e` a bare
-  # invocation aborts on it. Anything ABOVE 1 is a real failure, and
-  # swallowing it drops a file from the patch while the manifest still names
-  # it: included_paths would then describe something the bound patch lacks.
+  # Read the list FIRST, then loop: a `while` on the right of a pipe runs in a
+  # subshell, so nothing it does can stop the outer shell.
+  # Via a FILE, not a process substitution. A substitution's exit status is
+  # unreachable — a git that fails or is killed mid-list reads as "no
+  # untracked files" and the patch quietly omits them while the manifest below
+  # still names them. A redirection to a real file gives git's status
+  # directly, and reading it back keeps the loop in this shell. The status
+  # cannot ride the stream here the way it does for worktrees: these records
+  # are PATHS, and an attacker can create a file named like any marker.
   acr_untracked=()
-  while IFS= read -r -d '' f; do acr_untracked+=("$f"); done \
-    < <(git ls-files --others --exclude-standard -z)
+  git ls-files --others --exclude-standard -z > "${tmp}/untracked.z" ||
+    { echo "could not enumerate untracked files" >&2; exit 1; }
+  while IFS= read -r -d '' f; do acr_untracked+=("$f"); done < "${tmp}/untracked.z"
   for f in ${acr_untracked[@]+"${acr_untracked[@]}"}; do
+    # The per-file status needs `|| st=$?` because exit 1 is the ordinary case
+    # here: `--no-index` reports "they differ" that way, and under `set -e` a
+    # bare invocation aborts on it. Anything ABOVE 1 is a real failure, and
+    # swallowing it drops a file from the patch while the manifest still names
+    # it — included_paths would then describe something the bound patch lacks.
     st=0
     git diff --no-ext-diff --no-textconv --no-index --binary -- /dev/null "${f}" \
       >> "${tmp}/patch.diff" || st=$?
@@ -422,17 +441,25 @@ same filtered pathspecs, and cover all three shapes of change:
 # it renders a skill, so the unparenthesised spelling would be substituted away
 # before the recipe ever reached awk.
 git diff --no-ext-diff --no-textconv --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
-  awk '/^--- a\//{o=substr($(0),7); saw_old=1; next}
-       /^\+\+\+ /{
-             # ONLY when the previous line was the `--- ` half. An ADDED source
-             # line reading `++ b/forged` is emitted as `+++ b/forged`, which is
-             # indistinguishable from a header on its own — and taking it as one
-             # files every following hunk under a path the artifact chose. With
-             # an explicit range list, candidates outside it are rejected, so
-             # that silently discards real findings.
-             if (!saw_old) next
-             saw_old=0
-             f=($(0)=="+++ /dev/null") ? o : substr($(0),7); del=($(0)=="+++ /dev/null")}
+  awk '# A header pair is only a header pair INSIDE a file header — between
+       # `diff --git` and the first hunk. Requiring the `--- ` half is not
+       # enough: one hunk that rewrites a source line `-- a/forged` into
+       # `++ b/forged` is emitted as `--- a/forged` then `+++ b/forged`, a
+       # complete and well-formed-looking pair, and every following hunk is
+       # then filed under the path the artifact chose. With an explicit range
+       # list, candidates outside it are rejected, so that silently discards
+       # real findings. Content lines always carry a +/-/space prefix, so no
+       # hunk body can spell `diff --git ` at the start of a line.
+       /^diff --git /{inhdr=1; f=""; o=""; del=0; saw_old=0; next}
+       # `--- `, not `--- a/`: a NEW file has `--- /dev/null`, and skipping it
+       # leaves `f` holding the PREVIOUS file — which both loses the new
+       # file`s range and invents one the previous file never had.
+       /^--- /{if(!inhdr) next
+             o=($(0)=="--- /dev/null") ? "" : substr($(0),7); saw_old=1; next}
+       /^\+\+\+ /{if(!inhdr || !saw_old) next
+             saw_old=0; inhdr=0
+             f=($(0)=="+++ /dev/null") ? o : substr($(0),7); del=($(0)=="+++ /dev/null")
+             next}
        /^@@/{if(f=="") next;
              split($(3),a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2])+0;
              if(del){ split($(2),b,","); os=substr(b[1],2)+0; on=(b[2]==""?1:b[2])+0;

@@ -376,7 +376,10 @@ common_env_checks() {
   # temporary file under TMPDIR, so a repo-local TMPDIR would be written —
   # briefly, but written — inside the tree this run promises only to read, and
   # the relocation that fixes that used to happen afterwards.
-  common_resolve_scratch
+  # Explicit, not bare: this can now refuse when the worktree list cannot be
+  # read, and a refusal that depends on `set -e` reaching a function's return
+  # value is one `if` away from being swallowed.
+  common_resolve_scratch || exit 3
 
   # A partial clone fetches missing objects on demand, so a precheck that
   # needs one reaches the network and writes .git/objects before any sandbox
@@ -621,15 +624,29 @@ common_resolve_scratch() {
   # `-z`, not the line form: measured, a worktree path containing a newline is
   # emitted RAW and unquoted, so a line-oriented reader sees two records and
   # the real path in neither. NUL-terminated records keep it whole.
-  local wt rec
+  # The exit status rides the stream as a final NUL record. A process
+  # substitution's status is unreachable from out here, so a git that fails or
+  # is killed would read as a repository with a single worktree and every
+  # sibling root would go unchecked — a CODEX_HOME under one of them then
+  # passes the containment test and the run writes into that checkout. The
+  # marker cannot be forged: `--porcelain` keys are a fixed set, and a path
+  # containing a newline stays inside its own record under `-z`.
+  local wt rec wt_status=missing
   while IFS= read -r -d '' rec; do
     case "$rec" in
       'worktree '*) wt="${rec#worktree }" ;;
+      'cso_status '*) wt_status="${rec#cso_status }"; continue ;;
       *) continue ;;
     esac
     resolved="$(cd -- "$wt" 2>/dev/null && pwd -P)" || continue
     repo_paths+=("$resolved")
-  done < <(git worktree list --porcelain -z 2>/dev/null)
+  done < <(git worktree list --porcelain -z 2>/dev/null &&
+             printf 'cso_status 0\0' || printf 'cso_status %s\0' "$?")
+  if [ "$wt_status" != 0 ]; then
+    echo "error: could not enumerate the repository's worktrees (${wt_status})." >&2
+    echo "hint: every worktree root has to be known before a scratch or CODEX_HOME path can be called outside the repository; refusing rather than checking a partial list." >&2
+    return 3
+  fi
   for p in "$(git rev-parse --absolute-git-dir 2>/dev/null || true)" \
            "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"; do
     [ -n "$p" ] || continue

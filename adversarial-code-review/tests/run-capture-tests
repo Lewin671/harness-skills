@@ -326,6 +326,78 @@ else
   bad "a worktree path containing a newline is still recognised" "fixture: git refused the path"
 fi
 
+# --- an enumeration that FAILS is not an empty one --------------------------
+#
+# A process substitution's exit status is unreachable from the shell reading
+# it, and `set -euo pipefail` does not change that. A git that fails or is
+# killed therefore reads as "no worktrees" and "no untracked files": the first
+# lets scratch land in a sibling checkout, the second drops files from the
+# patch while the manifest still names them.
+
+shimdir="${WORK}/shim-bin"
+mkdir -p "$shimdir"
+real_git="$(command -v git)"
+# Fail exactly ONE git subcommand, chosen by an environment variable, and pass
+# everything else through. A shim that broke git in general would make the
+# recipe exit for reasons that have nothing to do with the check under test.
+cat > "${shimdir}/git" <<GITSHIM
+#!/usr/bin/env bash
+# Fail the Nth \`ls-files --others\` and no other, counted in a file so the
+# count survives across the separate git processes the recipe runs. The
+# recipe calls \`--others\` several times — the capture list first, then
+# acr_manifest, which already propagates its own failure. Failing every one
+# would prove only that the LATER guard works and leave the capture list
+# untested, which is exactly the mistake this counter exists to avoid.
+case "\${ACR_SHIM_FAIL:-}" in
+  worktree) [ "\${1:-}" = worktree ] && [ "\${2:-}" = list ] && {
+              echo "fatal: fixture forced worktree list to fail" >&2; exit 128; } ;;
+  lsfiles)  if [ "\${1:-}" = ls-files ]; then
+              for a in "\$@"; do
+                if [ "\$a" = --others ]; then
+                  n=0; [ -f "\${ACR_SHIM_COUNT}" ] && n="\$(cat "\${ACR_SHIM_COUNT}")"
+                  n=\$((n + 1)); printf '%s' "\$n" > "\${ACR_SHIM_COUNT}"
+                  [ "\$n" = "\${ACR_SHIM_NTH:-1}" ] && {
+                    echo "fatal: fixture forced ls-files --others #\$n to fail" >&2; exit 128; }
+                  break
+                fi
+              done
+            fi ;;
+esac
+exec "${real_git}" "\$@"
+GITSHIM
+chmod +x "${shimdir}/git"
+
+shimrepo="$(new_repo shimrepo)"
+git -C "$shimrepo" add -A
+git -C "$shimrepo" "${commit_env[@]}" commit -q -m base
+printf 'edit\n' >> "${shimrepo}/tracked.txt"
+printf 'loose\n' > "${shimrepo}/loose.txt"
+
+# Pass-through first: whatever the failing cases prove, it is not that the
+# shim itself breaks the recipe.
+status="$(PATH="${shimdir}:$PATH" run_capture "$shimrepo" 'diff_args=(HEAD); untracked=1')"
+if [ "$status" = 0 ]; then
+  ok "the git shim passes through when nothing is forced to fail"
+else
+  bad "the git shim passes through when nothing is forced to fail" "exit $status"
+fi
+
+status="$(ACR_SHIM_FAIL=worktree PATH="${shimdir}:$PATH" run_capture "$shimrepo" 'diff_args=(HEAD); untracked=1')"
+if [ "$status" != 0 ]; then
+  ok "a failing worktree enumeration stops the capture"
+else
+  bad "a failing worktree enumeration stops the capture" "exit 0 — the roots were never checked"
+fi
+
+rm -f "${WORK}/shim-count"
+status="$(ACR_SHIM_FAIL=lsfiles ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count" \
+  PATH="${shimdir}:$PATH" run_capture "$shimrepo" 'diff_args=(HEAD); untracked=1')"
+if [ "$status" != 0 ]; then
+  ok "a failing untracked enumeration stops the capture"
+else
+  bad "a failing untracked enumeration stops the capture" "exit 0 — the patch would omit untracked files the manifest names"
+fi
+
 # --- scratch never lands inside the repository -----------------------------
 
 inside="$(new_repo inside)"
@@ -399,9 +471,20 @@ printf 'brand\nnew\n' > "${rng}/fresh.txt"          # untracked, two lines
 # filed under a path the artifact chose, and with an explicit range list every
 # candidate outside it is rejected.
 printf 'l1\nl2\nl3\nl4\nl5\nl6\n' > "${rng}/forge.txt"
-git -C "$rng" add forge.txt
+# And the PAIRED shape, which a `saw_old` guard alone does not catch: one hunk
+# rewriting `-- a/pairforged` into `++ b/pairforged` is emitted as a complete
+# `--- a/... / +++ b/...` pair. It has to be an EDIT of an existing line, so
+# the old side is committed here and changed below.
+printf 'k1\n-- a/pairforged.txt\nk3\nk4\nk5\nk6\nk7\nk8\n' > "${rng}/pair.txt"
+# A file added by this change: its header is `--- /dev/null`, so a rule keyed
+# on `--- a/` skips the pair entirely and the hunk keeps the PREVIOUS file's
+# name — losing this file's range and inventing one the other file never had.
+git -C "$rng" add forge.txt pair.txt
 git -C "$rng" "${commit_env[@]}" commit -q -m forge
 printf 'l1\n++ b/forged.txt\nl2\nl3\nl4\nCHANGED\nl6\n' > "${rng}/forge.txt"
+printf 'k1\n++ b/pairforged.txt\nk3\nk4\nk5\nk6\nk7\nLATER\n' > "${rng}/pair.txt"
+printf 'add1\nadd2\nadd3\n' > "${rng}/added.txt"
+git -C "$rng" add added.txt
 rng_out="${WORK}/ranges.out"
 rng_status=0
 (
@@ -436,6 +519,18 @@ else
   else
     ok "changed ranges: a forged +++ line is not a header"
   fi
+  # The paired shape. Same two halves: nothing under the forged path, and the
+  # later hunk still under the real one.
+  if grep -q '^pairforged\.txt ' "$rng_out"; then
+    bad "changed ranges: a forged --- +++ PAIR is not a header" "$(tr '\n' '|' < "$rng_out")"
+  elif ! grep -qE '^pair\.txt 8 8$' "$rng_out"; then
+    bad "changed ranges: the hunk after a forged pair keeps its real path" "$(tr '\n' '|' < "$rng_out")"
+  else
+    ok "changed ranges: a forged --- +++ pair is not a header"
+  fi
+  # A newly added file gets its OWN range, and no range is invented for
+  # whichever file the diff happened to emit before it.
+  check_range 'added\.txt 1 3' 'a newly added tracked file'
 fi
 
 echo

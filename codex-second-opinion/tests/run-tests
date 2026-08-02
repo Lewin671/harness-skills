@@ -104,7 +104,22 @@ if [ -n "${FAKE_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_FAIL_ONCE" ]; then
   echo '{"type":"error","message":"unknown model"}'
   exit 1
 fi
-[ -n "${FAKE_SLEEP:-}" ] && sleep "$FAKE_SLEEP"
+# Two kinds of descendant, because a parent-only kill is invisible to either
+# one alone. Real codex spawns both: shell commands that inherit the
+# pipeline's stdout, and ones that do not.
+#   - the FOREGROUND stall holds stdout, so killing only the parent leaves the
+#     wrapper blocked until the stall ends on its own — that is the elapsed
+#     time.
+#   - the DETACHED one holds nothing, so the wrapper can return while it is
+#     still running — that is the survivor. It has to outlive the foreground
+#     stall or it would be gone by the time anyone looked.
+if [ -n "${FAKE_SLEEP:-}" ]; then
+  if [ -n "${FAKE_CHILD_PID_FILE:-}" ]; then
+    sleep "$(( FAKE_SLEEP * 2 ))" >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_CHILD_PID_FILE"
+  fi
+  sleep "$FAKE_SLEEP"
+fi
 # FAKE_SILENT_RETRY: succeed without writing a result at all.
 if [ -n "${FAKE_SILENT_RETRY:-}" ]; then
   echo '{"type":"item.completed"}'
@@ -1127,6 +1142,52 @@ else
   bad "review: the --base precheck does not rewrite .git/index" "exit $base_idx_status, index changed: $([ "$base_idx_before" = "$base_idx_after" ] && echo no || echo yes)"
 fi
 
+# A `git worktree list` that fails must stop the run, not shrink the set of
+# roots it checks. The status of a process substitution is unreachable from
+# the shell that reads it, so without the trailing status marker this reads as
+# a repository with one worktree — and a CODEX_HOME under a sibling checkout
+# then passes containment and the run writes into that tree.
+wtfail="${workdir}/wtfail-bin"
+mkdir -p "$wtfail"
+real_git="$(command -v git)"
+cat > "${wtfail}/git" <<GITSHIM
+#!/usr/bin/env bash
+# Fail ONLY the worktree enumeration; every other git call is genuine, so a
+# refusal here cannot be the fixture breaking git in general.
+if [ "\${1:-}" = worktree ] && [ "\${2:-}" = list ]; then
+  echo "fatal: fixture forced worktree list to fail" >&2
+  exit 128
+fi
+exec "${real_git}" "\$@"
+GITSHIM
+chmod +x "${wtfail}/git"
+stderr="${workdir}/wtfail.err"
+argv_log="${workdir}/argv-wtfail.log"
+PATH="${wtfail}:$PATH" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'could not enumerate' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a failing worktree enumeration stops the run"
+else
+  bad "review: a failing worktree enumeration stops the run" "exit $status"
+fi
+# The shim must not be the thing that makes it fail: the same fixture with the
+# enumeration working has to still run.
+argv_log="${workdir}/argv-wtok.log"
+cat > "${wtfail}/git" <<GITSHIM2
+#!/usr/bin/env bash
+exec "${real_git}" "\$@"
+GITSHIM2
+PATH="${wtfail}:$PATH" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a pass-through git shim still runs (the refusal was the failure, not the shim)"
+else
+  bad "review: a pass-through git shim still runs (the refusal was the failure, not the shim)" "exit $status"
+fi
+
 # core.fsmonitor names a program git runs while refreshing, outside every
 # sandbox codex could impose and before any of its feature gates exist.
 # --no-optional-locks does not stop it; -c core.fsmonitor=false does.
@@ -1334,8 +1395,38 @@ fi
 
 # --- watchdog ----------------------------------------------------------
 
-FAKE_SLEEP=30 "$wrapper" review --repo "$dirty" --timeout 1 >/dev/null 2>&1
-check_exit "review: hung review is killed with exit 5" 5 "$?"
+child_pid_file="${workdir}/watchdog-child.pid"
+rm -f "$child_pid_file"
+start_s="$(date +%s)"
+FAKE_SLEEP=30 FAKE_CHILD_PID_FILE="$child_pid_file" \
+  "$wrapper" review --repo "$dirty" --timeout 1 >/dev/null 2>&1
+watchdog_status=$?
+elapsed_s=$(( $(date +%s) - start_s ))
+check_exit "review: hung review is killed with exit 5" 5 "$watchdog_status"
+
+# Exit 5 alone does not prove the group was signalled: the wrapper reaches
+# that verdict on its own, and a parent-only kill produces the same code while
+# leaving codex's children running. Measured — with the group kill replaced by
+# a parent-only one, the whole suite stayed green. So assert the descendant is
+# gone, and that the run ended near its timeout rather than near FAKE_SLEEP.
+watchdog_child="$(cat "$child_pid_file" 2>/dev/null || true)"
+# The KILL backstop follows a TERM and a grace loop, so allow a moment for it.
+sleep 2
+if [ -z "$watchdog_child" ]; then
+  bad "review: the timeout kills codex's descendants, not only codex" "the fake never published a child pid"
+elif kill -0 "$watchdog_child" 2>/dev/null; then
+  kill -KILL "$watchdog_child" 2>/dev/null || true
+  bad "review: the timeout kills codex's descendants, not only codex" "pid ${watchdog_child} outlived the run"
+else
+  ok "review: the timeout kills codex's descendants, not only codex"
+fi
+# A timeout that only returned once FAKE_SLEEP elapsed would satisfy the exit
+# code without having interrupted anything.
+if [ "$elapsed_s" -lt 20 ]; then
+  ok "review: the timeout returns on its own deadline, not the stall's"
+else
+  bad "review: the timeout returns on its own deadline, not the stall's" "${elapsed_s}s for a 1s timeout against a 30s stall"
+fi
 
 # --- cancellation is forwarded into codex's process group --------------
 #

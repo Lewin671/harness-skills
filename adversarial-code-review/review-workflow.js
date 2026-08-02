@@ -2587,7 +2587,14 @@ return {
     committed_wu: Math.round(committedWU * 100) / 100,
     launches: launches.length,
     launch_detail: launches,
-    output_tokens: hasTokenTarget ? budget.spent() : null,
+    // The POOL reading, not this run's own spend. budget.spent() counts the
+    // whole turn — the main loop and every concurrent workflow share it — and
+    // the sandbox exposes nothing finer: agent() returns a result, never a
+    // token count. So this is an upper bound on what the review cost, exact
+    // only when nothing else was running. Reporting it as the run's own spend
+    // would be the achieved-number claim the contract forbids; naming it for
+    // what it is keeps the frontier sentence honest.
+    pool_tokens_drawn: hasTokenTarget ? budget.spent() : null,
     token_target: hasTokenTarget ? budget.total : null,
   },
 

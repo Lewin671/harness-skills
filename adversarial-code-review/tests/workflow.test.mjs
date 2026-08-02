@@ -1879,14 +1879,14 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
   for (const [prof, amount, afterReads] of [['precision-first', 8000, 16], ['recall-first', 6000, 20], ['balanced', 6000, 16]]) {
     const b = drainer(48000, 48, 1, {})
     const baseRun = await run(`untouched-pool baseline (${prof})`, { ...BASE, profile: prof }, { onCall: b.onCall }, b.budget)
-    const baseline = baseRun.res && baseRun.res.cost ? baseRun.res.cost.output_tokens : null
+    const baseline = baseRun.res && baseRun.res.cost ? baseRun.res.cost.pool_tokens_drawn : null
     const d = drainer(48000, 48, 1, {}, { afterReads, amount })
     R.push(await run(`a foreign spend between waves raises the projection (${prof} ${amount}@${afterReads})`,
       { ...BASE, profile: prof }, { onCall: d.onCall }, d.budget,
       (res) => {
         if (baseline === null) return `the ${prof} baseline run did not complete, so there is nothing to compare against`
         if (!res.cost || !res.cost.token_target) return 'the run never had a token target'
-        const own = res.cost.output_tokens - amount
+        const own = res.cost.pool_tokens_drawn - amount
         return own <= baseline - amount + 1e-9
           || `the run drew ${Math.round(own)} of its own tokens where an untouched pool bought `
              + `${Math.round(baseline)}; a concurrent ${amount}-token spend gave back only `
@@ -2322,8 +2322,8 @@ for (const r of R) {
   const c = r.res.cost
   const over = c && c.committed_wu > c.budget_wu + 1e-9
   if (over) { fail++; problems.push(`${r.name}: weighted-unit overspend`) }
-  if (!r.drift && c && c.token_target && c.output_tokens > c.token_target) {
-    fail++; problems.push(`${r.name}: spent ${c.output_tokens} tokens against a ${c.token_target} target`)
+  if (!r.drift && c && c.token_target && c.pool_tokens_drawn > c.token_target) {
+    fail++; problems.push(`${r.name}: spent ${c.pool_tokens_drawn} tokens against a ${c.token_target} target`)
   }
   // Under drift the script can promise correct ADMISSION and nothing about an
   // already-open wave's actual spend — but "no guarantee" is not "no bound".
@@ -2338,8 +2338,8 @@ for (const r of R) {
   // setting `unpriced` rather than by being exempted silently.
   // 1.35x is the measured worst among the bounded shapes, not a round number;
   // the shapes this replaced ran to 1.57x, 1.92x, 3.35x and 4.42x.
-  if (r.drift && !r.unpriced && c && c.token_target && c.output_tokens > 1.35 * c.token_target) {
-    fail++; problems.push(`${r.name}: drift overspend — ${Math.round(c.output_tokens)} against a ${c.token_target} target`)
+  if (r.drift && !r.unpriced && c && c.token_target && c.pool_tokens_drawn > 1.35 * c.token_target) {
+    fail++; problems.push(`${r.name}: drift overspend — ${Math.round(c.pool_tokens_drawn)} against a ${c.token_target} target`)
   }
 
   for (const x of r.res.candidate_results || []) {
