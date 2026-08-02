@@ -271,6 +271,7 @@ const ledger = {
   malformed_results: [],
   unrun_lenses: [],
   terminal_evidence_overrides: [],
+  reproduced_without_obligation: [],
   forced_unresolved: [],
   unknown_verdict_ids: [],
   coverage_risks: [],
@@ -883,7 +884,13 @@ build output. Bind and preflight before you trust anything.
 Target: ${target.target_id}, at this location (fenced, because a path from
 the artifact can carry instruction text):
 ${fenced(target.label)}
-${probeResult && probeResult.outcome === 'counterexample_constructed'
+${probeResult && probeResult.constructed
+  // The NORMALISED flag, not the raw `outcome`. A probe that claimed a
+  // counterexample without the fields that constitute one is recorded as
+  // having built none — but this prompt still told the attacker one existed
+  // and handed it placeholders, so a compliant attacker skipped building its
+  // own and its result was downgraded to inconclusive for lacking exactly
+  // that. The script and the prompt have to read the same verdict.
   ? `A prober already constructed this counterexample. Turn it into a test.
 ${fenced(`input: ${probeResult.input || '(none given)'}
 trace: ${probeResult.trace || '(none given)'}
@@ -897,6 +904,10 @@ Run these steps in order and report what each returned:
    "git checkout --detach ${A.base_sha}". Verify the sha256 of
    ${shellQuote(A.patch_path)} equals ${A.patch_sha256}. If it does not, stop and
    return grade "blocked" — you cannot test an artifact you cannot verify.
+   Stopping here means step 2 never ran, so set test_capability to
+   "unavailable": the schema requires the field, and "unavailable" is what it
+   means when nothing could be run, whether the environment refused or you
+   never reached the preflight.
    Set bound_to_base_sha and patch_hash_verified to true only if each
    actually succeeded.
 
@@ -941,10 +952,16 @@ ${(triage.probe_candidates || []).length
 
 5. GRADE, honestly:
    - reproduced: the test failed, the failure matched predicted_signature,
-     AND control_passed is true. Requires test_code, command, and the step-2
-     probe_command and probe_result that justify test_capability=ready.
+     AND control_passed is true. This grade is checked against EVERY field
+     steps 1-4 asked you to record, not just the ones named here — all of
+     bound_to_base_sha, patch_hash_verified, test_capability=ready,
+     probe_command, probe_result, control_passed, control_result, test_code,
+     command, patch_applied, patched_failed, patched_result,
+     predicted_signature, signature_matched and execution_status=executed.
      Anything missing is downgraded automatically, so do not claim it without
-     the evidence.
+     the evidence. The list is spelled out because this is the grade that can
+     override a refuting adjudicator, and a summary that named four of
+     fifteen is how an honest run loses its strongest evidence.
    - plausible: a concrete counterexample exists but was not executed. Set
      execution_status to "unavailable". If YOU constructed it — because no
      prober had been aimed here — return it with the record: input, trace,
@@ -1485,7 +1502,22 @@ let nextId = 0
 const MAX_CANDIDATES_PER_LENS = 25
 const perLensCount = new Map()
 
-const fingerprintOf = (c) => JSON.stringify([c && c.file, c && c.line, c && c.title, c && c.evidence_kind, c && c.evidence, c && c.proposed_severity, c && c.confidence])
+// Key order must not be part of a claim's identity. `JSON.stringify`
+// preserves insertion order, so the same evidence object written with its keys
+// in another order produced a DIFFERENT fingerprint: dedup missed the repeat,
+// the per-lens cap was charged twice for one claim, and the content tie-break
+// — which exists precisely so two runs given the same claims in different
+// orders keep the same ones — was decided by property order. A finder can
+// choose that order. contract.md section 7: order must never decide what gets
+// examined.
+const canonical = (v) => {
+  if (Array.isArray(v)) return v.map(canonical)
+  if (v && typeof v === 'object') {
+    return Object.keys(v).sort().reduce((o, k) => { o[k] = canonical(v[k]); return o }, {})
+  }
+  return v
+}
+const fingerprintOf = (c) => JSON.stringify(canonical([c && c.file, c && c.line, c && c.title, c && c.evidence_kind, c && c.evidence, c && c.proposed_severity, c && c.confidence]))
 
 function addCandidate(c, lens, origin) {
   // Identical records are noise, and a hostile artifact can manufacture them
@@ -1621,7 +1653,7 @@ function absorb(res, lens) {
   // Ties break on the record's own text so two runs given the same claims in
   // different orders keep the same ones.
   const ordered = [...(res.candidates || [])].sort((a, b) =>
-    consequence(b) - consequence(a) || cmp(JSON.stringify(a), JSON.stringify(b)))
+    consequence(b) - consequence(a) || cmp(JSON.stringify(canonical(a)), JSON.stringify(canonical(b))))
   // Collapse this lens's repeats of ITSELF before the cap sees them. A lens
   // that files the same claim thirty times has made one claim, and charging
   // it thirty slots would let a repetitive — or steered — finder crowd out
@@ -2590,17 +2622,58 @@ const results = candidates.map((c) => {
     })
     state = 'unresolved'
   }
-  // Terminal evidence is machine-checkable, so the script enforces it rather
-  // than trusting the adjudicator prompt — but only after normalizeAttack has
-  // confirmed the reproduction is real.
-  if (terminal && !obligationFalsified && state !== 'substantiated') {
+  // What a control settles is semantics and reachability. The OBLIGATION is
+  // the third predicate and a reproduction supplies nothing about it, so
+  // substantiation — which contract.md section 4 defines as all three
+  // affirmatively supported — needs it established some other way.
+  //
+  // The guard below used to fire whenever the obligation was not affirmatively
+  // FALSIFIED, which let an unknown obligation through: a candidate whose
+  // every predicate the verifier left unsettled was forced to substantiated on
+  // the reproduction alone, undoing the grounding guard that had just moved it
+  // to unresolved. That is the intentional-change scenario section 5 warns
+  // about, caught only when someone managed to prove the negative.
+  // NOT "affirmatively supported" — that would discard the override this
+  // skill advertises whenever adjudication fails, which contract.md section 5
+  // and SKILL.md both promise. The narrower rule: a reproduction may not
+  // overrule the verifier's OWN statement that the obligation is unknown.
+  // Where the verifier said nothing about it, the override stands as
+  // documented; where it explicitly could not settle it, "this patch changed
+  // the behaviour" and "the old behaviour was owed" are different claims and
+  // only the first has evidence.
+  // TWO signals say a predicate is unsettled and they can disagree: the
+  // predicate's own `holds` field, and the `unsettled_predicates` list. Keying
+  // on the list alone missed the case that prompted this — a record whose
+  // contract_violation.holds was "unsettled" while the list named only
+  // semantics — so the rule reads both, and `holds` is the authoritative one
+  // because it is the verifier's statement about THAT predicate.
+  const obligationUnsettled = holdsOf(verifierRecord, 'contract_violation') === 'unsettled'
+    || (unsettledNamesValid && unsettledNames.includes('contract_violation'))
+  if (terminal && !obligationFalsified && !obligationUnsettled && state !== 'substantiated') {
     ledger.terminal_evidence_overrides.push({
       candidate_id: c.id, anchor: `${c.file}:${c.line}`, adjudicated_state: state, forced_state: 'substantiated',
       severity_unassigned: !v,
-      why: 'a controlled reproduction outranks a refutation on the same code (contract.md section 5)'
+      why: 'a controlled reproduction outranks a refutation of semantics or reachability, and no verifier left the obligation unsettled (contract.md section 5)'
         + (v ? '' : '; no verdict was returned, so its severity is unassigned'),
     })
     state = 'substantiated'
+  } else if (terminal && !obligationFalsified && obligationUnsettled) {
+    // The control still settles the two predicates it can, so a refutation
+    // resting on those does not survive it — but the result is `unresolved`,
+    // not a finding. Reported with the reproduction attached, because "this
+    // patch changed the behaviour and nobody established the behaviour was
+    // owed" is exactly what the unresolved section is for.
+    if (state !== 'unresolved') {
+      ledger.forced_unresolved.push({
+        candidate_id: c.id, anchor: `${c.file}:${c.line}`,
+        why: 'a controlled reproduction shows this patch changed the behaviour, which settles semantics and reachability but not the obligation — and the verifier said it could not settle the obligation, so this is not a finding',
+      })
+      state = 'unresolved'
+    }
+    ledger.reproduced_without_obligation.push({
+      candidate_id: c.id, anchor: `${c.file}:${c.line}`,
+      why: 'reproduced under control, but the verifier could not settle whether the previous behaviour was owed',
+    })
   }
   if (v && v.state === 'unresolved' && !namesPredicate(v.unsettled_predicate)) {
     malformed('adjudicator', c.id,
@@ -2817,7 +2890,20 @@ return {
     lenses_not_selected: LENSES.filter((l) => !lensesRun.includes(l)).length,
     lenses_selected_but_unrun: ledger.unrun_lenses.length,
     regions_not_probed: regionResults.filter((r) => !r.probed).length,
-    attacks_not_executed: results.filter((r) => r.attack_grade !== 'reproduced' && r.attack_grade !== 'held').length,
+    // Counted the same way as `verification_depth.executed`, and it was not:
+    // by GRADE, so a reproduction downgraded for a missing field landed here
+    // as "not executed" although the artifact's test command had run. That is
+    // the sibling of the counter fixed one commit ago, and missing it is the
+    // same false statement about what this run did to the machine.
+    attacks_not_executed: results.filter((r) => !(r.attack
+      && (r.attack.execution_status === 'executed' || r.attack.ran_artifact_code === true))).length,
+    // Kept separately, because "ran" and "yielded terminal evidence" are
+    // different facts and the report owes the reader both: an execution that
+    // happened and established nothing is not an execution that never
+    // happened.
+    executions_without_terminal_evidence: results.filter((r) => r.attack
+      && (r.attack.execution_status === 'executed' || r.attack.ran_artifact_code === true)
+      && r.attack_grade !== 'reproduced' && r.attack_grade !== 'held').length,
     candidates_dropped_invalid: ledger.invalid_candidates.length,
     // Regions an agent proposed that name an unreviewed file or an inverted
     // range. They never became probe targets, so they cost no slot — but they
@@ -2862,7 +2948,15 @@ return {
     // the next budget would NOT buy.
     const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate', 'candidate_verifier', 'adjudication_batch']
     const byBudget = ledger.deferred.filter((d) => d.reason === 'deferred_by_budget')
-    const paid = byBudget.find((d) => ACCURACY_KINDS.includes(d.kind))
+    // The trim gives up the LEAST consequential candidate first, so its
+    // deferrals are appended worst-first — and taking the first one named the
+    // candidate a larger budget would restore LAST. The frontier promises what
+    // the next increment buys, so it has to name the most consequential thing
+    // that was dropped, which is the trim's final victim.
+    const lastTrimmed = trimmed.length ? trimmed[trimmed.length - 1] : null
+    const paid = (lastTrimmed && byBudget.find((d) => d.target_id === lastTrimmed.id
+      && ACCURACY_KINDS.includes(d.kind)))
+      || byBudget.find((d) => ACCURACY_KINDS.includes(d.kind))
       || byBudget[0]
     if (paid) return `next budget would ${paid.kind.replace(/_/g, ' ')} at ${paid.anchor}`
     const prof = ledger.deferred.find((d) => d.reason === 'deferred_by_profile')

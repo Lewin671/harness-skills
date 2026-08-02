@@ -301,7 +301,17 @@ establishes: that **this patch** is why the test now fails. It substantiates
 the candidate over a refutation of semantics or reachability — the two things
 a control settles.
 
-It does **not** settle the obligation, and the difference is not academic.
+It does **not** settle the obligation, and that gap cuts twice. Section 4
+requires all three predicates affirmatively supported before anything is
+substantiated, and a control supplies two of them — so a reproduction is
+terminal evidence *for what it establishes*, not a substitute for the third.
+Where the verifier says it could not settle `contract_violation`, the honest
+result is `unresolved` with the reproduction attached: this patch changed the
+behaviour, and nobody established the behaviour was owed. Reading the override
+as unconditional unless the obligation was affirmatively *falsified* makes the
+failure below reachable whenever nobody managed to prove a negative.
+
+The difference is not academic.
 Asked to break an intentional change, an attacker can author a test for the
 previous behaviour, watch it pass at `base_sha` and fail after the patch, and
 meet every reproduction requirement without anything having been violated. So

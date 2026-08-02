@@ -98,7 +98,21 @@ mutate "not_attempted vs inconclusive" "    : (probeFailed ? 'blocked' : 'not_at
 mutate "prepaid token debt" "  return (waveEstimateWU + wu + prepaidDebtWU) * ratePerWU() <= budget.remaining()" "  return (waveEstimateWU + wu) * ratePerWU() <= budget.remaining()"
 mutate "grounded-refutation guard" "  if (state === 'substantiated' && !canSubstantiate && !terminal) {" "  if (false) {"
 mutate "refutation grounding must be strong" "verifierRecord && verifierRecord.grounding === 'strong'" "verifierRecord"
-mutate "terminal evidence override" "  if (terminal && !obligationFalsified && state !== 'substantiated') {" "  if (false) {"
+# A control settles semantics and reachability. Substantiation needs all three
+# (contract.md section 4), so a reproduction may not overrule the verifier's own
+# statement that the obligation is UNKNOWN — that was promoting a record whose
+# every predicate was unsettled, undoing the grounding guard one line above.
+mutate "a reproduction does not settle an unknown obligation" "  const obligationUnsettled = holdsOf(verifierRecord, 'contract_violation') === 'unsettled'
+    || (unsettledNamesValid && unsettledNames.includes('contract_violation'))" "  const obligationUnsettled = false"
+# Both signals, because they disagree: a record can set holds='unsettled' while
+# naming only another predicate in unsettled_predicates, which is exactly the
+# shape that slipped through when only the list was read.
+mutate "the obligation-unknown check reads holds" "holdsOf(verifierRecord, 'contract_violation') === 'unsettled'
+    ||" "false ||"
+# The two execution counters must measure the same thing.
+mutate "attacks_not_executed counts what ran" "    attacks_not_executed: results.filter((r) => !(r.attack
+      && (r.attack.execution_status === 'executed' || r.attack.ran_artifact_code === true))).length," "    attacks_not_executed: results.filter((r) => r.attack_grade !== 'reproduced' && r.attack_grade !== 'held').length,"
+mutate "terminal evidence override" "  if (terminal && !obligationFalsified && !obligationUnsettled && state !== 'substantiated') {" "  if (false) {"
 # A control settles which patch caused the change, not whether the old
 # behaviour was owed.
 mutate "reproduction does not override the obligation" "  if (terminal && obligationFalsified && state !== 'unresolved') {" "  if (false) {"
@@ -233,15 +247,15 @@ mutate "candidate line is 1-indexed" "  if (!Number.isInteger(c.line) || c.line 
 mutate "canonical order before batching" "candidates.sort(byRank)" ""
 
 # The attacker must not be invited to produce evidence the script rejects.
-mutate "attack prompt requires the control" "     AND control_passed is true. Requires test_code, command, and the step-2" "     AND either control_passed is true or specification_citation is given. Also"
+mutate "attack prompt requires the control" "     AND control_passed is true. This grade is checked against EVERY field" "     AND either control_passed is true or specification_citation is given. Also"
 mutate "reproduction: control_result" "  if (!nonblank(a.control_result)) missing.push('control_result')" "  "
 mutate "trim respects tokens too" "       && (committedWU + floorsFor(candidates) > budgetWU + EPS
            || !admitTokens(floorsFor(candidates)))) {" "       && (committedWU + floorsFor(candidates) > budgetWU + EPS
            )) {"
 mutate "supplemental rollback is disclosed" "    trimmed.push(dropped)" "    "
 mutate "unsettled names must be predicates" "  const canRefute = groundedRefutation && unsettledNamesValid && decisiveStated && PREDICATES.some((k) =>" "  const canRefute = groundedRefutation && decisiveStated && PREDICATES.some((k) =>"
-mutate "frontier names the accuracy floor first" "    const paid = byBudget.find((d) => ACCURACY_KINDS.includes(d.kind))
-      || byBudget[0]" "    const paid = byBudget[0]"
+mutate "frontier names the accuracy floor first" "      || byBudget.find((d) => ACCURACY_KINDS.includes(d.kind))
+      || byBudget[0]" "      || byBudget[0]"
 
 mutate "probe evidence is fenced" "\${fenced(\`input: " "\${(\`input: "
 mutate "triage commands are fenced" "? fenced((triage." "? ((triage."
@@ -256,7 +270,7 @@ mutate "attack target location is fenced" "\${fenced(target.label)}" "\${target.
 mutate "adjudicator heading carries no raw path" "=== candidate \${e.candidate.id}" "=== candidate \${e.candidate.id} at \${e.candidate.file}:\${e.candidate.line}"
 mutate "the finder sample reprices the rest" "if (restLenses.length && !admitTokens(restLenses.length * W.finder)) {" "if (false) {"
 mutate "lens cap keeps the consequential" "  const ordered = [...(res.candidates || [])].sort((a, b) =>
-    consequence(b) - consequence(a) || cmp(JSON.stringify(a), JSON.stringify(b)))" "  const ordered = [...(res.candidates || [])]"
+    consequence(b) - consequence(a) || cmp(JSON.stringify(canonical(a)), JSON.stringify(canonical(b))))" "  const ordered = [...(res.candidates || [])]"
 mutate "duplicate probe keeps its evidence" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))" "          const existing = null"
 mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + escrow.adjudicator + escrow.verifier
 
@@ -494,6 +508,19 @@ mutate "checklist counts unnamed predicates" "      r.state === 'unresolved' && 
 # globally ordered — so neither the victim selector nor the funding order can
 # be assumed redundant.
 mutate "rollback drops by rank" "    const dropped = pickVictim(candidates.slice(beforeSupplemental))" "    const dropped = candidates[candidates.length - 1]"
+# Key order is a finder's choice, so it must not be part of a claim's identity
+# or of the tie-break that decides which claims survive a bounded selection.
+mutate "fingerprints are key-order independent" "const fingerprintOf = (c) => JSON.stringify(canonical([" "const fingerprintOf = (c) => JSON.stringify((["
+mutate "the per-lens tie-break is canonical" "cmp(JSON.stringify(canonical(a)), JSON.stringify(canonical(b))))" "cmp(JSON.stringify(a), JSON.stringify(b)))"
+# The prompt and the script have to read the same verdict about whether a
+# counterexample exists, or the attacker is told one does and downgraded for
+# not having built it.
+# SINGLE quotes: the target is JavaScript template syntax, and `${...}` inside
+# a double-quoted bash string is a parameter expansion that breaks the file.
+mutate "the attack prompt follows the normalised probe" '${probeResult && probeResult.constructed' '${probeResult && probeResult.outcome === "counterexample_constructed"'
+# The frontier promises what the NEXT unit buys; the trim gives up the least
+# consequential first, so the last victim is the one restored first.
+mutate "the frontier names the last victim" "trimmed[trimmed.length - 1]" "trimmed[0]"
 mutate "victim tie-break is deterministic" "    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c" "    if (d < 0) worst = c"
 mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.fingerprint))" "  || 0"
 
@@ -541,7 +568,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=221
+EXPECTED_TOTAL=228
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

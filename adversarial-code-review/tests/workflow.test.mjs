@@ -175,6 +175,51 @@ function makeAgent(state, s) {
       // nobody reviewed, so evidenceProblem rejects every one. If the cap is
       // charged before that check, all 25 slots are gone and the real
       // critical at the end is dropped without verification or disclosure.
+      // The SAME claim twice, the second with its evidence keys in another
+      // order. Key order is a finder's choice, so it must not create a second
+      // identity: unfixed, dedup misses it, the per-lens cap is charged twice
+      // for one claim, and the content tie-break is decided by property order.
+      // Two DISTINCT claims that tie on consequence, whose raw and canonical
+      // orderings disagree: X names `title` first, Y names `confidence`
+      // first, so raw string order puts Y ahead while canonical order — which
+      // compares the same fields regardless of how the finder wrote them —
+      // puts X ahead. Ids are assigned in acceptance order, so the id order
+      // is what reveals which comparison ran. Verified to flip.
+      // Two claims alike in severity and region membership, differing ONLY in
+      // confidence. `consequence()` is severity*100 + region*50 + confidence*10,
+      // so with the first two terms equal the confidence term is the only
+      // thing that can decide which one a bounded selection gives up. Once the
+      // fingerprint and tie-break were canonicalised, every other scenario's
+      // outcome stopped depending on that term — the ordering became stable
+      // enough without it — so deleting it left the suite green.
+      if (s.confidenceDecides && lens === 'logic correctness') {
+        const mk = (line, confidence, title) => ({
+          file: 'auth.js', line, title, proposed_severity: 'minor', confidence,
+          evidence_kind: 'present_code',
+          evidence: { anchor: `auth.js:${line}`, quoted_code: 'q', observed_behavior: 'o' },
+        })
+        // The low-confidence claim gets the HIGHER line on purpose. The final
+        // tie-break is the content fingerprint, which begins with file and
+        // line — so with the confidence term deleted the pair ties and the
+        // LOWER line is given up. Aligning line order with confidence order
+        // made the same claim get dropped either way, and the case passed
+        // with the term removed. Measured.
+        return { candidates: [mk(32, 'low', 'the unsure one'), mk(31, 'high', 'the confident one')],
+                 additional_high_risk_regions: [] }
+      }
+      if (s.keyOrderTie && lens === 'logic correctness') {
+        const ev = { anchor: 'auth.js:5', quoted_code: 'q', observed_behavior: 'o' }
+        return { candidates: [
+          { title: 'aaa', file: 'auth.js', line: 5, proposed_severity: 'major', confidence: 'high', evidence_kind: 'present_code', evidence: { ...ev } },
+          { confidence: 'high', title: 'bbb', file: 'auth.js', line: 5, proposed_severity: 'major', evidence_kind: 'present_code', evidence: { ...ev } },
+        ], additional_high_risk_regions: [] }
+      }
+      if (s.reorderedDuplicate && lens === 'logic correctness') {
+        const ev = { anchor: 'auth.js:12', quoted_code: 'if (user) allow()', observed_behavior: 'authorises any truthy user' }
+        const rev = { observed_behavior: ev.observed_behavior, quoted_code: ev.quoted_code, anchor: ev.anchor }
+        const base = { file: 'auth.js', line: 12, title: 'same claim', proposed_severity: 'critical', confidence: 'high', evidence_kind: 'present_code' }
+        return { candidates: [{ ...base, evidence: ev }, { ...base, evidence: rev }], additional_high_risk_regions: [] }
+      }
       if (s.invalidPadding && lens === 'logic correctness') {
         const pad = Array.from({ length: MAX_PAD }, (_, i) => ({
           file: 'not-reviewed.js', line: i + 1, title: `pad ${i}`,
@@ -877,8 +922,18 @@ R.push(await run('a downgraded reproduction still counts as executed', { ...BASE
     expect: (res) => {
       const ran = (res.candidate_results || []).some((r) => r.attack && r.attack.ran_artifact_code === true)
       if (!ran) return 'no attack recorded that it ran artifact code'
-      return res.verification_depth.executed >= 1
-        || 'the ledger reports executed: 0 after the artifact test command was run'
+      if (res.verification_depth.executed < 1) return 'the ledger reports executed: 0 after the artifact test command was run'
+      // Both counters, measured the same way. Counting by grade in one and by
+      // what ran in the other is how a run reports 1 executed and also counts
+      // that same target among the ones that were not.
+      const d = res.disclosure_checklist
+      const total = res.candidate_results.length
+      if (d.attacks_not_executed + res.verification_depth.executed !== total) {
+        return `executed (${res.verification_depth.executed}) + attacks_not_executed `
+          + `(${d.attacks_not_executed}) is ${d.attacks_not_executed + res.verification_depth.executed}, not ${total}`
+      }
+      return d.executions_without_terminal_evidence >= 1
+        || 'an execution that established nothing was not disclosed as such'
     } }))
 // The attacked critical must have NO counterexample, or the guard is untested.
 R.push(await run('plausible with no counterexample', { ...BASE }, { probeAlwaysFails: true, barePlausible: true }))
@@ -1530,6 +1585,69 @@ R.push(await run('blocked without a reason', { ...BASE }, { blockedNoReason: tru
   } }))
 // Regions that cannot be probe targets must not consume the slots the
 // profile funds. Both bad ones are listed FIRST, ahead of the two real ones.
+// The frontier promises what the NEXT increment of budget buys. The trim gives
+// up the least consequential candidate first, so its deferrals are appended
+// worst-first — and naming the first one named the candidate a larger budget
+// would restore last, which is the opposite of the promise.
+R.push(await run('the frontier names the candidate a larger budget restores first', { ...BASE, budget_wu: 25 }, { manyCandidates: true,
+  expect: (res) => {
+    const trimmedIds = (res.found_but_not_verified || []).map((x) => x.candidate_id)
+    // Not a silent skip: a scenario that trims fewer than two candidates
+    // cannot distinguish first from last, so it would pass with the defect in
+    // place. Fail loudly instead of proving nothing.
+    if (trimmedIds.length < 2) return `only ${trimmedIds.length} candidate(s) trimmed; this scenario cannot test the frontier's choice`
+    const last = res.found_but_not_verified[res.found_but_not_verified.length - 1]
+    return String(res.frontier).includes(last.anchor)
+      || `frontier says "${res.frontier}" but the next unit restores ${last.candidate_id} at ${last.anchor}`
+  } }))
+// Severity and region membership equal, so `consequence()` reduces to the
+// confidence term and nothing else can decide which one is given up. Budget
+// chosen so exactly ONE of the pair is trimmed: at 18 both go and at 21
+// neither does, and either way the case would prove nothing.
+// The prompt and the script must read the SAME verdict about whether a
+// counterexample exists. A probe that claimed one without the fields that
+// constitute one is normalised to `constructed: false` — and the attack
+// prompt was still following the raw `outcome`, telling the attacker a
+// counterexample already existed and handing it placeholders. A compliant
+// attacker then skips building its own and is downgraded for lacking exactly
+// that. Asserted on the prompt text, because that is where the contradiction
+// lives.
+R.push(await run('the attack prompt does not claim a discarded counterexample', { ...BASE },
+  { probeOmit: 'trace',
+    expect: (res, state) => {
+      const atk = (state.prompts || []).filter((p) => String(p.label).startsWith('attack:'))
+      if (!atk.length) return 'no executable attack ran, so the prompt is untested'
+      const claiming = atk.filter((p) => p.prompt.includes('A prober already constructed this counterexample'))
+      return claiming.length === 0
+        || `${claiming.length} attack prompt(s) claimed a counterexample the script had discarded`
+    } }))
+R.push(await run('confidence decides which of two equals is given up', { ...BASE, budget_wu: 19 },
+  { confidenceDecides: true,
+    expect: (res) => {
+      const dropped = (res.found_but_not_verified || []).map((x) => x.title)
+      const kept = (res.candidate_results || []).map((x) => x.title)
+      if (dropped.length !== 1) return `${dropped.length} of the pair were trimmed; the case cannot isolate confidence`
+      if (!kept.includes('the confident one')) return 'the high-confidence claim did not survive'
+      return dropped[0] === 'the unsure one'
+        || `confidence did not decide: gave up "${dropped[0]}"`
+    } }))
+R.push(await run('a tie is broken by content, not by key order', { ...BASE }, { keyOrderTie: true,
+  expect: (res) => {
+    const all = [...(res.candidate_results || []), ...(res.found_but_not_verified || [])]
+    const a = all.find((x) => x.title === 'aaa')
+    const b = all.find((x) => x.title === 'bbb')
+    if (!a || !b) return 'the tied pair did not both survive, so the tie-break is untested'
+    const n = (x) => Number(String(x.candidate_id).replace(/[^0-9]/g, ''))
+    return n(a) < n(b)
+      || `key order decided the tie: ${b.candidate_id} ("bbb") was accepted before ${a.candidate_id} ("aaa")`
+  } }))
+R.push(await run('reordered evidence keys are the same claim', { ...BASE }, { reorderedDuplicate: true,
+  expect: (res) => {
+    const same = (res.candidate_results || []).filter((x) => x.title === 'same claim')
+    if (same.length > 1) return `${same.length} copies of one claim survived; key order created a second identity`
+    return res.ledger.invalid_candidates.some((x) => /same claim/.test(x.reason) || x.title === 'same claim')
+      || 'the reordered repeat was neither collapsed nor disclosed'
+  } }))
 R.push(await run('invalid padding does not spend the lens cap', { ...BASE }, { invalidPadding: true,
   expect: (res) => {
     const real = (res.candidate_results || []).concat(res.found_but_not_verified || [])
@@ -2633,7 +2751,25 @@ for (const r of R) {
       && x.verifier.contract_violation.holds === 'falsifies_candidate'
       && String(x.verifier.contract_violation.cited_code || '').trim()
       && !(x.verifier.unsettled_predicates || []).includes('contract_violation'))
-    const allowed = obligationKilled ? ['substantiated', 'unresolved'] : ['substantiated']
+    // ...and it does not outrank the verifier's own statement that the
+    // obligation is UNKNOWN either. Substantiation needs all three predicates
+    // affirmatively supported (contract.md section 4); a control supplies two
+    // of them. Where the verifier said it could not settle the third, "this
+    // patch changed the behaviour" is established and "the behaviour was owed"
+    // is not — which is unresolved, not a finding. This invariant used to
+    // allow only `substantiated`, so a record whose every predicate was
+    // unsettled was promoted on the reproduction alone, undoing the grounding
+    // guard that had just moved it out of substantiated.
+    const obligationUnknown = Boolean(x.verifier
+      && ((x.verifier.contract_violation && x.verifier.contract_violation.holds === 'unsettled')
+          || (x.verifier.unsettled_predicates || []).includes('contract_violation')))
+    const allowed = (obligationKilled || obligationUnknown)
+      ? ['substantiated', 'unresolved'] : ['substantiated']
+    if (controlled(x.attack) && obligationUnknown && !obligationKilled && x.state === 'substantiated') {
+      fail++
+      problems.push(`${r.name}: ${x.candidate_id} was substantiated on a reproduction while its verifier `
+        + 'could not settle the obligation — a control settles causality, not whether the behaviour was owed')
+    }
     if (controlled(x.attack) && !allowed.includes(x.state)) {
       fail++; problems.push(`${r.name}: ${x.candidate_id} has a controlled reproduction but is ${x.state}`)
     }
@@ -2653,6 +2789,59 @@ for (const r of R) {
     console.log(`  detail: ${r.res.detail || (r.res.missing || []).join(',')}`)
   }
 }
+// --- the attack prompt must name every field the script demands ----------
+//
+// `reproduced` is the one grade that can override a refuting adjudicator, and
+// normalizeAttack downgrades it for any missing field. The GRADE step is what
+// an attacker checks itself against before claiming the grade, and it named
+// four of fifteen — so an honest run that recorded control_result in step 3
+// but read step 5 as the requirement list would lose its strongest evidence
+// to an automatic downgrade. Mechanically checkable, so it is checked rather
+// than left to drift.
+{
+  // EVERY identifier in each pushed string, not just the first. One push is
+  // `'bound_to_base_sha + patch_hash_verified'`, and a regex that stopped at
+  // the first name left patch_hash_verified out of `demanded` — so this test
+  // claimed to guard every normalization requirement while a mutation
+  // deleting that field from the prompt kept it green. Found by review of the
+  // test itself, minutes after it was written.
+  // Intersected with the ATTACK_SCHEMA property names. Extracting bare
+  // identifiers alone was wrong in both directions: it stopped at the first
+  // name of `'bound_to_base_sha + patch_hash_verified'`, and widening it
+  // swept in prose from strings like `'... a specification_citation does not
+  // substitute ...'`. The schema is the authoritative list of what a field
+  // is, and it is right here in the same file.
+  const schemaBlock = SRC.slice(SRC.indexOf('const ATTACK_SCHEMA'), SRC.indexOf('const ADJUDICATION_SCHEMA'))
+  const schemaFields = new Set([...schemaBlock.matchAll(/^\s{4}([a-z_]+):/gm)].map((m) => m[1]))
+  const demanded = [...new Set(
+    [...SRC.matchAll(/missing\.push\(['`]([^'`]+)['`]/g)]
+      // Up to the first parenthesis: each message NAMES its requirement and
+      // then explains it, and the explanation can mention other fields —
+      // `'control_passed=true (a specification_citation does not substitute
+      // ...)'` demands the first and rules out the second. Taking the whole
+      // string made this test demand that the prompt name a field it must
+      // NOT ask for.
+      .flatMap((m) => (m[1].split('(')[0].match(/[a-z_]{4,}/g) || []))
+      .filter((t) => schemaFields.has(t))
+  )]
+  if (schemaFields.size < 10) {
+    fail++; problems.push(`attack prompt: only ${schemaFields.size} ATTACK_SCHEMA fields were found, so this check is not measuring anything`)
+  }
+  const from = SRC.indexOf('5. GRADE, honestly')
+  const to = SRC.indexOf('Never install dependencies')
+  if (from === -1 || to === -1 || to <= from) {
+    fail++; problems.push('attack prompt: the GRADE step could not be located, so its coverage is unchecked')
+  } else {
+    const grade = SRC.slice(from, to)
+    const unnamed = demanded.filter((f) => !grade.includes(f))
+    if (unnamed.length) {
+      fail++
+      problems.push(`attack prompt: the GRADE step does not name ${unnamed.join(', ')}, `
+        + 'which normalizeAttack can downgrade a reproduction for')
+    }
+  }
+}
+
 console.log(`\n${fail ? `${fail} PROBLEMS:\n  ${problems.join('\n  ')}` : 'all scenarios completed: no crash, no overspend, no unsupported substantiation'}`)
 
 // The suite is the only guard on these invariants, so it must be usable as
