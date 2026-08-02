@@ -16,7 +16,17 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   passes `--disable hooks --disable apps --disable plugins` on every
   invocation and verifies each *effective* state with
   `codex features list`, exiting `3` if managed policy forces any of
-  them back on. Fail closed: an unparseable answer counts as enabled.
+  them back on. Fail closed: the state must read exactly `false`, so an
+  unparseable, missing, or unanswered one counts as enabled. That rule
+  was untested until it was measured — rewriting the check to `= "true"`
+  left the suite green, because the only state under test was `true`.
+  The state is read as the LAST field, not the third: measured on
+  0.146.0 the format is `<name>  <stability>  <state>` and the stability
+  column itself contains a space for `under development`, so a fixed
+  column index would read the wrong one. The residual, stated rather
+  than guarded: a future release that appended a further column after
+  the state would be misread, and only if that column's value were
+  `false` would it fail open rather than closed.
 - Standalone MCP servers from the user's own config have no global
   disable switch on 0.146.0 — but the per-server
   `mcp_servers.<id>.enabled` key can be overridden through `-c` for a

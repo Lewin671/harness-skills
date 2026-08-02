@@ -26,9 +26,13 @@ fake="${workdir}/fake-codex"
 cat > "$fake" <<'FAKE'
 #!/usr/bin/env bash
 # Behavior knobs, all via environment:
-#   FAKE_HOOKS_STATE    effective hooks state `features list` reports (default false)
+#   FAKE_HOOKS_STATE    effective hooks state `features list` reports (default
+#                       false). `-`, not `:-`: an explicitly empty value must
+#                       stay empty, so a test can express a line with no state
+#                       column at all.
 #   FAKE_APPS_STATE     effective apps state (default false)
 #   FAKE_PLUGINS_STATE  effective plugins state (default false)
+#   FAKE_FEATURES_FAIL  make `features list` exit 1 (every state unknown)
 #   FAKE_MCP_LIST       what `mcp list --json` prints (default [])
 #   FAKE_MCP_FAIL       make `mcp list` exit 1 when set
 #   FAKE_MCP_LIST_AFTER what `mcp list --json` prints once disable
@@ -50,12 +54,16 @@ case "${1:-}" in
   --version)
     echo "fake-codex 0.146.0"; exit 0 ;;
   features)
+    # A `features list` that cannot answer. The wrapper blanks its output on
+    # any non-zero exit, so every state reads as unknown and the fail-closed
+    # rule has to refuse — the branch had no knob and therefore no test.
+    [ -n "${FAKE_FEATURES_FAIL:-}" ] && exit 1
     printf 'hooks                                stable             %s\n' \
-      "${FAKE_HOOKS_STATE:-false}"
+      "${FAKE_HOOKS_STATE-false}"
     printf 'apps                                 stable             %s\n' \
-      "${FAKE_APPS_STATE:-false}"
+      "${FAKE_APPS_STATE-false}"
     printf 'plugins                              stable             %s\n' \
-      "${FAKE_PLUGINS_STATE:-false}"
+      "${FAKE_PLUGINS_STATE-false}"
     exit 0 ;;
   mcp)
     case "$*" in
@@ -385,6 +393,23 @@ check_exit "review: apps forced on is exit 3" 3 "$?"
 
 FAKE_PLUGINS_STATE=true "$wrapper" review --repo "$dirty" >/dev/null 2>&1
 check_exit "review: plugins forced on is exit 3" 3 "$?"
+
+# `true` was the only state under test, and the guard is written `!= false`
+# precisely so that it does not have to recognise the word for "on". Both
+# references/internals.md and the code comment promise the stronger rule —
+# "an unparseable or missing answer is treated the same as enabled" — and
+# nothing exercised it: rewriting the test to `= "true"` left the suite
+# green. Measured. These are the states that are neither.
+for fstate in stable unknown enabled ''; do
+  FAKE_HOOKS_STATE="$fstate" "$wrapper" review --repo "$dirty" >/dev/null 2>&1
+  check_exit "review: an unparseable hooks state ('${fstate}') is exit 3" 3 "$?"
+done
+
+# And the whole command failing to answer at all. `features_out` is emptied
+# on a non-zero exit, so every state reads as unknown — which must refuse,
+# not proceed. Without a knob for this the branch had no coverage either.
+FAKE_FEATURES_FAIL=1 "$wrapper" review --repo "$dirty" >/dev/null 2>&1
+check_exit "review: 'codex features list' failing is exit 3" 3 "$?"
 
 # Enabled standalone MCP servers are switched off for the run rather
 # than refused: the exposure is actually removed, and the review still
