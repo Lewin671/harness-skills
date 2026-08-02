@@ -999,7 +999,12 @@ fi
 # the run starts with it reachable. This is the fail-open that removing the
 # mcp_count==0 refusal opened up, and refusing the unrecognised ROOT SHAPE is
 # what closes it without also refusing a legitimate nested `true`.
-for objroot in '{"github":{"name":"github","enabled":true}}' '{"name":"single","enabled":true}'; do
+# `{}` is the object root that reaches NEITHER guard on its own: it holds no
+# `"enabled"` for the parser arm and no `true` for the prefilter, and it used
+# to be whitelisted beside `[]` as an empty config. 0.146.0 prints `[]` for
+# that, so `{}` is a shape nobody has read — the same fail-open as treating
+# empty output as no servers.
+for objroot in '{"github":{"name":"github","enabled":true}}' '{"name":"single","enabled":true}' '{}' '{"servers":{}}'; do
   stderr="${workdir}/mcp-objroot.err"
   argv_log="${workdir}/argv-mcp-objroot.log"
   FAKE_MCP_LIST="$objroot" FAKE_ARGV_LOG="$argv_log" \

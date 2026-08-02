@@ -257,7 +257,15 @@ acr_snapshot() {
     git ls-files --others --exclude-standard -z >> "${acr_files}" ||
       { echo "snapshot: could not list untracked files" >&2; exit 1; }
 
-    git rev-parse HEAD
+    # `|| exit 1` ON EVERY COMMAND IN HERE, not left to errexit. Measured:
+    # bash suppresses errexit inside a subshell that is the left operand of
+    # `||`, and re-arming with `set -e` in the subshell does not restore it.
+    # So a failing command here is followed by successful ones whose status
+    # overwrites it, and the function returns 0 with a digest of nothing —
+    # identically in both snapshots, which is the silent all-clear the whole
+    # function exists to prevent. `exit` ends the subshell immediately, and
+    # its status is what `|| acr_st=$?` below reads.
+    git rev-parse HEAD || exit 1
     # The INDEX ITSELF, not just what status makes of it. A path already `MM`
     # can have its staged blob replaced while the working-tree bytes are put
     # back: HEAD, the porcelain columns, the content hash and the mode hash
@@ -267,7 +275,7 @@ acr_snapshot() {
     # `-z` and hashed: a tracked path may contain a newline, and the raw form
     # would split one record across lines that another path's halves could
     # complete.
-    git ls-files --stage -z | shasum -a 256
+    git ls-files --stage -z | shasum -a 256 || exit 1
     # Index FLAGS, which --stage does not print at all. `git update-index
     # --assume-unchanged <path>` leaves HEAD, the porcelain columns, every
     # content and mode hash AND the staged mode/object identical — only the
@@ -275,9 +283,9 @@ acr_snapshot() {
     # working-tree edits to that path, so an agent that sets it has made its
     # own later writes invisible to the very status this snapshot relies on.
     # skip-worktree (S) does the same by another route.
-    git ls-files -v -z | shasum -a 256
+    git ls-files -v -z | shasum -a 256 || exit 1
     # --no-optional-locks so a plain status does not rewrite the index it reads.
-    git --no-optional-locks status --porcelain=v1
+    git --no-optional-locks status --porcelain=v1 || exit 1
     # REGULAR FILES ONLY, and `./` on every operand.
     #   - `shasum` follows a symlink. Pointed at a FIFO it blocks forever, and
     #     Phase 0 hangs before the review starts; pointed at a missing target it
@@ -310,7 +318,7 @@ acr_snapshot() {
         # the same multiset as `p\ntwo`+`q\none`. Verified to collide.
         printf 'UNREADABLE\0%s\0' "$f" | shasum -a 256
       fi
-    done < "${acr_files}" | sort | shasum -a 256
+    done < "${acr_files}" | sort | shasum -a 256 || exit 1
     # Content hashes miss a mode change, and so does status: a tracked file
     # already reported ` M` reports ` M` after its executable bit flips, and its
     # bytes never moved. Both snapshots would match while the repository
@@ -341,7 +349,7 @@ acr_snapshot() {
         printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-10)" "$f" |
           shasum -a 256
       fi
-    done < "${acr_files}" | sort | shasum -a 256
+    done < "${acr_files}" | sort | shasum -a 256 || exit 1
   ) || acr_st=$?
   # The cleanup must not become the function's exit status. `rm -f` succeeds
   # on a path that was never created, so as the LAST command it reported

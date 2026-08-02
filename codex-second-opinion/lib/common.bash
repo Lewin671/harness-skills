@@ -542,7 +542,11 @@ EOF
         # is plausible for a config with no servers at all, but not here,
         # where a listing with entries was just read.
         case "$verify_out" in
-          '[]'|'{}') : ;;
+          # `[]` only. `{}` is not something 0.146.0 prints for an empty
+          # config — it prints `[]`, three bytes — so an object root here is
+          # an unrecognised shape like any other, and reading it as "no
+          # servers" is the same fail-open as reading empty output that way.
+          '[]') : ;;
           *'"enabled"'*)
             # Same value-shape bar as the first listing: a re-check whose
             # booleans have become strings proves nothing either.
@@ -581,7 +585,12 @@ EOF
     # re-check below has always been strict here; the first listing has the
     # same blind spot and no better excuse.
     case "$mcp_out" in
-      '[]'|'{}') : ;;             # empty config: nothing to disclose
+      # `[]` only, for the reason above: an object root is a DIFFERENT shape,
+      # not an empty one. `{}` matches neither of the arms below on its own —
+      # it holds no `"enabled"` for the parser arm to catch — so listing it
+      # here was the one path by which an unrecognised root still started a
+      # run. It falls through to the refusal now.
+      '[]') : ;;                  # empty config: nothing to disclose
       *'"enabled"'*)
         # Recognized shape, nothing enabled *in the part that arrived*. That
         # last clause is the whole point: a listing cut off after a complete

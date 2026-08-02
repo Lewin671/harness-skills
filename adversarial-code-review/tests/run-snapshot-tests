@@ -333,17 +333,36 @@ mkdir -p "$shimdir"
 real_git="$(command -v git)"
 cat > "${shimdir}/git" <<GITSHIM
 #!/usr/bin/env bash
-# ACR_SHIM_FAIL=tracked fails \`ls-files -z\`; =untracked fails the --others
-# form. They are separate producers with separate guards, and one shim mode
-# for both would leave whichever runs second untested.
+# Four DIFFERENT ls-files calls run in here, each with its own guard, and a
+# shim mode that hit more than one would leave whichever runs second
+# untested. Classify by flags, not by order:
+#   tracked   the plain \`ls-files -z\` enumeration
+#   untracked the --others form
+#   stage     the index digest, --stage
+#   flags     the index-flag digest, -v
 if [ "\${1:-}" = ls-files ]; then
-  case "\${ACR_SHIM_FAIL:-}" in
-    tracked)   for a in "\$@"; do [ "\$a" = --others ] && exec "${real_git}" "\$@"; done
-               echo "fatal: fixture forced ls-files -z to fail" >&2; exit 128 ;;
-    untracked) for a in "\$@"; do [ "\$a" = --others ] && {
-                 echo "fatal: fixture forced ls-files --others to fail" >&2; exit 128; }
-               done ;;
-  esac
+  kind=tracked
+  for a in "\$@"; do
+    case "\$a" in
+      --others) kind=untracked ;;
+      --stage)  kind=stage ;;
+      -v)       kind=flags ;;
+    esac
+  done
+  if [ "\$kind" = "\${ACR_SHIM_FAIL:-}" ]; then
+    echo "fatal: fixture forced ls-files (\$kind) to fail" >&2; exit 128
+  fi
+fi
+# The other two terms of the snapshot. \`rev-parse HEAD\` only — the recipe
+# also asks rev-parse for --git-dir and --git-path, and failing those would
+# break the fixture rather than the term under test.
+if [ "\${ACR_SHIM_FAIL:-}" = head ] && [ "\${1:-}" = rev-parse ] && [ "\${2:-}" = HEAD ]; then
+  echo "fatal: fixture forced rev-parse HEAD to fail" >&2; exit 128
+fi
+if [ "\${ACR_SHIM_FAIL:-}" = status ]; then
+  for a in "\$@"; do [ "\$a" = status ] && {
+    echo "fatal: fixture forced status to fail" >&2; exit 128; }
+  done
 fi
 exec "${real_git}" "\$@"
 GITSHIM
@@ -356,11 +375,19 @@ if ( cd "$enum" && PATH="${shimdir}:$PATH" acr_snapshot ) >/dev/null 2>&1; then
 else
   bad "the snapshot runs with the git shim passing everything through" "the shim broke git"
 fi
-for mode in tracked untracked; do
+# NOT COVERED: the `|| exit 1` on the two DIGEST pipelines. A mutant that
+# drops either survives. Failing them needs `shasum` or `sort` to fail, and
+# the shim only stands in for git — a shasum shim cannot single one pipeline
+# out either, since the content digest calls shasum once per readable file
+# before the final one, so no call index is stable across fixtures. The six
+# modes below cover every git command in the function, which is where a real
+# failure comes from; the digest guards are defence against a broken system
+# and are stated here rather than dressed as tested.
+for mode in tracked untracked stage flags head status; do
   if ( cd "$enum" && ACR_SHIM_FAIL="$mode" PATH="${shimdir}:$PATH" acr_snapshot ) >/dev/null 2>&1; then
-    bad "a failing ${mode} enumeration makes the snapshot refuse" "it returned success, so both snapshots would agree on an empty tree"
+    bad "a failing ${mode} command makes the snapshot refuse" "it returned success, so both snapshots would agree on a digest of nothing"
   else
-    ok "a failing ${mode} enumeration makes the snapshot refuse"
+    ok "a failing ${mode} command makes the snapshot refuse"
   fi
 done
 
