@@ -275,6 +275,49 @@ else
   bad "an untouched tree snapshots identically" "the snapshot is not stable"
 fi
 
+# --- an enumeration that fails is not an empty tree ------------------------
+#
+# The file list feeds BOTH digests. As the first command of a `{ a; b; } |
+# while` its failure was invisible even under pipefail — a compound's status
+# is its last command's — so a git that failed would hash the empty set. And
+# it would do so in both snapshots, which is worse than a wrong answer: every
+# change to every visible file reads as no change at all.
+shimdir="${WORK}/shim-bin"
+mkdir -p "$shimdir"
+real_git="$(command -v git)"
+cat > "${shimdir}/git" <<GITSHIM
+#!/usr/bin/env bash
+# ACR_SHIM_FAIL=tracked fails \`ls-files -z\`; =untracked fails the --others
+# form. They are separate producers with separate guards, and one shim mode
+# for both would leave whichever runs second untested.
+if [ "\${1:-}" = ls-files ]; then
+  case "\${ACR_SHIM_FAIL:-}" in
+    tracked)   for a in "\$@"; do [ "\$a" = --others ] && exec "${real_git}" "\$@"; done
+               echo "fatal: fixture forced ls-files -z to fail" >&2; exit 128 ;;
+    untracked) for a in "\$@"; do [ "\$a" = --others ] && {
+                 echo "fatal: fixture forced ls-files --others to fail" >&2; exit 128; }
+               done ;;
+  esac
+fi
+exec "${real_git}" "\$@"
+GITSHIM
+chmod +x "${shimdir}/git"
+
+enum="$(new_repo enumfail)"
+# Pass-through first: a refusal below has to be the guard, not the shim.
+if ( cd "$enum" && PATH="${shimdir}:$PATH" acr_snapshot ) >/dev/null 2>&1; then
+  ok "the snapshot runs with the git shim passing everything through"
+else
+  bad "the snapshot runs with the git shim passing everything through" "the shim broke git"
+fi
+for mode in tracked untracked; do
+  if ( cd "$enum" && ACR_SHIM_FAIL="$mode" PATH="${shimdir}:$PATH" acr_snapshot ) >/dev/null 2>&1; then
+    bad "a failing ${mode} enumeration makes the snapshot refuse" "it returned success, so both snapshots would agree on an empty tree"
+  else
+    ok "a failing ${mode} enumeration makes the snapshot refuse"
+  fi
+done
+
 echo
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]

@@ -61,6 +61,34 @@ pathlib.Path(sys.argv[3]).write_text(ranges[0])
 PY2
 [ $? -eq 0 ] || { echo "could not extract the filtered or range block from ${DOC}"; exit 1; }
 
+# acr_manifest on its own. The filtered recipe calls it, so a fixture that
+# wants the filtered block's OWN enumeration to be the first git call cannot
+# reach it through capture.sh — sourcing that spends three calls first, and a
+# shim aimed at "the first one" then lands on the wrong guard. Extracted
+# separately so the filtered block can be driven with nothing else in front.
+python3 - "$DOC" "${WORK}/manifest_fn.sh" <<'PYFN'
+import re, sys, pathlib
+doc = pathlib.Path(sys.argv[1]).read_text()
+m = re.search(r'^acr_manifest\(\) \{.*?^\}$', doc, re.S | re.M)
+if not m:
+    sys.exit("could not find the acr_manifest definition")
+pathlib.Path(sys.argv[2]).write_text(m.group(0) + "\n")
+PYFN
+[ $? -eq 0 ] || { echo "could not extract acr_manifest from ${DOC}"; exit 1; }
+
+# The NUL-safe manifest builder. Nothing extracted it before, so it had never
+# been executed at all — neither its two producers nor the array it fills.
+python3 - "$DOC" "${WORK}/included_arr.sh" <<'PYARR'
+import re, sys, pathlib
+doc = pathlib.Path(sys.argv[1]).read_text()
+blocks = re.findall(r'```bash\n(.*?)```', doc, re.S)
+picked = [b for b in blocks if 'included_arr=()' in b]
+if len(picked) != 1:
+    sys.exit(f"expected one included_arr block, found {len(picked)}")
+pathlib.Path(sys.argv[2]).write_text(picked[0])
+PYARR
+[ $? -eq 0 ] || { echo "could not extract the included_arr block from ${DOC}"; exit 1; }
+
 python3 - "$DOC" "${WORK}/submodules.sh" <<'PY3'
 import re, sys, pathlib
 doc = pathlib.Path(sys.argv[1]).read_text()
@@ -351,6 +379,11 @@ cat > "${shimdir}/git" <<GITSHIM
 case "\${ACR_SHIM_FAIL:-}" in
   worktree) [ "\${1:-}" = worktree ] && [ "\${2:-}" = list ] && {
               echo "fatal: fixture forced worktree list to fail" >&2; exit 128; } ;;
+  nameonly) if [ "\${1:-}" = diff ]; then
+              for a in "\$@"; do [ "\$a" = --name-only ] && {
+                echo "fatal: fixture forced diff --name-only to fail" >&2; exit 128; }
+              done
+            fi ;;
   lsfiles)  if [ "\${1:-}" = ls-files ]; then
               for a in "\$@"; do
                 if [ "\$a" = --others ]; then
@@ -452,6 +485,175 @@ else
   bad "exclusions reach the patch, the untracked files and both manifests" "exit $filt_status"
 fi
 
+# The FILTERED recipe has its own enumerations, and fixing the unfiltered ones
+# said nothing about these: the untracked list it patches from, and the
+# `included_arr` the NUL-safe manifest is built out of.
+#
+# Each block is driven with NOTHING in front of it — only acr_manifest, which
+# it calls — so the enumeration under test is the shim's first call. Counting
+# calls through a sourced capture.sh instead is what made the first three
+# attempts at these cases pass against a removed guard: the run still failed,
+# but at capture.sh's guard, several calls earlier.
+run_filtered() {
+  local fail="$1" st=0
+  rm -f "${WORK}/shim-count"
+  (
+    cd "$filt" || exit 1
+    set -euo pipefail
+    export ACR_SHIM_FAIL="$fail" ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count"
+    export PATH="${shimdir}:$PATH"
+    tmp="$(mktemp -d "${WORK}/filt-XXXXXX")"
+    diff_args=(HEAD); untracked=1
+    # shellcheck source=/dev/null
+    . "${WORK}/manifest_fn.sh"
+    # shellcheck source=/dev/null
+    . "${WORK}/filtered.sh"
+  ) >/dev/null 2>&1 || st=$?
+  printf '%s' "$st"
+}
+# Pass-through first, so a refusal below is the guard and not the shim.
+if [ "$(run_filtered none)" = 0 ]; then
+  ok "the filtered recipe runs with the shim passing everything through"
+else
+  bad "the filtered recipe runs with the shim passing everything through" "exit $(run_filtered none)"
+fi
+if [ "$(run_filtered lsfiles)" != 0 ]; then
+  ok "a failing enumeration stops the filtered capture"
+else
+  bad "a failing enumeration stops the filtered capture" "exit 0 — the manifest would name what the patch omits"
+fi
+
+# The NUL-safe manifest builder, run for the first time. Its two producers are
+# a `git diff` and a `git ls-files`, so the ls-files shim reaches one of them
+# and a second shim mode is needed for the other.
+run_included_arr() {
+  local fail="$1" st=0
+  rm -f "${WORK}/shim-count"
+  (
+    cd "$filt" || exit 1
+    set -euo pipefail
+    export ACR_SHIM_FAIL="$fail" ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count"
+    export PATH="${shimdir}:$PATH"
+    tmp="$(mktemp -d "${WORK}/iarr-XXXXXX")"
+    diff_args=(HEAD); untracked=1
+    excludes=(':(exclude)package-lock.json')
+    # shellcheck source=/dev/null
+    . "${WORK}/included_arr.sh"
+    [ "${#included_arr[@]}" -gt 0 ] || exit 9
+    printf '%s\n' "${included_arr[@]}" > "${WORK}/included-arr.out"
+  ) >/dev/null 2>&1 || st=$?
+  printf '%s' "$st"
+}
+if [ "$(run_included_arr none)" = 0 ] &&
+   grep -qx 'tracked.txt' "${WORK}/included-arr.out" &&
+   ! grep -qx 'package-lock.json' "${WORK}/included-arr.out"; then
+  ok "the NUL-safe manifest builder runs and honours the exclusions"
+else
+  bad "the NUL-safe manifest builder runs and honours the exclusions" "exit $(run_included_arr none)"
+fi
+if [ "$(run_included_arr lsfiles)" != 0 ]; then
+  ok "a failing untracked producer stops the NUL-safe manifest"
+else
+  bad "a failing untracked producer stops the NUL-safe manifest" "exit 0"
+fi
+if [ "$(run_included_arr nameonly)" != 0 ]; then
+  ok "a failing changed-path producer stops the NUL-safe manifest"
+else
+  bad "a failing changed-path producer stops the NUL-safe manifest" "exit 0"
+fi
+
+# NOT TESTED HERE: GIT_NO_LAZY_FETCH.
+#
+# A mutant that removes the export survives this suite, and no fixture below
+# changes that. Two reasons, both measured on this machine rather than
+# assumed:
+#   - git is 2.39.5. GIT_NO_LAZY_FETCH landed in 2.42, so the export is inert
+#     here — removing a no-op cannot change an outcome.
+#   - a promisor clone cannot be built locally either: `git clone
+#     --filter=blob:none file://...` answers `filtering not recognized by
+#     server, ignoring` and fetches every object, so there is no missing blob
+#     for a capture to demand.
+# orchestration.md already states this as a residual and not a guarantee. Said
+# again here so the gap is visible from the suite that would otherwise be read
+# as covering it.
+
+# --- the capture does not rewrite the real index ---------------------------
+#
+# A diff against the WORKING TREE refreshes stale stat data and writes
+# .git/index. That happens before the baseline snapshot exists, so it is a
+# write nothing could disclose — the whole reason the recipe diffs through a
+# copy. Stale mtimes on files whose CONTENT still matches are what gives the
+# refresh something to write.
+idxr="$(new_repo idxwrite)"
+printf 'clean-a\n' > "${idxr}/clean-a.txt"
+printf 'clean-b\n' > "${idxr}/clean-b.txt"
+git -C "$idxr" add -A
+git -C "$idxr" "${commit_env[@]}" commit -q -m clean
+printf 'edit\n' >> "${idxr}/tracked.txt"
+touch -m -t 202001010101 "${idxr}/clean-a.txt" "${idxr}/clean-b.txt" "${idxr}/tracked.txt"
+idx_before="$(shasum -a 256 "${idxr}/.git/index" | cut -d' ' -f1)"
+status="$(run_capture "$idxr" 'diff_args=(HEAD); untracked=1')"
+idx_after="$(shasum -a 256 "${idxr}/.git/index" | cut -d' ' -f1)"
+if [ "$status" = 0 ] && [ "$idx_before" = "$idx_after" ]; then
+  ok "the capture does not rewrite .git/index"
+else
+  bad "the capture does not rewrite .git/index" "exit $status, index changed: $([ "$idx_before" = "$idx_after" ] && echo no || echo yes)"
+fi
+
+# --- programs the repository's own config names ----------------------------
+#
+# Phase 0 runs BEFORE the baseline snapshot exists, so anything it executes
+# writes a repository nothing could yet disclose. Both of these are configured
+# by the tree under review, which in an adversarial review is exactly the
+# party that should not get to choose what runs.
+
+cfg="$(new_repo configured)"
+git -C "$cfg" add -A
+git -C "$cfg" "${commit_env[@]}" commit -q -m base
+printf 'edit\n' >> "${cfg}/tracked.txt"
+
+# core.fsmonitor names a program git EXECUTES while refreshing the index.
+fsm_marker="${WORK}/fsmonitor-fired"
+cat > "${WORK}/fsmonitor-hook" <<HOOK
+#!/bin/sh
+: > "${fsm_marker}"
+printf '/\0'
+HOOK
+chmod +x "${WORK}/fsmonitor-hook"
+git -C "$cfg" config core.fsmonitor "${WORK}/fsmonitor-hook"
+
+# diff.external replaces git's own diff machinery with a named program.
+ext_marker="${WORK}/extdiff-fired"
+cat > "${WORK}/ext-diff" <<HOOK
+#!/bin/sh
+: > "${ext_marker}"
+exit 0
+HOOK
+chmod +x "${WORK}/ext-diff"
+git -C "$cfg" config diff.external "${WORK}/ext-diff"
+
+rm -f "$fsm_marker" "$ext_marker"
+status="$(run_capture "$cfg" 'diff_args=(HEAD); untracked=1')"
+if [ "$status" = 0 ] && [ ! -e "$fsm_marker" ]; then
+  ok "the capture does not run a configured fsmonitor program"
+else
+  bad "the capture does not run a configured fsmonitor program" "exit $status, fired: $([ -e "$fsm_marker" ] && echo yes || echo no)"
+fi
+if [ "$status" = 0 ] && [ ! -e "$ext_marker" ]; then
+  ok "the capture does not run a configured diff.external program"
+else
+  bad "the capture does not run a configured diff.external program" "exit $status, fired: $([ -e "$ext_marker" ] && echo yes || echo no)"
+fi
+# And the patch is still a real patch: an external differ that ran and was
+# ignored would leave this empty, which would pass both checks above.
+# shellcheck source=/dev/null
+. "${WORK}/vars"
+if [ -s "${tmp}/patch.diff" ] && grep -q 'tracked.txt' "${tmp}/patch.diff"; then
+  ok "the capture still produces a real patch with both programs configured"
+else
+  bad "the capture still produces a real patch with both programs configured"
+fi
+
 # --- changed ranges, including the shapes the awk was written for ----------
 
 rng="$(new_repo ranges)"
@@ -464,6 +666,14 @@ printf 'a\nB\nc\nd\ne\n' > "${rng}/edit.txt"     # one changed line
 rm "${rng}/gone.txt"                                  # wholly deleted file
 printf 'p\ns\n' > "${rng}/shrink.txt"               # deletion-only hunk
 printf 'brand\nnew\n' > "${rng}/fresh.txt"          # untracked, two lines
+# The two shapes the untracked line count was written for. `wc -l` counts
+# NEWLINES, so a file without a trailing one comes back 0 and the range
+# becomes `1 0` — an explicit range that rejects every candidate in the file.
+# And a genuinely empty file has no range at all: emitting `1 0` for it makes
+# the whole run return invalid_args, where omitting it leaves the documented
+# file-level fallback to cover the file.
+printf 'no trailing newline' > "${rng}/nonl.txt"
+: > "${rng}/empty.txt"
 # An ADDED source line reading `++ b/forged` is emitted as `+++ b/forged`,
 # which is indistinguishable from a file header on its own. It has to be added
 # by THIS change to appear at all under --unified=0, and a later hunk in the
@@ -510,6 +720,12 @@ else
   # path — the new side is /dev/null.
   check_range 'gone\.txt 1 3' 'a wholly deleted file'
   check_range 'fresh\.txt 1 2' 'an untracked file, in its entirety'
+  check_range 'nonl\.txt 1 1' 'an untracked file with no trailing newline'
+  if grep -q '^empty\.txt ' "$rng_out"; then
+    bad "changed ranges: an empty untracked file gets no range at all" "$(grep '^empty\.txt ' "$rng_out")"
+  else
+    ok "changed ranges: an empty untracked file gets no range at all"
+  fi
   # Both halves: no range under the forged path, and the later hunk still
   # filed under the real one.
   if grep -q '^forged\.txt ' "$rng_out"; then

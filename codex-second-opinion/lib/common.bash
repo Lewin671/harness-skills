@@ -647,6 +647,15 @@ common_resolve_scratch() {
     echo "hint: every worktree root has to be known before a scratch or CODEX_HOME path can be called outside the repository; refusing rather than checking a partial list." >&2
     return 3
   fi
+  # Defence in depth, and REDUNDANT on the git this was measured against — a
+  # mutant that removes both entries survives the suite. Every repository
+  # shape tried puts the storage somewhere `worktree list` already reports:
+  #   --separate-git-dir: the list names the SEPARATE DIR, not the checkout
+  #   linked worktree:    .git/worktrees/<n> sits under the main checkout
+  #   bare + worktree:    the list names the bare directory itself
+  # That is a property of what `worktree list` chooses to print, not a
+  # guarantee git makes, and these two lines cost one rev-parse each. Kept,
+  # and said plainly rather than dressed up as tested.
   for p in "$(git rev-parse --absolute-git-dir 2>/dev/null || true)" \
            "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"; do
     [ -n "$p" ] || continue

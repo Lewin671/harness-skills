@@ -1188,6 +1188,16 @@ else
   bad "review: a pass-through git shim still runs (the refusal was the failure, not the shim)" "exit $status"
 fi
 
+# NOT TESTED HERE: GIT_NO_LAZY_FETCH in the prechecks.
+#
+# Removing the export leaves this suite green, and no fixture can change that
+# on this machine. Measured, not assumed: git is 2.39.5 and the variable
+# landed in 2.42, so the export is a no-op here; and a promisor clone cannot
+# be built locally either — `git clone --filter=blob:none file://...` reports
+# `filtering not recognized by server, ignoring` and fetches everything, so
+# no precheck can be made to demand a missing object.
+# references/internals.md already calls this a residual and not a guarantee.
+
 # core.fsmonitor names a program git runs while refreshing, outside every
 # sandbox codex could impose and before any of its feature gates exist.
 # --no-optional-locks does not stop it; -c core.fsmonitor=false does.
@@ -1293,6 +1303,50 @@ else
   bad "review: a CODEX_HOME inside the repo fails closed" "exit $status"
 fi
 rm -rf "$home_in_repo"
+
+# Git storage that lives OUTSIDE the checkout. `--separate-git-dir` puts the
+# real .git elsewhere and leaves a gitfile behind, so no worktree ROOT
+# contains it.
+#
+# This does NOT cover the explicit git-dir/common-dir entries in repo_paths:
+# measured, `git worktree list --porcelain` in such a repository reports the
+# SEPARATE DIR as the worktree, so the enumeration already holds it and
+# removing those entries leaves this green. Said in common.bash too. What the
+# case does cover is the shape itself — the first fixture here whose storage
+# is not under its own checkout.
+sep_wt="${workdir}/sep-worktree"
+sep_meta="${workdir}/sep-meta"
+git init -q --separate-git-dir "$sep_meta" "$sep_wt"
+printf 'one\n' > "${sep_wt}/f.txt"
+git -C "$sep_wt" add -A
+git -C "$sep_wt" "${commit_env[@]}" commit -q -m base
+printf 'two\n' >> "${sep_wt}/f.txt"
+sep_home="${sep_meta}/codex-home"
+mkdir -p "$sep_home"
+stderr="${workdir}/sep-gitdir.err"
+argv_log="${workdir}/argv-sep-gitdir.log"
+CODEX_HOME="$sep_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$sep_wt" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a CODEX_HOME inside a separate git dir fails closed"
+else
+  bad "review: a CODEX_HOME inside a separate git dir fails closed" "exit $status"
+fi
+# The same repository with CODEX_HOME genuinely outside must still run, or the
+# case above would pass for a fixture that is simply broken.
+sep_ok_home="${workdir}/sep-home-outside"
+mkdir -p "$sep_ok_home"
+argv_log="${workdir}/argv-sep-ok.log"
+CODEX_HOME="$sep_ok_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$sep_wt" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a separate-git-dir repository runs when CODEX_HOME is outside it"
+else
+  bad "review: a separate-git-dir repository runs when CODEX_HOME is outside it" "exit $status"
+fi
 
 # `..` after a component that does not exist yet: the nearest-existing-ancestor
 # walk stops at /tmp and approves it, while mkdir -p lands the sessions inside

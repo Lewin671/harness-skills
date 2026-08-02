@@ -214,7 +214,7 @@ acr_snapshot() {
   # "$(git rev-parse --git-dir)/index", NOT `rev-parse --git-path index`:
   # the latter returns whatever GIT_INDEX_FILE points at, which during Phase 0
   # is precisely the frozen copy this must not read.
-  local acr_idx acr_real
+  local acr_idx acr_real acr_st=0
   acr_idx="$(mktemp "${tmp:-${TMPDIR:-/tmp}}/acr-index-XXXXXX")"
   acr_real="$(git rev-parse --git-dir)/index"
   [ -f "${acr_real}" ] && cp "${acr_real}" "${acr_idx}"
@@ -229,6 +229,18 @@ acr_snapshot() {
     # the post-run check, so it cannot rely on the capture block's export
     # having been copied with it.
     export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
+
+    # ONE enumeration, checked, reused by both digests below. As the first
+    # command of a `{ a; b; } | while` the failure of `a` is invisible even
+    # under pipefail: a compound's status is its LAST command's. A git that
+    # failed there would hash the empty set — and it would do so in both
+    # snapshots, so every change to every visible file would read as no change
+    # at all, which is the one thing this function exists to rule out.
+    acr_files="${acr_idx}.files"
+    git ls-files -z > "${acr_files}" ||
+      { echo "snapshot: could not list tracked files" >&2; exit 1; }
+    git ls-files --others --exclude-standard -z >> "${acr_files}" ||
+      { echo "snapshot: could not list untracked files" >&2; exit 1; }
 
     git rev-parse HEAD
     # The INDEX ITSELF, not just what status makes of it. A path already `MM`
@@ -249,57 +261,61 @@ acr_snapshot() {
     #   - a file literally named `-` makes `shasum` read STDIN — the hash of
     #     nothing, the same both times, while `git status` shows the same ` M`.
     #     Measured; a `--` terminator does not help, `./-` does.
-    { git ls-files -z; git ls-files --others --exclude-standard -z; } |
-      while IFS= read -r -d '' f; do
-        [ -L "./$f" ] && continue
-        [ -f "./$f" ] || continue
-        if [ -r "./$f" ]; then
-          shasum -a 256 "./$f"
-        else
-          # Not silently dropped. `2>/dev/null` on the whole batch hid an
-          # unreadable file completely, so an agent could overwrite a
-          # write-only one and both snapshots would agree. Its CONTENT still
-          # cannot be hashed — nothing can hash what it cannot read — but its
-          # existence and its unreadability are recorded, so the file
-          # appearing, vanishing or becoming readable is visible. The residual
-          # is stated below rather than hidden.
-          printf 'UNREADABLE  ./%s\n' "$f"
-        fi
-      done | sort | shasum -a 256
+    while IFS= read -r -d '' f; do
+      [ -L "./$f" ] && continue
+      [ -f "./$f" ] || continue
+      if [ -r "./$f" ]; then
+        shasum -a 256 "./$f"
+      else
+        # Not silently dropped. `2>/dev/null` on the whole batch hid an
+        # unreadable file completely, so an agent could overwrite a
+        # write-only one and both snapshots would agree. Its CONTENT still
+        # cannot be hashed — nothing can hash what it cannot read — but its
+        # existence and its unreadability are recorded, so the file
+        # appearing, vanishing or becoming readable is visible. The residual
+        # is stated below rather than hidden.
+        printf 'UNREADABLE  ./%s\n' "$f"
+      fi
+    done < "${acr_files}" | sort | shasum -a 256
     # Content hashes miss a mode change, and so does status: a tracked file
     # already reported ` M` reports ` M` after its executable bit flips, and its
     # bytes never moved. Both snapshots would match while the repository
     # changed. `test -x` / `test -L` are POSIX, unlike stat's format flags.
-    { git ls-files -z; git ls-files --others --exclude-standard -z; } |
-      while IFS= read -r -d '' f; do
-        # The whole permission string, not just the executable bit: a visible
-        # file going 0644 -> 0600 changes none of its bytes, none of its
-        # porcelain columns, and neither x nor l. `ls -ld` prints the mode in
-        # its first ten characters on every platform this runs on; git itself
-        # tracks only the executable bit, which is why nothing else here sees
-        # the change.
-        # ONE HASH PER FILE, not one line per file. A symlink target may
-        # contain a newline, and three newline-delimited fields then sort as
-        # separate lines whose association with each other is lost — while
-        # symlinks are absent from the content digest, so nothing else would
-        # notice. No specific colliding pair was demonstrated; a digest cannot
-        # contain a newline, so hashing each record removes the question
-        # rather than answering it case by case.
-        # `ls -ld`, never `-L`, for a symlink: dereferencing reports the
-        # TARGET's permissions, so a chmod on the link itself is invisible.
-        # And the target is piped raw, not through `$( )`, which strips
-        # trailing newlines — retargeting `missing` to `missing\n` would
-        # otherwise produce an identical record.
-        if [ -L "./$f" ]; then
-          { printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-10)" "$f"
-            readlink "./$f" 2>/dev/null || true; } | shasum -a 256
-        else
-          printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-10)" "$f" |
-            shasum -a 256
-        fi
-      done | sort | shasum -a 256
-  )
-  rm -f "${acr_idx}"
+    while IFS= read -r -d '' f; do
+      # The whole permission string, not just the executable bit: a visible
+      # file going 0644 -> 0600 changes none of its bytes, none of its
+      # porcelain columns, and neither x nor l. `ls -ld` prints the mode in
+      # its first ten characters on every platform this runs on; git itself
+      # tracks only the executable bit, which is why nothing else here sees
+      # the change.
+      # ONE HASH PER FILE, not one line per file. A symlink target may
+      # contain a newline, and three newline-delimited fields then sort as
+      # separate lines whose association with each other is lost — while
+      # symlinks are absent from the content digest, so nothing else would
+      # notice. No specific colliding pair was demonstrated; a digest cannot
+      # contain a newline, so hashing each record removes the question
+      # rather than answering it case by case.
+      # `ls -ld`, never `-L`, for a symlink: dereferencing reports the
+      # TARGET's permissions, so a chmod on the link itself is invisible.
+      # And the target is piped raw, not through `$( )`, which strips
+      # trailing newlines — retargeting `missing` to `missing\n` would
+      # otherwise produce an identical record.
+      if [ -L "./$f" ]; then
+        { printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-10)" "$f"
+          readlink "./$f" 2>/dev/null || true; } | shasum -a 256
+      else
+        printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-10)" "$f" |
+          shasum -a 256
+      fi
+    done < "${acr_files}" | sort | shasum -a 256
+  ) || acr_st=$?
+  # The cleanup must not become the function's exit status. `rm -f` succeeds
+  # on a path that was never created, so as the LAST command it reported
+  # success for a snapshot that had refused to take itself — and the caller
+  # then compared two digests it had no reason to trust. `|| acr_st=$?` also
+  # keeps `set -e` from killing the run before the temporaries are removed.
+  rm -f "${acr_idx}" "${acr_idx}.files"
+  return "${acr_st}"
 }
 acr_snapshot > "${tmp}/tree-before"
 ```
@@ -368,9 +384,13 @@ git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" -- . "${excludes
 # knows about .gitignore, so it will happily let an untracked vendor/ path or
 # lockfile through the exclusion list.
 if [ "${untracked}" = 1 ]; then
+  # Via a file for the same reason as the unfiltered recipe above: a process
+  # substitution's exit status is unreachable, so a failing enumeration reads
+  # as "no untracked files" and the patch omits what included_paths names.
   acr_untracked=()
-  while IFS= read -r -d '' f; do acr_untracked+=("$f"); done \
-    < <(git ls-files --others --exclude-standard -z -- . "${excludes[@]}")
+  git ls-files --others --exclude-standard -z -- . "${excludes[@]}" > "${tmp}/untracked.z" ||
+    { echo "could not enumerate untracked files" >&2; exit 1; }
+  while IFS= read -r -d '' f; do acr_untracked+=("$f"); done < "${tmp}/untracked.z"
   for f in ${acr_untracked[@]+"${acr_untracked[@]}"}; do
     st=0
     git diff --no-ext-diff --no-textconv --no-index --binary -- /dev/null "${f}" \
@@ -402,10 +422,19 @@ not the path. Use the `-z` variants when either is possible:
 
 ```bash
 # NUL-separated, never C-quoted. Read into an array, then serialise that.
+# Each producer is checked on its own. Grouped into one process substitution
+# the statuses vanish twice over — the substitution has none the reader can
+# see, and a compound's status is only its last command's — so a manifest
+# built from a failed `git diff` would name nothing and the review would
+# report a clean tree it never looked at.
 included_arr=()
-while IFS= read -r -d '' f; do included_arr+=("$f"); done < <(
-  { git diff --name-only -z "${diff_args[@]}" -- . "${excludes[@]}"
-    [ "${untracked}" = 1 ] && git ls-files --others --exclude-standard -z -- . "${excludes[@]}"; })
+git diff --name-only -z "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/included.z" ||
+  { echo "could not list changed paths" >&2; exit 1; }
+if [ "${untracked}" = 1 ]; then
+  git ls-files --others --exclude-standard -z -- . "${excludes[@]}" >> "${tmp}/included.z" ||
+    { echo "could not enumerate untracked files" >&2; exit 1; }
+fi
+while IFS= read -r -d '' f; do included_arr+=("$f"); done < "${tmp}/included.z"
 ```
 
 And a path containing a newline cannot be represented in the
