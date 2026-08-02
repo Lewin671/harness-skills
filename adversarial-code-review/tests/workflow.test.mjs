@@ -963,6 +963,32 @@ for (const [label, manifest] of [
     expect: (res) => res.status === 'invalid_args'
       || `a manifest containing a ${label} ran to ${res.status} with ${(res.candidate_results || []).length} candidate(s)` }))
 }
+// Non-empty strings that are not repo-relative. `includes()` matches them as
+// exactly as it matches a real path, so a candidate anchored at /etc/passwd
+// would carry the same "inside the reviewed artifact" binding as one in the
+// patch. Shape is all the script can check — it has no filesystem to resolve
+// against — so the shapes that are wrong on their face are refused.
+for (const [label, manifest] of [
+  ['an absolute path', ['/etc/passwd']],
+  ['a parent traversal', ['../shared.js']],
+  ['a traversal in the middle', ['src/../../shared.js']],
+  ['a backslash traversal', ['src\\..\\..\\shared.js']],
+  ['a drive-letter path', ['C:\\Windows\\system32\\drivers\\etc\\hosts']],
+  ['a UNC path', ['\\\\server\\share\\x.js']],
+  ['one good one outside', ['auth.js', '/etc/passwd']],
+]) {
+  R.push(await run(`scope manifest with ${label}`, { ...BASE, included_paths: manifest }, {
+    expect: (res) => res.status === 'invalid_args'
+      || `a manifest containing ${label} ran to ${res.status}` }))
+}
+// And the shapes that must keep working — a bare filename, a nested path, and
+// a leading `./`, none of which leaves the repository. A rule that refused
+// these would silently empty the manifest of every real review.
+R.push(await run('scope manifest with ordinary repo-relative paths', {
+  ...BASE, included_paths: ['auth.js', 'src/pay.js', './util.js', 'a..b/x.js'] }, {
+  expect: (res) => res.status !== 'invalid_args'
+    || `an ordinary repo-relative manifest was rejected: ${res.detail}` }))
+
 // excluded_paths is disclosure-only, and a malformed one is disclosed just as
 // faithfully as a real exclusion — the reader cannot tell the difference.
 for (const [label, ex] of [
@@ -1872,11 +1898,12 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
     const deferred = res.ledger.deferred || []
     const refused = deferred.filter((x) => x.kind === needKind && x.reason === 'deferred_by_budget').length
     if (!refused) return `no ${needKind.replace('_', ' ')} was refused by the token gate, so its release is untested`
-    // A deferred verifier or escalation keeps its units by design, and an
-    // allowance widened to cover them would let a probe leak hide behind
-    // them. Require the scenario to be free of both instead.
-    const muddied = deferred.filter((x) => x.kind === 'candidate_verifier' || x.kind === 'verifier_escalation')
-    if (muddied.length) return `${muddied.length} verifier deferral(s) also hold units; the probe release is not isolated`
+    // No exclusion for scenarios that also defer a verifier or an escalation.
+    // This used to skip them on the grounds that those deferrals keep their
+    // units by design; they do not, and calling it design is what left 18wu
+    // unaccounted in the worst scenario. Every rejection path refunds now, so
+    // the isolation this exclusion was buying is no longer needed — and the
+    // global committed-vs-launched check below covers what it used to.
     // Nothing at all, now that both escrows are released once they become
     // unusable. This used to allow the adjudication escrow — 1.5 + 0.3n —
     // and that allowance was itself the hiding place: a probe leak of up to
@@ -2393,6 +2420,29 @@ for (const r of R) {
   // the shapes this replaced ran to 1.57x, 1.92x, 3.35x and 4.42x.
   if (r.drift && !r.unpriced && c && c.token_target && c.pool_tokens_drawn > 1.35 * c.token_target) {
     fail++; problems.push(`${r.name}: drift overspend — ${Math.round(c.pool_tokens_drawn)} against a ${c.token_target} target`)
+  }
+
+  // committed_wu is what the report calls the run's ACHIEVED cost, so it must
+  // equal what was actually launched — in every scenario, not only the ones a
+  // per-site test happens to cover. Capacity is reserved before a wave opens
+  // and released at every point where the wave then does not happen; a
+  // difference here means some rejection path kept its units.
+  //
+  // Global, and stated as an exact equality, because the per-site version was
+  // not enough twice over. An allowance sized to the adjudication escrow hid
+  // the escrow itself; and the probe-release tests excluded any scenario with
+  // a deferred verifier, calling those units "by design" — which is how 14
+  // scenarios came to hold up to 18.05wu against a 48wu budget. That is not
+  // only a wrong number: committedWU gates admitOptional, so the units a
+  // deferred verifier kept could defer an executable attack the budget could
+  // still afford.
+  if (c && typeof c.committed_wu === 'number' && Array.isArray(c.launch_detail)) {
+    const launchedWU = c.launch_detail.reduce((t, x) => t + x.wu, 0)
+    if (Math.abs(c.committed_wu - launchedWU) > 1e-9) {
+      fail++
+      problems.push(`${r.name}: committed_wu ${c.committed_wu} against ${launchedWU.toFixed(2)}wu actually launched `
+        + `(${(c.committed_wu - launchedWU).toFixed(2)}wu reserved for work that never ran)`)
+    }
   }
 
   for (const x of r.res.candidate_results || []) {

@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# Does run-tests actually catch anything?
+#
+# Every mutant below breaks ONE protection the wrapper promises, and requires
+# run-tests to go red for it. A surviving mutant means that protection is
+# unguarded: the suite would stay green if it were deleted tomorrow, and a
+# green suite that cannot fail manufactures exactly the confidence it claims
+# to provide.
+#
+# This harness exists because the sibling skill's did. Spot-mutating this
+# suite by hand found one survivor in eight tries — the feature gate is
+# written `!= "false"` so that an unparseable state fails closed, and every
+# test supplied `true`, so rewriting it to `= "true"` kept the suite green.
+# Shipping the result of a sweep is not the same as shipping the sweep.
+#
+# Exit 0 when every mutant is killed. Slow by construction: run-tests takes
+# about 40 seconds, so a full sweep is minutes, not seconds.
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SKILL="$(cd "${HERE}/.." && pwd -P)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/cso-mut-XXXXXX")"
+trap 'rm -rf "${TMP}"' EXIT
+
+# A red baseline would score every mutant as killed for free — the same
+# can't-fail-meaningfully defect this script exists to catch, one level up.
+if ! "${HERE}/run-tests" >/dev/null 2>&1; then
+  echo "baseline run-tests is already failing — fix that first; mutation results would be meaningless"
+  exit 1
+fi
+
+survived=0
+total=0
+
+# name, file (relative to the skill dir), from, to
+mutate() {
+  local name="$1" file="$2" from="$3" to="$4"
+  total=$((total + 1))
+  local work="${TMP}/work"
+  rm -rf "$work"
+  cp -R "$SKILL" "$work" || { printf '%-50s %s\n' "$name" "SKIP (could not copy the skill)"; survived=$((survived + 1)); return; }
+
+  if ! CSO_FILE="${work}/${file}" CSO_FROM="$from" CSO_TO="$to" python3 - <<'PY'
+import os, pathlib, sys
+p = pathlib.Path(os.environ['CSO_FILE'])
+s = p.read_text()
+frm, to = os.environ['CSO_FROM'], os.environ['CSO_TO']
+if frm not in s:
+    sys.exit(9)
+p.write_text(s.replace(frm, to, 1))
+PY
+  then
+    printf '%-50s %s\n' "$name" "SKIP (target text not found — update this mutant)"
+    survived=$((survived + 1))
+    return
+  fi
+
+  # A mutant that does not PARSE takes the suite down whatever it changed:
+  # the wrapper fails to source its library and every case goes red for a
+  # reason no assertion had anything to do with. Counting that as a kill is
+  # the same manufactured confidence this file exists to catch.
+  if ! bash -n "${work}/${file}" 2>/dev/null; then
+    printf '%-50s %s\n' "$name" "INVALID (mutant does not parse — it would kill the suite for the wrong reason)"
+    survived=$((survived + 1))
+    return
+  fi
+
+  if "${work}/tests/run-tests" >/dev/null 2>&1; then
+    printf '%-50s %s\n' "$name" "SURVIVED"
+    survived=$((survived + 1))
+  else
+    printf '%-50s %s\n' "$name" "killed"
+  fi
+}
+
+# --- the read-only boundary ------------------------------------------------
+# Each of these is a flag the run cannot be safe without, and each is applied
+# on EVERY invocation rather than once, so a mutant here removes it everywhere.
+mutate "sandbox_mode read-only override" lib/common.bash \
+  "cmd+=(-c 'sandbox_mode=\"read-only\"')" ":"
+mutate "hooks/apps/plugins disabled per run" lib/common.bash \
+  "cmd+=(--disable hooks --disable apps --disable plugins)" ":"
+mutate "notify callback cleared" lib/common.bash \
+  "cmd+=(-c 'notify=[]')" ":"
+mutate "--strict-config catches renamed keys" lib/common.bash \
+  "cmd+=(--strict-config)" ":"
+
+# The feature gate is `!= false`, not `= true`, precisely so that an answer
+# it cannot read counts as enabled. This is the mutant that survived a manual
+# sweep: every test supplied `true`, so nothing asked for the rule.
+mutate "feature state must read exactly false" lib/common.bash \
+  'if [ "$state" != "false" ]; then' 'if [ "$state" = "true" ]; then'
+
+# --- standalone MCP servers ------------------------------------------------
+mutate "mcp values must be bare booleans" lib/common.bash \
+  'elif ! mcp_enabled_values_boolean "$mcp_out"; then' 'elif false; then'
+mutate "an empty mcp listing is not an empty config" lib/common.bash \
+  "'[]') : ;;                  # empty config: nothing to disclose" \
+  "'[]'|'') : ;;"
+mutate "an entry with no enabled field is refused" lib/common.bash \
+  '      if (closing && !seen_enabled) print "%"' ''
+mutate "the enumerating branch acts on that refusal" lib/common.bash \
+  '      if [ "$mcp_id" = "%" ]; then
+        undeclared=1
+        break
+      fi' ''
+mutate "the no-true branch acts on it too" lib/common.bash \
+  "          *'%'*)
+            mcp_problem=\"a standalone MCP entry carries no 'enabled' field, so whether it is reachable cannot be read from this listing\" ;;" ''
+mutate "the re-check acts on it too" lib/common.bash \
+  "            *'%'*)
+              mcp_problem=\"could not confirm the standalone MCP servers were switched off (an entry in the re-check carries no 'enabled' field)\" ;;" ''
+mutate "a truncated payload outranks a bad entry" lib/common.bash \
+  '    while IFS= read -r mcp_id; do
+      if [ "$mcp_id" = "!" ]; then truncated=1; break; fi
+    done <<< "$mcp_ids"' ''
+mutate "an unnamed enabled entry is refused" lib/common.bash \
+  '      if [ "$mcp_id" = "?" ]; then
+        unnamed=1
+        break
+      fi' ''
+mutate "a primitive array element is refused" lib/common.bash \
+  '        if (depth == 0 && bdepth == 1 && c != "{" && c != "}" && c != "," &&
+            c != "[" && c != "]" && c !~ /[ \t\r]/) garbage = 1' ''
+mutate "an unaddressable id is refused" lib/common.bash \
+  '        *[!A-Za-z0-9_-]*) unaddressable="$mcp_id"; break ;;' '        no-such-pattern-zzz) : ;;'
+
+# --- where this run may write ----------------------------------------------
+mutate "CODEX_HOME inside the repo refuses" lib/common.bash \
+  'if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; }' \
+  'if { false && inside_repo "$resolved_home"; }'
+mutate "CODEX_HOME/sessions is followed" lib/common.bash \
+  '|| { [ -n "$resolved_sessions" ] && inside_repo "$resolved_sessions"; }' '|| { false; }'
+mutate "a repo-local TMPDIR is relocated" lib/common.bash \
+  'if inside_repo "$scratch"; then' 'if false; then'
+mutate "the worktree list must be readable" lib/common.bash \
+  'if [ "$wt_status" != 0 ]; then' 'if false; then'
+mutate "TMPDIR is a cd operand, not a flag" lib/common.bash \
+  'scratch="$(cd -- "$scratch" 2>/dev/null && pwd -P)" ||
+    scratch="$(cd -- /tmp 2>/dev/null && pwd -P)" || scratch="/tmp"' \
+  'scratch="$(cd "$scratch" 2>/dev/null && pwd -P)" || scratch="/tmp"'
+mutate "the /tmp fallback is resolved" lib/common.bash \
+  '    scratch="$(cd -- /tmp 2>/dev/null && pwd -P)" || scratch="/tmp"' \
+  '    scratch="/tmp"'
+mutate "a path component is not a glob pattern" lib/common.bash \
+  '  case "$-" in *f*) had_noglob=1 ;; esac
+  set -f' '  case "$-" in *f*) had_noglob=1 ;; esac'
+mutate "noglob is restored for the caller" lib/common.bash \
+  '  [ "$had_noglob" -eq 1 ] || set +f' ''
+mutate "the precheck cannot rewrite the index" lib/common.bash \
+  'GIT_INDEX_FILE="$copy" "$@" || status=$?' '"$@" || status=$?'
+
+# --- the exit-code contract ------------------------------------------------
+mutate "a bare repo is not a work tree" lib/common.bash \
+  '[ "$work_tree" = "true" ] ||' '[ "$work_tree" != "zzz" ] ||'
+mutate "an empty result is a failure" lib/common.bash \
+  'if [ ! -s "$out" ]; then' 'if false; then'
+mutate "a timeout surfaces as 5, not 4" lib/common.bash \
+  '[ "$watchdog_fired" -eq 1 ] && exit_timed_out' ':'
+mutate "model and effort must arrive together" lib/common.bash \
+  'if [ "$model_set" -eq 1 ] && [ "$effort_set" -eq 0 ]; then' 'if false; then'
+mutate "line breaks in model/effort are refused" lib/common.bash \
+  'case "${model}${effort}" in' 'case "no-such-value-zzz" in'
+mutate "a line break in the repo path is refused" lib/common.bash \
+  'case "$PWD" in' 'case "no-such-value-zzz" in'
+mutate "the result ends in a newline" lib/common.bash \
+  '[ -z "$(tail -c 1 "$out")" ] || echo' ':'
+
+# --- mode-specific ---------------------------------------------------------
+mutate "an empty uncommitted scope exits 2" lib/review.bash \
+  'if [ -z "$status_out" ]; then' 'if false; then'
+mutate "a scope flag carries the resolved object name" lib/review.bash \
+  '      --base)   cmd+=("${resolved_base:-$scope_value}") ;;' \
+  '      --base)   cmd+=("$scope_value") ;;'
+mutate "--context cannot ride with --custom" lib/review.bash \
+  'if [ "$context_set" -eq 1 ] && [ "$scope_flag" = "--custom" ]; then' 'if false; then'
+mutate "a resumed session is verified" lib/consult.bash \
+  'if [ -n "$session_id" ] && [ "$session_out" != "$session_id" ]; then' 'if false; then'
+mutate "a follow-up is never auto-retried" lib/consult.bash \
+  '  [ -n "$session_id" ] || return 1' '  return 1'
+mutate "--continue takes a UUID only" lib/consult.bash \
+  "        case \"\$1\" in
+          ''|*[![:alnum:]-]*)" \
+  "        case \"no-such-value-zzz\" in
+          ''|*[![:alnum:]-]*)"
+
+echo
+# A `mutate` line whose arguments fail to expand never reaches the function,
+# so neither counter moves and the run still prints success. Pin the count:
+# any mutant that silently fails to launch is a failure in itself.
+EXPECTED_TOTAL=37
+if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
+  echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
+  exit 1
+fi
+if [ "${survived}" -eq 0 ]; then
+  echo "all ${total} mutants killed — the suite has teeth"
+else
+  echo "${survived}/${total} mutants SURVIVED — those protections are unguarded"
+  exit 1
+fi

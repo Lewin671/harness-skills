@@ -148,9 +148,24 @@ if (!Array.isArray(A.included_paths) || !A.included_paths.length) {
 // out-of-scope — after paying for it — and reports a clean review of a scope
 // it never checked. Same principle as the profile and budget checks above: a
 // value that is present but invalid is a caller mistake, not an omission.
-const badIncluded = A.included_paths.findIndex((p) => typeof p !== 'string' || !p.trim().length)
+// Repo-RELATIVE, which is what every caller of this manifest assumes. An
+// absolute path or one climbing out through `..` names a file outside the
+// repository, and `includedPaths.includes(c.file)` matches it exactly as
+// happily as a real one — so a candidate anchored at /etc/passwd would carry
+// the same "inside the reviewed artifact" binding as one in the patch. Shape
+// is all this can check; it cannot resolve a path it has no filesystem for.
+const pathProblem = (p) => {
+  if (typeof p !== 'string' || !p.trim().length) return 'must be a non-empty string'
+  if (p.startsWith('/')) return 'must be repo-relative, not absolute'
+  // Windows-style roots too: `C:\x` and `\\server\share` are equally not
+  // repo-relative, and a manifest built on another platform can carry them.
+  if (/^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\')) return 'must be repo-relative, not a drive or UNC path'
+  if (p.split(/[\\/]/).includes('..')) return 'must not climb out of the repository with ".."'
+  return null
+}
+const badIncluded = A.included_paths.findIndex((p) => pathProblem(p) !== null)
 if (badIncluded !== -1) {
-  return { status: 'invalid_args', detail: `included_paths[${badIncluded}] is ${JSON.stringify(A.included_paths[badIncluded])}; every entry must be a non-empty repo-relative path string` }
+  return { status: 'invalid_args', detail: `included_paths[${badIncluded}] is ${JSON.stringify(A.included_paths[badIncluded])}: it ${pathProblem(A.included_paths[badIncluded])}` }
 }
 // excluded_paths is disclosure-only — it is echoed into the report as what
 // the review left out — but a malformed one is echoed just as faithfully,
@@ -159,6 +174,8 @@ if (A.excluded_paths !== undefined && A.excluded_paths !== null) {
   const badExcluded = !Array.isArray(A.excluded_paths)
     ? -2
     : A.excluded_paths.findIndex((p) => typeof p !== 'string' || !p.trim().length)
+  // Not held to the repo-relative rule: an exclusion is disclosure, and a
+  // caller legitimately names `vendor/` or a pathspec-ish spelling there.
   if (badExcluded !== -1) {
     return {
       status: 'invalid_args',
@@ -2028,6 +2045,12 @@ let verifyPendingWU = 0
 for (const v of verifyRest) {
   if (admitTokens(verifyPendingWU + v.wu)) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }
   verifyDeferred.push(v)
+  // Give the units back, as every other post-sample rejection does. They were
+  // committed by reserve(floorsFor(...)) and nothing launches for them now.
+  // Held, they are not merely a wrong number in the report: committedWU gates
+  // admitOptional, so a deferred verifier can defer the executable attack
+  // that the budget could still afford.
+  committedWU -= v.wu
   for (const c of v.kind === 'one' ? [v.c] : v.batch) {
     // A DIFFERENT kind from the trim's `candidate_verification`, deliberately.
     // These candidates are still reported — they simply arrive with no
@@ -2119,6 +2142,11 @@ if (escNow.length) {
   let escPendingWU = 0
   for (const c of escRest) {
     if (admitTokens(escPendingWU + W.criticalVerifierEscalated)) { escPendingWU += W.criticalVerifierEscalated; escAdmitted.push(c); continue }
+    // Refunded whichever pool paid for it. drawOrReserve either drew the
+    // escrow — which it has already decremented, so the end-of-run release
+    // will not return this a second time — or reserved fresh units; in both
+    // cases the units sit in committedWU and nothing is going to launch.
+    committedWU -= W.criticalVerifierEscalated
     defer({ target_id: c.id, kind: 'verifier_escalation', anchor: `${c.file}:${c.line}` }, 'deferred_by_budget')
   }
   const esc = [...escSampleOut, ...await parallel(escAdmitted.map((c) => () => runEsc(c)))]
@@ -2268,6 +2296,10 @@ if (adjInput.length && !admitPrepaid(W.adjudicator(adjBatchList[0].length))) {
   // Launching past the target would throw inside agent() and lose the batch
   // anyway; refusing here at least leaves an honest ledger, not an exception.
   adjudicationTokenBlocked = true
+  // Not one batch runs, so the whole reservation made with the floors is
+  // owed back. Its escalation escrow is a separate term and is released at
+  // the end of the run, so this is not a double refund.
+  committedWU -= adjReserveWU
   for (const e of adjInput) failed('adjudicator', e.candidate.id, 'token target exhausted before adjudication could run')
   log('token target exhausted before adjudication — no candidate can be reported as a finding')
 }
@@ -2290,6 +2322,7 @@ if (adjInput.length && !adjudicationTokenBlocked) {
       // Prepaid in weighted units with the floors; only the token ceiling is
       // still open, and it is now measured against what batch 1 really cost.
       if (admitPrepaid(W.adjudicator(x.b.length))) { adjAdmitted.push(x); continue }
+      committedWU -= W.adjudicator(x.b.length)
       for (const e of x.b) failed('adjudicator', e.candidate.id, 'token target exhausted before this adjudication batch could run')
       defer({ target_id: `ADJ${x.i + 1}`, kind: 'adjudication_batch', anchor: x.b.map((e) => e.candidate.id).join(' ') }, 'deferred_by_budget')
     }
@@ -2345,6 +2378,7 @@ if (adjInput.length && !adjudicationTokenBlocked) {
       let rePendingWU = 0
       for (const x of reRest) {
         if (admitTokens(rePendingWU + W.adjudicator(x.b.length))) { rePendingWU += W.adjudicator(x.b.length); reAdmitted.push(x); continue }
+        committedWU -= W.adjudicator(x.b.length)
         for (const e of x.b) defer({ target_id: e.candidate.id, kind: 'adjudication_escalation', anchor: `${e.candidate.file}:${e.candidate.line}` }, 'deferred_by_budget')
       }
       const re = [...reSampleOut, ...(reAdmitted.length ? await parallel(reAdmitted.map((x) => () => runReAdj(x))) : [])]

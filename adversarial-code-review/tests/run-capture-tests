@@ -264,7 +264,7 @@ if git -C "$subhost" -c protocol.file.allow=always "${commit_env[@]}" \
   ( cd "$subhost" && set -euo pipefail
     # shellcheck source=/dev/null
     . "${WORK}/submodules.sh"
-    printf '%s\n' "$acr_submodules" ) > "$sub_out" 2>/dev/null
+    printf '%s\n' ${acr_submodules[@]+"${acr_submodules[@]}"} ) > "$sub_out" 2>/dev/null
   sub_status=$?
   if [ "$sub_status" = 0 ] && grep -qx 'libs/payment core' "$sub_out"; then
     ok "a submodule path containing a space is named whole"
@@ -285,7 +285,7 @@ if git -C "$subhost" -c protocol.file.allow=always "${commit_env[@]}" \
   ( cd "$subhost" && set -euo pipefail
     # shellcheck source=/dev/null
     . "${WORK}/submodules.sh"
-    printf '%s\n' "$acr_submodules" ) > "$sub_out" 2>/dev/null
+    printf '%s\n' ${acr_submodules[@]+"${acr_submodules[@]}"} ) > "$sub_out" 2>/dev/null
   sub_status=$?
   if [ "$sub_status" = 0 ] && grep -qx 'libs/foo (legacy)' "$sub_out"; then
     ok "a submodule path containing a parenthesis keeps it"
@@ -294,6 +294,29 @@ if git -C "$subhost" -c protocol.file.allow=always "${commit_env[@]}" \
   fi
 else
   bad "a submodule path containing a parenthesis keeps it" "could not create the submodule fixture"
+fi
+
+# The other direction, which is why this stopped being a regex at all: the
+# DESCRIBE suffix can itself contain `(`. `git check-ref-format` accepts a ref
+# named `rel(legacy)`, so ` (rel(legacy))` is a legal suffix and a non-greedy
+# ` ([^(]*)$` leaves it in place. Path and suffix can each contain the other's
+# delimiter, so the line is ambiguous and only a fixed-field source is exact.
+if git -C "$subinner" tag -f 'rel(legacy)' >/dev/null 2>&1 &&
+   git -C "$subhost" -c protocol.file.allow=always "${commit_env[@]}" \
+     submodule add -q "$subinner" 'libs/bar' >/dev/null 2>&1; then
+  sub_out="${WORK}/submodules-describe.out"
+  ( cd "$subhost" && set -euo pipefail
+    # shellcheck source=/dev/null
+    . "${WORK}/submodules.sh"
+    printf '%s\n' ${acr_submodules[@]+"${acr_submodules[@]}"} ) > "$sub_out" 2>/dev/null
+  sub_status=$?
+  if [ "$sub_status" = 0 ] && grep -qx 'libs/bar' "$sub_out"; then
+    ok "a submodule whose describe suffix contains a parenthesis is named whole"
+  else
+    bad "a submodule whose describe suffix contains a parenthesis is named whole" "exit $sub_status, got: $(tr '\n' '|' < "$sub_out")"
+  fi
+else
+  bad "a submodule whose describe suffix contains a parenthesis is named whole" "could not create the submodule fixture"
 fi
 
 # --- and never inside a sibling worktree -----------------------------------
@@ -795,6 +818,12 @@ printf 'brand\nnew\n' > "${rng}/fresh.txt"          # untracked, two lines
 # file-level fallback to cover the file.
 printf 'no trailing newline' > "${rng}/nonl.txt"
 : > "${rng}/empty.txt"
+# And one that sorts LAST. `empty.txt` above is followed by two non-empty
+# files, so the loop's final iteration succeeds and the body's status never
+# becomes the pipeline's. With `zz-empty.txt` last, a `[ ] &&` body makes the
+# whole `while` exit 1 and `set -euo pipefail` aborts Phase 0 — instead of
+# quietly omitting the range, which is what the recipe's comment claims.
+: > "${rng}/zz-empty.txt"
 # An untracked file literally named `-`. Passed to awk as a bare operand it is
 # STDIN — and stdin here is the NUL stream the enclosing `while` is reading
 # from, so awk swallows every remaining record. Measured before the fix: the
@@ -851,6 +880,11 @@ else
   check_range 'fresh\.txt 1 2' 'an untracked file, in its entirety'
   check_range 'nonl\.txt 1 1' 'an untracked file with no trailing newline'
   check_range '- 1 2' 'an untracked file literally named -'
+  if grep -q '^zz-empty\.txt ' "$rng_out"; then
+    bad "changed ranges: an empty untracked file sorting LAST gets no range" "$(grep '^zz-empty\.txt ' "$rng_out")"
+  else
+    ok "changed ranges: an empty untracked file sorting LAST gets no range"
+  fi
   if grep -q '^empty\.txt ' "$rng_out"; then
     bad "changed ranges: an empty untracked file gets no range at all" "$(grep '^empty\.txt ' "$rng_out")"
   else

@@ -1116,6 +1116,42 @@ for undecl in \
   fi
 done
 
+# The same silence one level out: an array element that is not an object at
+# all. A primitive has no `enabled` key for the count to weigh, no `true` for
+# the prefilter, and no entry for the parser to close — so it is described by
+# nothing and the listing reads as all-disabled around it.
+for prim in \
+    '["hidden",{"name":"off","enabled":false}]' \
+    '[1,{"name":"off","enabled":false}]' \
+    '[{"name":"off","enabled":false},"hidden"]'; do
+  stderr="${workdir}/mcp-prim.err"
+  argv_log="${workdir}/argv-mcp-prim.log"
+  : > "$argv_log"
+  FAKE_MCP_LIST="$prim" FAKE_ARGV_LOG="$argv_log" \
+    "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+  status=$?
+  if [ "$status" = 3 ] && grep -qE 'incomplete|unrecognized' "$stderr" &&
+     ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+    ok "review: a primitive MCP array element fails closed (${prim})"
+  else
+    bad "review: a primitive MCP array element fails closed (${prim})" "exit $status"
+  fi
+done
+
+# ...and the shapes that must keep working, so the rule above cannot be a
+# blanket refusal: nested arrays and numbers INSIDE an entry are ordinary
+# values, not entries.
+argv_log="${workdir}/argv-mcp-nested-values.log"
+FAKE_MCP_LIST='[{"name":"off","enabled":false,"tags":["a","b"],"timeout":3.5,"extra":null}]' \
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: array and number values inside an entry are not primitive entries"
+else
+  bad "review: array and number values inside an entry are not primitive entries" "exit $status"
+fi
+
 # The same silence in the RE-CHECK. The overrides are applied, codex answers
 # with a listing whose remaining entry does not say whether it is enabled, and
 # that is not confirmation that anything went down.
@@ -2108,6 +2144,23 @@ check_exit "consult: whitespace in session id is exit 3" 3 "$?"
 
 "$wrapper" consult --repo "$repo" --continue mythread "question" >/dev/null 2>&1
 check_exit "consult: non-UUID session id is exit 3" 3 "$?"
+
+# The case guard exists for exactly this, and nothing asked for it: `grep`
+# matches PER LINE, so a value whose second line is a well-formed UUID
+# satisfies the regex on its own. Measured — with the case arm removed the
+# grep accepts `garbage\n<uuid>`, and the id then travels into `exec resume`
+# and into the `resume:` descriptor, where the embedded newline also forges a
+# second standalone marker line. The character-class arm is what stops it.
+"$wrapper" consult --repo "$repo" \
+  --continue "$(printf 'garbage\n0198aaaa-bbbb-cccc-dddd-eeeeffff0000')" \
+  "question" >/dev/null 2>&1
+check_exit "consult: a newline hiding a valid UUID is exit 3" 3 "$?"
+
+# And the mirror: a valid UUID on the FIRST line with trailing junk after it.
+"$wrapper" consult --repo "$repo" \
+  --continue "$(printf '0198aaaa-bbbb-cccc-dddd-eeeeffff0000\ngarbage')" \
+  "question" >/dev/null 2>&1
+check_exit "consult: a valid UUID with a trailing line is exit 3" 3 "$?"
 
 "$wrapper" consult --repo "$repo" --continue >/dev/null 2>&1
 check_exit "consult: --continue without a value is exit 3" 3 "$?"

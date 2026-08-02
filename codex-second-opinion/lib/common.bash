@@ -244,6 +244,16 @@ mcp_enabled_ids() {
           if (started || c != "[") garbage = 1
           if (c == "[") started = 1
         }
+        # Directly inside the root array and not inside an entry object: the
+        # only thing that belongs here is `{`. A PRIMITIVE element —
+        # `["hidden",{"name":"off","enabled":false}]` — is skipped by every
+        # check otherwise: it has no `enabled` key for the count to weigh, no
+        # `true` for the prefilter, and no entry for the parser to close, so
+        # the listing reads as all-disabled while that element goes
+        # undescribed. Same fail-open as an entry that omits `enabled`, one
+        # level out.
+        if (depth == 0 && bdepth == 1 && c != "{" && c != "}" && c != "," &&
+            c != "[" && c != "]" && c !~ /[ \t\r]/) garbage = 1
         if (c == "\"") {
           # Consume the whole string token, honouring backslash escapes,
           # so that a brace or colon inside it cannot move the parser.

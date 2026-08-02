@@ -203,16 +203,44 @@ whose `ls-files` is the superproject's: an agent overwriting a file inside an
 already-dirty submodule leaves both snapshots identical. Detect it and say so:
 
 ```bash
-# Registered submodules with any content of their own. Named in the report as
-# uncaptured, and reviewed — if they matter — as their own scope.
-# The path is everything between the SHA and the trailing ` (describe)`, and
-# it may contain spaces: splitting on whitespace returns half of one.
-# `[^(]*`, not `.*`: BRE is greedy and anchored, so ` (.*)$` strips from the
-# FIRST ` (` on the line — a submodule at `libs/foo (legacy)` came back as
-# `libs/foo`, and the report then named an uncaptured scope that does not
-# exist. Measured. Only the last parenthesised group is the describe suffix.
-acr_submodules="$(git submodule status --recursive 2>/dev/null |
-  sed -e 's/^.[0-9a-f]* //' -e 's/ ([^(]*)$//')"
+# Gitlinks, read from the index — NOT `git submodule status`. That command's
+# line is `<flag><sha> <path>[ (<describe>)]`, and each variable part can
+# contain the other's delimiter: a path may hold ` (` (`libs/foo (legacy)`),
+# and a describe may hold `(`, because `git check-ref-format` accepts a ref
+# named `rel(legacy)`. Measured in both directions — a greedy ` (.*)$` turned
+# `libs/foo (legacy)` into `libs/foo`, and a non-greedy ` ([^(]*)$` left
+# `libs/foo (rel(legacy))` unstripped. The grammar is ambiguous, so no
+# expression resolves it; the fix is to stop parsing that output.
+#
+# `ls-files --stage` gives mode, object, stage and path as fixed fields, and
+# mode 160000 IS a submodule. `-z`, read with `read -r -d ''`, because a path
+# may contain a newline — which the sed could not represent at all, and which
+# `awk -v RS='\0'` cannot either: measured, the awk macOS ships (BWK 20200816)
+# reads NOTHING at all from a NUL-separated stream, so a recipe built on it
+# would report every repository as having no submodules.
+#
+# The exit status rides the stream as a final NUL record, as it does for the
+# worktree list above: a process substitution's status is unreachable, so a
+# git that failed would otherwise read as a repository with no submodules.
+# Unforgeable here, unlike the untracked-file case — every real record starts
+# with a mode, so none of them can begin `acr_status `.
+#
+# First-level gitlinks only — this is the superproject's index, so a submodule
+# nested inside another is not named here. That is the honest scope, and it is
+# what the disclosure offers: reviewing a named submodule as its own scope is
+# what surfaces anything beneath it.
+acr_submodules=()
+acr_sm_status=missing
+while IFS= read -r -d '' acr_rec; do
+  case "${acr_rec}" in
+    '160000 '*)     acr_submodules+=("${acr_rec#*$'\t'}") ;;
+    'acr_status '*) acr_sm_status="${acr_rec#acr_status }" ;;
+  esac
+done < <(git ls-files --stage -z && printf 'acr_status 0\0' || printf 'acr_status %s\0' "$?")
+if [ "${acr_sm_status}" != 0 ]; then
+  echo "could not enumerate index entries (${acr_sm_status}); submodule disclosure would be a guess" >&2
+  exit 1
+fi
 ```
 
 Reviewing the submodule separately, with `--repo` pointing inside it, is the
@@ -581,7 +609,15 @@ git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
     # An EMPTY file has zero lines, and "1 0" is not a range. Emitting it
     # makes the whole run return invalid_args; omitting the entry lets the
     # documented file-level fallback cover the file instead.
-    [ "${n}" -gt 0 ] && printf '%s 1 %s\n' "$f" "${n}"
+    # An `if`, not `[ ] &&`, for the same reason as the guard around this
+    # loop: the test's status is the loop body's status, and on the LAST
+    # record it becomes the whole pipeline's. An empty untracked file sorting
+    # last therefore aborted Phase 0 under `set -euo pipefail` instead of
+    # quietly getting no range, which is what this comment claims happens.
+    # Measured. Sorting decides whether it reproduces, which is why the
+    # fixture that first covered this passed: `empty.txt` came before two
+    # non-empty files and the last iteration succeeded.
+    if [ "${n}" -gt 0 ]; then printf '%s 1 %s\n' "$f" "${n}"; fi
   done
 fi
 # awk, not `wc -l`: a file with no trailing newline counts 0 lines under wc,
@@ -1153,8 +1189,11 @@ neither vetoes the other; the adjudicator sees both.
 The honest contract, and it is narrower than "never modifies":
 
 > Triage, finder, verifier, probe and adjudicator prompts issue no
-> write instructions. Executable attacks write only inside throwaway
-> worktrees holding the verified review patch. The launcher snapshots
+> write instructions. Executable attacks are *directed* at a throwaway
+> worktree holding the verified review patch, and they run the
+> artifact's own test command there with the session's privileges — a
+> worktree is a checkout, not a sandbox, so an absolute path in that
+> command reaches anything the session can reach. The launcher snapshots
 > the parent tree's HEAD, index, status, and every tracked and
 > untracked-but-visible path — with its mode, and with a content hash
 > where the file can be read — before and after the run, and reports any
@@ -1168,6 +1207,14 @@ paragraph used to say, and §1 has always contradicted it: a write-only file
 contributes a constant `UNREADABLE` record, so an agent can rewrite one and
 both snapshots agree. The summary is the place that claim gets read, so it is
 the place it has to be exact.
+
+It said "executable attacks write only inside throwaway worktrees" too, and
+§6 has contradicted that for as long: `isolation: 'worktree'` picks a
+checkout and a working directory, and constrains nothing about where a
+command can write. A test in the artifact that names an absolute path writes
+there, outside the worktree and outside the snapshot above. That is precisely
+why `allow_execution` is required and has no default — the caller is being
+asked to accept it, so the summary must not describe it away.
 
 That last part is **detection, not enforcement**. Claude Code exposes no
 tool-restriction knob on `agent()` — the options are `label`, `phase`,
