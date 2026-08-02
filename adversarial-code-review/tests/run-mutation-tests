@@ -82,6 +82,11 @@ mutate "held: executed" "    if (!executed) missing.push('execution_status=execu
 mutate "held: patch binding" "    if (!bound) missing.push('bound_to_base_sha + patch_hash_verified')" "    "
 mutate "held: ready capability" "    if (a.test_capability !== 'ready') missing.push('test_capability=ready')" "    "
 mutate "held: patched_result" "    if (!nonblank(a.patched_result)) missing.push('patched_result')" "    "
+# `held` means executed AND the code did not break. A record claiming held
+# while reporting that the reproducer FAILED contradicts itself, and accepting
+# it reports robustness for a run that in fact broke. Found by spot-mutating
+# guards no mutant named verbatim; the scenario set had no such record.
+mutate "held: the reproducer must not have failed" "    if (a.patched_failed !== false) missing.push('patched_failed=false')" "    "
 mutate "held: vectors_attempted" "    if (!(Array.isArray(a.vectors_attempted) && a.vectors_attempted.some(nonblank))) missing.push('vectors_attempted')" "    "
 mutate "plausible needs counterexample" "    if (!hasConcreteCounterexample && !attackerBuilt) {" "    if (false) {"
 mutate "plausible cannot claim execution" "  if (a.execution_status === 'unavailable') return 'unavailable'" "  if (a.execution_status === 'executed') return 'executed'"
@@ -104,6 +109,11 @@ mutate "obligation falsification is a real one" "  const obligationFalsified = g
 mutate "obligation falsification must be grounded" "  const obligationFalsified = groundedRefutation
     && citedAs" "  const obligationFalsified = true
     && citedAs"
+# The `< 1` and inverted-range halves do not catch a NON-INTEGER line, so this
+# check could be deleted with the suite still green until a fractional region
+# was added to the fixture. A region at line 1.5 would otherwise be funded a
+# probe slot and reported as a real range.
+mutate "region lines must be integers" "  if (!Number.isInteger(r.start_line) || !Number.isInteger(r.end_line)" "  if (false"
 mutate "region-probe floor escrow" "  if (admitOptional(W.probe, floorsFor([...candidates, ...syntheticCriticals(acceptedRegionProbes.length + 1)]))) acceptedRegionProbes.push(t)" "  if (admitOptional(W.probe, 0)) acceptedRegionProbes.push(t)"
 mutate "weak verdict replacement" "        if (v.grounding === 'strong') verdictById.set(id, v)" "        if (true) verdictById.set(id, v)"
 mutate "unknown-verdict-id rejection" "    if (!expected.has(id)) { ledger.unknown_verdict_ids.push({ role, id }); continue }" "    if (false) { continue }"
@@ -505,7 +515,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=214
+EXPECTED_TOTAL=216
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

@@ -130,6 +130,11 @@ function makeAgent(state, s) {
         ] : s.noTriageRegions ? [] : s.invalidRegions ? [
           { file: 'not-reviewed.js', start_line: 1, end_line: 10, why: 'outside the reviewed paths' },
           { file: 'pay.js', start_line: 40, end_line: 10, why: 'range runs backwards' },
+          // Not an integer. The `< 1` and inverted-range halves of the guard
+          // do not catch it, so without this the integer check could be
+          // deleted and the suite would stay green — a region at line 1.5
+          // would then be funded a probe slot and reported as a real range.
+          { file: 'pay.js', start_line: 1.5, end_line: 10, why: 'fractional start line' },
           { file: 'pay.js', start_line: 10, end_line: 40, why: 'money arithmetic' },
           { file: 'auth.js', start_line: 5, end_line: 25, why: 'authorization check' },
         ] : [
@@ -637,6 +642,12 @@ function makeAgent(state, s) {
         else if (s.heldOmit === 'vectors') h.vectors_attempted = []
         else if (s.heldOmit === 'blank_vectors') h.vectors_attempted = ['  ', ' ']
         else if (s.heldOmit === 'applied') h.patch_applied = false
+        // `held` means executed AND the code did not break. A record claiming
+        // held while also reporting that the reproducer failed contradicts
+        // itself, and accepting it would report robustness for a run that in
+        // fact broke. Its own field, because deleting `patched_failed`
+        // entirely is a different mutant from setting it true.
+        else if (s.heldOmit === 'patched_failed_true') h.patched_failed = true
         else delete h[s.heldOmit]
         return h
       }
@@ -830,7 +841,7 @@ for (const field of ['control', 'control_but_cites_spec', 'control_passed_but_ci
 }
 // The attacked critical must have NO counterexample, or the guard is untested.
 R.push(await run('plausible with no counterexample', { ...BASE }, { probeAlwaysFails: true, barePlausible: true }))
-for (const field of ['executed', 'bound', 'hash', 'capability', 'probe_command', 'probe_result', 'vectors', 'blank_vectors', 'patched_result', 'applied']) {
+for (const field of ['executed', 'bound', 'hash', 'capability', 'probe_command', 'probe_result', 'vectors', 'blank_vectors', 'patched_result', 'applied', 'patched_failed', 'patched_failed_true']) {
   R.push(await run(`held missing ${field}`, { ...BASE }, { heldOmit: field }))
 }
 for (const field of ['input', 'trace', 'expected_vs_actual', 'predicted_signature']) {
@@ -1469,16 +1480,16 @@ R.push(await run('blocked without a reason', { ...BASE }, { blockedNoReason: tru
 // profile funds. Both bad ones are listed FIRST, ahead of the two real ones.
 R.push(await run('unusable regions do not eat probe slots', { ...BASE }, { invalidRegions: true,
   expect: (res) => {
-    if (res.ledger.invalid_regions.length !== 2) {
-      return `expected both unusable regions in the ledger, got ${res.ledger.invalid_regions.length}`
+    if (res.ledger.invalid_regions.length !== 3) {
+      return `expected all three unusable regions in the ledger, got ${res.ledger.invalid_regions.length}`
     }
     if (res.regions.some((r) => r.anchor.startsWith('not-reviewed.js'))) {
       return 'a region outside the reviewed paths became a probe target'
     }
     const probed = res.regions.filter((r) => r.probed).map((r) => r.anchor)
     if (probed.length !== 2) return `expected the two real regions probed, got ${JSON.stringify(probed)}`
-    return res.disclosure_checklist.regions_dropped_invalid === 2
-      || `the checklist reports ${res.disclosure_checklist.regions_dropped_invalid} unusable regions, not 2`
+    return res.disclosure_checklist.regions_dropped_invalid === 3
+      || `the checklist reports ${res.disclosure_checklist.regions_dropped_invalid} unusable regions, not 3`
   } }))
 R.push(await run('verdict states no decisive evidence', { ...BASE }, { adjBlankFields: true, probeAlwaysFails: true,
   expect: (res) => (res.substantiated.every((x) => x.attack_grade === 'reproduced')
