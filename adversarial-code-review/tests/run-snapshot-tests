@@ -275,6 +275,37 @@ else
   bad "an untouched tree snapshots identically" "the snapshot is not stable"
 fi
 
+# --- the UNREADABLE record survives a newline in the name ------------------
+#
+# The readable branch is safe because shasum C-quotes such a name and marks
+# the line — measured. The UNREADABLE branch printed the name raw, so
+# `p\none` became two lines and `p\none`+`q\ntwo` sorted to the same multiset
+# as `p\ntwo`+`q\none`. Verified to collide before the fix; the content digest
+# is compared on its own here because the swap moves `git status` too, and
+# the whole snapshot would differ for that reason alone.
+content_digest() {
+  ( cd "$1" && acr_snapshot ) | tail -2 | head -1
+}
+nlu="${WORK}/nl-unreadable"
+git init -q "$nlu"
+printf 'seed\n' > "${nlu}/seed.txt"
+git -C "$nlu" add -A
+git -C "$nlu" -c user.email=t@t -c user.name=t commit -q -m base
+( cd "$nlu" && printf 'x\n' > "$(printf 'p\none')" && printf 'y\n' > "$(printf 'q\ntwo')" \
+    && chmod 0200 "$(printf 'p\none')" "$(printf 'q\ntwo')" )
+nl_a="$(content_digest "$nlu")"
+( cd "$nlu" && chmod 0644 "$(printf 'p\none')" "$(printf 'q\ntwo')" \
+    && rm -f "$(printf 'p\none')" "$(printf 'q\ntwo')" \
+    && printf 'x\n' > "$(printf 'p\ntwo')" && printf 'y\n' > "$(printf 'q\none')" \
+    && chmod 0200 "$(printf 'p\ntwo')" "$(printf 'q\none')" )
+nl_b="$(content_digest "$nlu")"
+if [ -n "$nl_a" ] && [ "$nl_a" != "$nl_b" ]; then
+  ok "unreadable files with newlines in their names do not collide"
+else
+  bad "unreadable files with newlines in their names do not collide" "content digest unchanged across the swap"
+fi
+( cd "$nlu" && chmod 0644 "$(printf 'p\ntwo')" "$(printf 'q\none')" ) 2>/dev/null
+
 # --- an enumeration that fails is not an empty tree ------------------------
 #
 # The file list feeds BOTH digests. As the first command of a `{ a; b; } |

@@ -280,6 +280,11 @@ acr_snapshot() {
       [ -L "./$f" ] && continue
       [ -f "./$f" ] || continue
       if [ -r "./$f" ]; then
+        # Measured: shasum C-QUOTES a name containing a newline and marks the
+        # line with a leading `\`, so its record stays one line and the sort
+        # below cannot interleave two files' halves. That is the tool's
+        # doing, not this recipe's — hence the explicit hash on the other
+        # branch, which has no such protection.
         shasum -a 256 "./$f"
       else
         # Not silently dropped. `2>/dev/null` on the whole batch hid an
@@ -289,7 +294,10 @@ acr_snapshot() {
         # existence and its unreadability are recorded, so the file
         # appearing, vanishing or becoming readable is visible. The residual
         # is stated below rather than hidden.
-        printf 'UNREADABLE  ./%s\n' "$f"
+        # ONE HASH PER RECORD, as in the mode digest: printing the raw name
+        # splits `p\none` into two lines, and `p\none`+`q\ntwo` then sorts to
+        # the same multiset as `p\ntwo`+`q\none`. Verified to collide.
+        printf 'UNREADABLE\0%s\0' "$f" | shasum -a 256
       fi
     done < "${acr_files}" | sort | shasum -a 256
     # Content hashes miss a mode change, and so does status: a tracked file

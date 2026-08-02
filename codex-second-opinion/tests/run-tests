@@ -975,6 +975,39 @@ else
   bad "review: numbers, null, arrays and nested objects are still valid values" "exit $status"
 fi
 
+# An all-disabled listing whose only `true` is NESTED. The prefilter grep is
+# not depth-aware and matches it; the parser correctly reports nothing enabled
+# at depth 1. Refusing there made a legitimate config unusable for every run,
+# so this must start — and must pass no -c override, since there is nothing to
+# switch off.
+argv_log="${workdir}/argv-mcp-nested-true.log"
+stderr="${workdir}/mcp-nested-true.err"
+FAKE_MCP_LIST='[{"name":"off","enabled":false,"transport":{"name":"nested","enabled":true}}]' \
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review' "$argv_log" 2>/dev/null &&
+   ! grep -q -- '-c mcp_servers' "$argv_log"; then
+  ok "review: an all-disabled listing with a nested true still runs"
+else
+  bad "review: an all-disabled listing with a nested true still runs" "exit $status"
+fi
+
+# The same shape must NOT become a way to hide a real server: an entry that is
+# genuinely enabled at depth 1 still has to be switched off, nested object or
+# not.
+argv_log="${workdir}/argv-mcp-nested-real.log"
+FAKE_MCP_LIST='[{"name":"off","enabled":false,"transport":{"name":"nested","enabled":true}},{"name":"live","enabled":true}]' \
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q -- '-c mcp_servers.live.enabled=false' "$argv_log" &&
+   ! grep -q -- 'mcp_servers.nested' "$argv_log"; then
+  ok "review: a real enabled entry beside a nested true is still switched off"
+else
+  bad "review: a real enabled entry beside a nested true is still switched off" "exit $status"
+fi
+
 # An empty first listing is not an empty config: verified on 0.146.0, a
 # config with no servers prints `[]`. A command that exits 0 having printed
 # nothing has failed to enumerate, and that is the one fail-open the whole
@@ -1395,6 +1428,29 @@ else
   bad "review: a symlink-and-.. CODEX_HOME that lands outside still runs" "exit $status"
 fi
 rm -rf "${dirty}/sym-target"
+
+# CODEX_HOME that is ITSELF a symlink into the repository — no `..` anywhere.
+# The path is outside by every textual reading; only resolving the directory
+# it points at sees where the sessions land. The cases above cover `..` after
+# a nonexistent component, `..` after a symlink, and a symlinked `sessions`
+# child — none of them this one.
+mkdir -p "${dirty}/link-target"
+direct_home="${workdir}/direct-home-link"
+rm -rf "$direct_home"
+ln -s "${dirty}/link-target" "$direct_home"
+stderr="${workdir}/codex-home-direct.err"
+argv_log="${workdir}/argv-direct-link.log"
+CODEX_HOME="$direct_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a CODEX_HOME that is itself a symlink into the repo fails closed"
+else
+  bad "review: a CODEX_HOME that is itself a symlink into the repo fails closed" "exit $status"
+fi
+rm -f "$direct_home"
+rm -rf "${dirty}/link-target"
 
 # The parent can sit outside while the child codex actually writes points
 # back in: `sessions` is a symlink into the repository.

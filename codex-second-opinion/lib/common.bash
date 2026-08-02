@@ -498,12 +498,17 @@ EOF
     elif [ -n "$unaddressable" ]; then
       mcp_disable_args=()
       mcp_problem="standalone MCP server '${unaddressable}' cannot be addressed by a config override and so cannot be switched off"
-    elif [ "$mcp_count" -eq 0 ]; then
-      # The listing says something is enabled but no entry could be
-      # named. The re-check below cannot catch this — with no overrides
-      # to apply it would just re-read the same unparsed payload — so
-      # this is its own refusal rather than a silent pass.
-      mcp_problem="could not identify the enabled standalone MCP server(s) to switch off"
+    # NO refusal for mcp_count == 0. The grep above is a cheap prefilter and
+    # is not depth-aware: for
+    #   [{"name":"off","enabled":false,"transport":{"name":"n","enabled":true}}]
+    # it matches the NESTED true, while the parser correctly reports no
+    # enabled entry at depth 1 — and refusing there made a legitimate
+    # all-disabled config unusable for every run. The cases where nothing
+    # could be named are already their own refusals above (`!` truncated,
+    # `?` unnamed), so what is left here is a listing the parser read fine
+    # and found nothing enabled in. The re-check below is the right place
+    # for it and is stricter than a bare pass: with no overrides to apply it
+    # re-parses this very payload and refuses on `!` or on any id at all.
     elif [ "$allow_mcp" -eq 0 ]; then
       # Ask codex itself whether the overrides worked, rather than
       # trusting the parser that produced them. This is what makes a
