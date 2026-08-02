@@ -16,7 +16,8 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DOC="${HERE}/../references/orchestration.md"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/acr-cap-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/acr-cap-XXXXXX")" && [ -n "$WORK" ] || {
+  echo "cannot create the test workspace" >&2; exit 1; }
 trap 'rm -rf "${WORK}"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 

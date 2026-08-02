@@ -1482,6 +1482,19 @@ function addCandidate(c, lens, origin) {
   // slot, so the same twenty-six claims kept twenty-five uniques one way and
   // twenty-four the other, decided by triage's model-produced lens order.
   // What a lens may put into the run is what it submitted.
+  // Evidence FIRST, before the cap is charged. A record that fails
+  // evidenceProblem is unusable on its own terms — the judgement does not
+  // depend on which lens ran, so charging a slot for it is not the
+  // order-independence the cap was after, it is a suppression channel:
+  // twenty-five schema-valid records with out-of-scope anchors would spend
+  // the whole allowance and drop the twenty-sixth, real, critical without
+  // verifying or reporting it. Padding the front of a finder's list is
+  // exactly what a steered or malformed finder does.
+  const problem = evidenceProblem(c)
+  if (problem) {
+    ledger.invalid_candidates.push({ lens, origin, title: c && c.title, anchor: c && c.evidence && c.evidence.anchor, reason: problem })
+    return null
+  }
   const seen = perLensCount.get(lens) || 0
   if (seen >= MAX_CANDIDATES_PER_LENS) {
     ledger.invalid_candidates.push({ lens, origin, title: c && c.title, anchor: c && c.evidence && c.evidence.anchor, reason: `lens exceeded ${MAX_CANDIDATES_PER_LENS} candidates; the surplus is not verified` })
@@ -1495,11 +1508,6 @@ function addCandidate(c, lens, origin) {
   // directly cannot fall out of step with it.
   if (candidates.some((x) => x.fingerprint === fingerprint)) {
     ledger.invalid_candidates.push({ lens, origin, title: c && c.title, anchor: c && c.evidence && c.evidence.anchor, reason: 'byte-identical duplicate of a candidate already accepted' })
-    return null
-  }
-  const problem = evidenceProblem(c)
-  if (problem) {
-    ledger.invalid_candidates.push({ lens, origin, title: c && c.title, anchor: c && c.evidence && c.evidence.anchor, reason: problem })
     return null
   }
   nextId += 1

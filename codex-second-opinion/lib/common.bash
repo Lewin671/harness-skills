@@ -736,8 +736,20 @@ common_resolve_scratch() {
   # rooted there matched nothing and the run wrote its scratch files straight
   # into the tree it promises only to read. Reachable whenever TMPDIR cannot
   # be entered at all — which is the only way to get here.
-  scratch="$(cd -- "$scratch" 2>/dev/null && pwd -P)" ||
+  if ! scratch="$(cd -- "$scratch" 2>/dev/null && pwd -P)"; then
     scratch="$(cd -- /tmp 2>/dev/null && pwd -P)" || scratch="/tmp"
+    # Move TMPDIR itself, not just this script's own files — the same reason
+    # the repo-local branch below does. An unusable TMPDIR is inherited by
+    # mktemp's default, by anything the shell materialises, and by codex
+    # itself, all of which are then pointed at a directory that is not there.
+    # (An earlier report had bash here-strings silently producing no input
+    # under this condition, which would have made the MCP checks pass on an
+    # empty payload. Measured on the bash 3.2 this ships with, and on 5.x:
+    # they fall back on their own and the input arrives intact. The export is
+    # right regardless, and this note records what was checked rather than
+    # leaving a plausible mechanism half-believed.)
+    export TMPDIR="$scratch"
+  fi
   # Three roots, not one. In a linked worktree the administrative git
   # directory lives under the MAIN repository's .git/worktrees/<name>, well
   # outside `--show-toplevel`, and the common dir is elsewhere again — so a

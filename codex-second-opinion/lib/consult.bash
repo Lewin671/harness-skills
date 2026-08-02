@@ -197,6 +197,27 @@ mode_main() {
   # A missing id (say the event shape changed) just means no session to
   # continue: the answer above stands, only the follow-up affordance is
   # lost.
+  # Held to the same shape `--continue` accepts, BEFORE it is advertised. The
+  # id is read out of the event stream, and the `resume:` line is offered as a
+  # command to run: interpolated unquoted, a value carrying `;` or a newline
+  # turns that line into something else entirely, and a value that is merely
+  # not a UUID advertises a follow-up `--continue` would reject anyway. The
+  # check that matters is the one on the way OUT, since this is where a
+  # malformed value reaches a human.
+  #
+  # ONE layer here, unlike the flag parser, which needs a character-class arm
+  # in front of its grep because argv can carry a newline whose second line is
+  # a valid UUID. This value cannot: it comes out of `grep -o | head -1 |
+  # cut`, all line-based, so a newline-split id yields nothing at all.
+  # Measured. Copying the two-layer pattern here left an arm no input can
+  # reach, and its mutant survived by construction — which is how it was
+  # found.
+  if [ -n "$session_out" ] &&
+     ! printf '%s' "$session_out" | grep -qiE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+    echo "warning: the stream reported a thread id that is not a session UUID; not advertising a resume command for it" >&2
+    session_out=""
+  fi
+
   if [ -z "$session_out" ]; then
     # Emit BOTH markers, as prose that cannot be mistaken for an id or a
     # command. Callers are told to trust the *final* marker line of each
@@ -246,6 +267,15 @@ mode_main() {
     #    have used.
     local resume_mcp=""
     [ "$allow_mcp" -eq 1 ] && resume_mcp=" --allow-mcp"
+    # CODEX_HOME does not travel in a flag, and the session lives under it.
+    # A consultation started with a non-default one — often because this
+    # script told the user to relocate it — is unresumable from a shell that
+    # does not set it again, and the descriptor advertises itself as ready to
+    # run. Printed BEFORE the resume line so that line stays the last of its
+    # kind, which is what callers are told to trust.
+    if [ -n "${CODEX_HOME:-}" ]; then
+      echo "note: this consultation used CODEX_HOME=$(shell_quote "$CODEX_HOME"); set it the same way before replaying the line below" >&2
+    fi
     echo "resume: --continue ${session_out}${resume_flags}${resume_mcp} --repo $(shell_quote "$PWD")" >&2
   fi
 }

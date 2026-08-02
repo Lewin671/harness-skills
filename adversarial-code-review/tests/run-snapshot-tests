@@ -15,7 +15,8 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DOC="${HERE}/../references/orchestration.md"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/acr-snap-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/acr-snap-XXXXXX")" && [ -n "$WORK" ] || {
+  echo "cannot create the test workspace" >&2; exit 1; }
 trap 'rm -rf "${WORK}"' EXIT
 
 # Ambient config must not reach the fixtures: hooksPath, templates, gpg

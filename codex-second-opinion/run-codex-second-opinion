@@ -19,6 +19,19 @@ set -euo pipefail
 # which must carry nothing but the result. It would corrupt the
 # $(cd ...) substitutions the same way.
 unset CDPATH
+# `--repo` is supposed to select the repository, and on its own it does not:
+# every git call below inherits these. Measured — with the requested directory
+# as GIT_WORK_TREE and ANOTHER repository's .git as GIT_DIR,
+# `--is-inside-work-tree` says true and `--show-toplevel` returns the
+# requested directory, while `git status` compares it against the other
+# repository's index and history. The prechecks, the scope resolution and the
+# repo-containment tests would all describe the wrong tree, with no error.
+# Codex is launched with the same environment, so it would read it too.
+# GIT_INDEX_FILE is unset here and set deliberately, per command, by
+# git_readonly_index.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
+      GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM
 
 # Resolve the physical directory so the lib/ files are found through
 # the symlink the skill linker installs.

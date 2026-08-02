@@ -136,7 +136,20 @@ paths=(src/pay.js src/auth.js)   # then: -- "${paths[@]}" "${excludes[@]}"
 # (2) uncommitted — the common case
 diff_args=(HEAD); untracked=1
 # (3) branch vs merge-base
-diff_args=("$(git merge-base origin/HEAD HEAD)" HEAD); untracked=0
+# `origin/HEAD` is an OPTIONAL symbolic ref: a clone made without it, or a
+# repository whose remote HEAD was never set, has none — measured, this very
+# repository exits 128 with "Not a valid object name origin/HEAD" while having
+# an `origin` remote. Under `set -e` that aborts Phase 0 before capture. Fall
+# back to the remote HEAD, then to the local default names, and say which was
+# used rather than guessing silently.
+acr_base_ref=""
+for acr_try in origin/HEAD "$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)" \
+               origin/main origin/master main master; do
+  [ -n "${acr_try}" ] || continue
+  if git rev-parse --verify --quiet "${acr_try}^{commit}" >/dev/null 2>&1; then acr_base_ref="${acr_try}"; break; fi
+done
+[ -n "${acr_base_ref}" ] || { echo "no default branch found; name the base explicitly" >&2; exit 1; }
+diff_args=("$(git merge-base "${acr_base_ref}" HEAD)" HEAD); untracked=0
 # (4) an explicit range the user named
 diff_args=("${from_ref}" "${to_ref}"); untracked=0
 
@@ -146,7 +159,7 @@ base_sha="$(git rev-parse "${diff_args[0]}")"
 # stays invisible: the untracked half still appends, the manifest still names
 # every path, and the hash still computes — over a patch missing the tracked
 # changes the review claims to be about.
-git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" > "${tmp}/patch.diff" ||
+git diff --no-ext-diff --no-textconv --binary --ignore-submodules=dirty "${diff_args[@]}" > "${tmp}/patch.diff" ||
   { echo "could not capture the tracked patch" >&2; exit 1; }
 # Untracked files exist only in the working tree, so they belong to the
 # uncommitted scope alone. Added without touching the index.
@@ -385,6 +398,12 @@ acr_snapshot() {
       # its first ten characters on every platform this runs on; git itself
       # tracks only the executable bit, which is why nothing else here sees
       # the change.
+      # ELEVEN characters, not ten. macOS puts an ACL/xattr marker in the
+      # eleventh — `@` for extended attributes, `+` for an ACL — and an
+      # executed test can add one without touching a byte, a porcelain column
+      # or a permission bit. Measured: `ls -ld` reads `-rw-r--r--@` and
+      # `cut -c1-10` discarded exactly that character. Ten was not wrong on
+      # Linux, where the column is a space; eleven is right on both.
       # ONE HASH PER FILE, not one line per file. A symlink target may
       # contain a newline, and three newline-delimited fields then sort as
       # separate lines whose association with each other is lost — while
@@ -398,10 +417,10 @@ acr_snapshot() {
       # trailing newlines — retargeting `missing` to `missing\n` would
       # otherwise produce an identical record.
       if [ -L "./$f" ]; then
-        { printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-10)" "$f"
+        { printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-11)" "$f"
           readlink "./$f" 2>/dev/null || true; } | shasum -a 256
       else
-        printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-10)" "$f" |
+        printf '%s\0%s\0' "$(ls -ld "./$f" 2>/dev/null | cut -c1-11)" "$f" |
           shasum -a 256
       fi
     done < "${acr_files}" | sort | shasum -a 256 || exit 1
@@ -454,7 +473,15 @@ came to name only some of them.
   write-only file that stays write-only is invisible.
 - **anything inside a checked-out submodule.** The `ls-files` here is the
   superproject's, and a dirty submodule reports the same one-line marker in
-  status however much changes inside it.
+  status however much changes inside it. The capture passes
+  `--ignore-submodules=dirty` so that marker does not reach the patch either:
+  a default `git diff HEAD` emits a `Subproject commit <sha>-dirty`
+  pseudo-hunk, which is submodule worktree state appearing in an artifact this
+  file says never carries any — and it carries none of the changed source, so
+  it describes the change without containing it. A real gitlink MOVE is a
+  superproject change and still appears; both measured. (`git apply` accepts
+  the `-dirty` hunk rather than rejecting it — checked, because the opposite
+  was the plausible guess.)
 - **anything git does not list at all.** `git ls-files --others` and
   `git status` report neither FIFOs, sockets, nor device nodes — measured,
   both are empty for a worktree containing one. So a special file appearing,
@@ -489,7 +516,7 @@ excludes=(':(exclude)*.lock' ':(exclude)package-lock.json'
           ':(exclude)vendor/**' ':(exclude)**/node_modules/**'
           ':(exclude)**/__snapshots__/**' ':(exclude)*.min.js')
 
-git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff" ||
+git diff --no-ext-diff --no-textconv --binary --ignore-submodules=dirty "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff" ||
   { echo "could not capture the tracked patch" >&2; exit 1; }
 
 # The SAME pathspecs must filter untracked files. `git check-ignore` only
@@ -581,7 +608,13 @@ same filtered pathspecs, and cover all three shapes of change:
 # Claude Code replaces bare dollar-digit tokens with invocation arguments when
 # it renders a skill, so the unparenthesised spelling would be substituted away
 # before the recipe ever reached awk.
-git diff --no-ext-diff --no-textconv --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
+# `-c core.quotePath=false`: with the default, a path holding any non-ASCII
+# byte is C-QUOTED in the header — `+++ "b/caf\303\251.js"` — and the fixed
+# substr below then yields `/caf\303\251.js"`, which matches no entry in the
+# NUL-decoded included_paths. The range is filed under a key nobody has, the
+# real file gets none, and every candidate in it silently drops to file-level
+# binding. Measured.
+git -c core.quotePath=false diff --no-ext-diff --no-textconv --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
   awk '# A header pair is only a header pair INSIDE a file header — between
        # `diff --git` and the first hunk. Requiring the `--- ` half is not
        # enough: one hunk that rewrites a source line `-- a/forged` into
@@ -698,7 +731,7 @@ generated-client update sit at opposite ends of value per token.
 | Profile | Buys | Use when |
 |---------|------|----------|
 | `balanced` *(default)* | Broad lens coverage, verification of every candidate, probes on the top 2 high-risk regions, execution for critical targets | Most reviews |
-| `recall-first` | Every relevant lens plus one supplemental lens, probes on **all** high-risk regions; execution only where a probe already built a counterexample | "What did we miss?" — pre-release sweeps, unfamiliar code |
+| `recall-first` | Up to six lenses — triage's schema ceiling — plus at most one supplemental, probes on **all** high-risk regions; execution only where a probe already built a counterexample | "What did we miss?" — pre-release sweeps, unfamiliar code |
 | `precision-first` | Minimum coverage floor, then depth: execution for criticals *and* majors that have a counterexample | A contested finding, or a report that must not contain false alarms |
 
 Announce the profile, the budget, and the estimated launch count before

@@ -47,6 +47,7 @@ cat > "$fake" <<'FAKE'
 #                       absent (created on the first failure)
 #   FAKE_EXIT           exit with this status after the event stream (default 0)
 #   FAKE_NO_THREAD      suppress the thread.started event when set
+#   FAKE_BAD_THREAD     emit this as the thread id instead of a valid UUID
 #   FAKE_CONFIG_ERR     fail the way --strict-config fails on an unknown key
 [ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
 [ -n "${FAKE_TMPDIR_LOG:-}" ] && printf '%s\n' "${TMPDIR:-unset}" >> "$FAKE_TMPDIR_LOG"
@@ -138,7 +139,11 @@ for a in "$@"; do
   [ "$prev" = "-o" ] && printf '%s' "${FAKE_OUTPUT:-Looks fine overall.}" > "$a"
   prev="$a"
 done
-[ -z "${FAKE_NO_THREAD:-}" ] &&
+# A thread id that is not a session UUID — schema drift, or a wrapper in the
+# way. The advertised resume line is a command someone is invited to run.
+[ -n "${FAKE_BAD_THREAD:-}" ] && [ -z "${FAKE_NO_THREAD:-}" ] &&
+  printf '{"type":"thread.started","thread_id":"%s"}\n' "$FAKE_BAD_THREAD"
+[ -z "${FAKE_NO_THREAD:-}" ] && [ -z "${FAKE_BAD_THREAD:-}" ] &&
   echo '{"type":"thread.started","thread_id":"0198aaaa-bbbb-cccc-dddd-eeeeffff0000"}'
 echo '{"type":"item.started"}'
 echo '{"type":"item.completed"}'
@@ -285,6 +290,51 @@ check_exit "review: --timeout just past the cap is exit 3" 3 "$?"
 
 "$wrapper" review --repo "$dirty" --uncommitted --base main >/dev/null 2>&1
 check_exit "review: combined scopes are exit 3" 3 "$?"
+
+# An EMPTY --base scope. Every other --base case here has changes or a bad
+# ref, so the precheck's "nothing to review" arm was never reached — and it is
+# the arm that matters most: Codex reports "there are no changes" as an
+# ordinary successful review, which reads like a pass. Branch and HEAD are the
+# same commit and the tree is clean, so the merge base IS HEAD.
+emptybase="${workdir}/emptybase"
+git init -q "$emptybase"
+printf 'x\n' > "${emptybase}/a.txt"
+git -C "$emptybase" add -A
+git -C "$emptybase" "${commit_env[@]}" commit -q -m base
+git -C "$emptybase" branch -f mainline
+argv_log="${workdir}/argv-emptybase.log"
+: > "$argv_log"
+FAKE_ARGV_LOG="$argv_log" "$wrapper" review --repo "$emptybase" --base mainline \
+  --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 2 ] && ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: no changes since the merge base is exit 2, and codex is never invoked"
+else
+  bad "review: no changes since the merge base is exit 2, and codex is never invoked" "exit $status"
+fi
+
+# Ambient git selectors must not decide which repository is reviewed. The
+# discriminator is a CLEAN --repo tree plus another repository's GIT_DIR: with
+# the selectors inherited, `git status` compares this tree against the other
+# repository's index, reports differences, and the precheck lets a review of
+# the wrong scope proceed. Cleared, the clean tree is correctly nothing to
+# review. Measured: --is-inside-work-tree says true and --show-toplevel
+# returns the requested directory either way, so neither of those notices.
+ambient_other="${workdir}/ambient-other"
+git init -q "$ambient_other"
+printf 'other\n' > "${ambient_other}/only-here.txt"
+git -C "$ambient_other" add -A
+git -C "$ambient_other" "${commit_env[@]}" commit -q -m other
+argv_log="${workdir}/argv-ambient.log"
+: > "$argv_log"
+GIT_DIR="${ambient_other}/.git" GIT_WORK_TREE="$clean" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$clean" --timeout 30 >/dev/null 2>&1
+amb_status=$?
+if [ "$amb_status" = 2 ] && ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: an ambient GIT_DIR does not redirect the reviewed repository"
+else
+  bad "review: an ambient GIT_DIR does not redirect the reviewed repository" "exit $amb_status"
+fi
 
 "$wrapper" review --repo "$dirty" --base no-such-branch >/dev/null 2>&1
 check_exit "review: unknown base ref is exit 3" 3 "$?"
@@ -1146,6 +1196,22 @@ for prim in \
   fi
 done
 
+# A name carrying an ESCAPED QUOTE. The string consumer honours backslash
+# escapes so that a quote inside a name cannot end the token early; without
+# that, `[{"name":"a\"b","enabled":false}]` unbalances and the listing is
+# refused as incomplete. Measured — the difference is a legitimate
+# all-disabled config being rejected, so the guard fails closed either way and
+# only this case can see it.
+argv_log="${workdir}/argv-mcp-escaped.log"
+FAKE_MCP_LIST='[{"name":"a\"b","enabled":false}]' FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: an escaped quote in an MCP name does not break the listing"
+else
+  bad "review: an escaped quote in an MCP name does not break the listing" "exit $status"
+fi
+
 # ...and the shapes that must keep working, so the rule above cannot be a
 # blanket refusal: nested arrays and numbers INSIDE an entry are ordinary
 # values, not entries.
@@ -1886,7 +1952,15 @@ fi
 # aimed at this script never reaches it. Without forwarding, a cancelled run
 # keeps burning tokens with nobody left to read the result — and the watchdog
 # sleeps on for the rest of its timeout. Only --timeout was covered before.
-FAKE_SLEEP=60 "$wrapper" review --repo "$dirty" --timeout 600 >/dev/null 2>&1 &
+# The DESCENDANT is checked too, exactly as the timeout case does it. Matching
+# only the fake proves nothing about the group: a regression that signals the
+# codex pid alone removes the process `pgrep` looks for, still returns 143, and
+# leaves the differently-named `sleep` child holding the pipeline open — which
+# is the whole reason the forwarding kills the group rather than the pid.
+sig_child_file="${workdir}/sig-child-pid"
+rm -f "$sig_child_file"
+FAKE_SLEEP=60 FAKE_CHILD_PID_FILE="$sig_child_file" \
+  "$wrapper" review --repo "$dirty" --timeout 600 >/dev/null 2>&1 &
 sig_pid=$!
 sig_seen=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
@@ -1895,12 +1969,21 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
 done
 kill -TERM "$sig_pid" 2>/dev/null
 wait "$sig_pid"; sig_status=$?
-sleep 1
-if [ "$sig_seen" = 1 ] && [ "$sig_status" = 143 ] && ! pgrep -f "$fake" >/dev/null 2>&1; then
+# The forwarding sends TERM, waits, then KILLs; give the backstop a moment.
+sleep 2
+sig_child="$(cat "$sig_child_file" 2>/dev/null || true)"
+sig_child_alive=0
+if [ -n "$sig_child" ] && kill -0 "$sig_child" 2>/dev/null; then
+  sig_child_alive=1
+  kill -KILL "$sig_child" 2>/dev/null || true
+fi
+if [ "$sig_seen" = 1 ] && [ "$sig_status" = 143 ] &&
+   ! pgrep -f "$fake" >/dev/null 2>&1 &&
+   [ -n "$sig_child" ] && [ "$sig_child_alive" = 0 ]; then
   ok "review: TERM is forwarded into codex's process group and reaps it"
 else
   bad "review: TERM is forwarded into codex's process group and reaps it" \
-    "started=$sig_seen exit=$sig_status survivors=$(pgrep -f "$fake" | tr '\n' ' ')"
+    "started=$sig_seen exit=$sig_status child=${sig_child:-none} child_alive=$sig_child_alive survivors=$(pgrep -f "$fake" | tr '\n' ' ')"
 fi
 
 # =======================================================================
@@ -2213,6 +2296,27 @@ if [ "$status" = 4 ] && [ "$exec_calls" = 2 ]; then
 else
   bad "consult: fresh-run stale-model fallback still retries once" "exit $status, $exec_calls exec calls"
 fi
+
+# A thread id that is not a session UUID. The answer still stands; what must
+# not happen is advertising it as a runnable `--continue`, since the line is
+# interpolated unquoted and `--continue` would reject the value anyway.
+for badthread in 'abc; touch /tmp/cso-forged-zzz' 'not-a-uuid' '0198aaaa-bbbb-cccc-dddd'; do
+  resume_out="${workdir}/badthread.err"
+  rm -f /tmp/cso-forged-zzz
+  FAKE_BAD_THREAD="$badthread" "$wrapper" consult --repo "$repo" --timeout 30 \
+    "question" >/dev/null 2> "$resume_out"
+  bt_status=$?
+  if [ "$bt_status" = 0 ] &&
+     grep -q '^resume: unavailable' "$resume_out" &&
+     grep -q '^session: unavailable' "$resume_out" &&
+     ! grep -q "^resume: --continue" "$resume_out" &&
+     [ ! -e /tmp/cso-forged-zzz ]; then
+    ok "consult: a non-UUID thread id is not advertised as resumable (${badthread})"
+  else
+    bad "consult: a non-UUID thread id is not advertised as resumable (${badthread})" \
+      "exit $bt_status, resume line: $(grep -m1 '^resume:' "$resume_out")"
+  fi
+done
 
 # No thread.started event → the answer stands, and both markers say so in
 # prose rather than falling silent. An id is never invented.

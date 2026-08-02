@@ -13,7 +13,8 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ORIG="${HERE}/../review-workflow.js"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/acr-mut-XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/acr-mut-XXXXXX")" && [ -n "$TMP" ] || {
+  echo "cannot create the mutation workspace" >&2; exit 1; }
 trap 'rm -rf "${TMP}"' EXIT
 
 # A red baseline would make every mutant look killed for free — the same
@@ -120,6 +121,16 @@ mutate "unknown-verdict-id rejection" "    if (!expected.has(id)) { ledger.unkno
 mutate "duplicate-verdict rejection" "    if (seen.has(id)) {" "    if (false) {"
 mutate "low-confidence coverage risk" "  ledger.coverage_risks.push({" "  if (false) ledger.coverage_risks.push({"
 mutate "finder evidence validation" "  const problem = evidenceProblem(c)" "  const problem = null"
+# Evidence is validated BEFORE the per-lens cap is charged. Charging first
+# makes the cap a suppression channel: 25 schema-valid records with
+# out-of-scope anchors spend the whole allowance and the real critical filed
+# behind them is dropped without verification or disclosure.
+mutate "the lens cap is not charged for invalid records" "  const problem = evidenceProblem(c)
+  if (problem) {
+    ledger.invalid_candidates.push({ lens, origin, title: c && c.title, anchor: c && c.evidence && c.evidence.anchor, reason: problem })
+    return null
+  }
+  const seen = perLensCount.get(lens) || 0" "  const seen = perLensCount.get(lens) || 0"
 mutate "weighted-unit hard ceiling" "  if (committedWU + wu > budgetWU + EPS) return false" "  "
 mutate "optional protected-floor check" "  if (committedWU + costWU + protectedWU > budgetWU + EPS) return false" "  "
 mutate "token ceiling (generic)" "  if (!admitTokens(wu)) return false" "  "
@@ -515,7 +526,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=216
+EXPECTED_TOTAL=217
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

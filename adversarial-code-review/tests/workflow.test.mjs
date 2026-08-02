@@ -86,6 +86,7 @@ const drainer = (total, budgetWU, factor = 1, heavy = {}, foreign = null) => {
 // An `ok` result carries its launches under cost.launch_detail; the early
 // returns carry them at the top level. Reading only one of the two is how
 // three drift assertions came to count zero launches and pass regardless.
+const MAX_PAD = 25
 const launchesOf = (res) => (res && res.cost && res.cost.launch_detail) || (res && res.launches) || []
 
 const predicate = (holds) => ({ finding: 'stub', cited_path: 'foo.js', cited_line: 1, cited_code: 'x = y', holds })
@@ -169,6 +170,22 @@ function makeAgent(state, s) {
         for (let i = 0; i < 30; i++) many.push(cand('pay.js', 20, 'critical', 'present_code', 'identical decoy'))
         for (let i = 0; i < 30; i++) many.push(cand('pay.js', 30 + i, 'critical', 'present_code', `distinct decoy ${i}`))
         return { candidates: many, additional_high_risk_regions: [] }
+      }
+      // Padding that is schema-valid and unusable: the anchors name a file
+      // nobody reviewed, so evidenceProblem rejects every one. If the cap is
+      // charged before that check, all 25 slots are gone and the real
+      // critical at the end is dropped without verification or disclosure.
+      if (s.invalidPadding && lens === 'logic correctness') {
+        const pad = Array.from({ length: MAX_PAD }, (_, i) => ({
+          file: 'not-reviewed.js', line: i + 1, title: `pad ${i}`,
+          proposed_severity: 'critical', confidence: 'high', evidence_kind: 'present_code',
+          evidence: { anchor: `not-reviewed.js:${i + 1}`, quoted_code: 'x', observed_behavior: 'y' },
+        }))
+        return { candidates: [...pad, {
+          file: 'auth.js', line: 12, title: 'the real one, filed last',
+          proposed_severity: 'critical', confidence: 'high', evidence_kind: 'present_code',
+          evidence: { anchor: 'auth.js:12', quoted_code: 'if (user) allow()', observed_behavior: 'authorises any truthy user' },
+        }], additional_high_risk_regions: [] }
       }
       if (s.anchorMismatch) {
         return { candidates: [{ file: 'pay.js', line: 20, title: 'anchor points elsewhere', proposed_severity: 'critical',
@@ -1478,6 +1495,14 @@ R.push(await run('blocked without a reason', { ...BASE }, { blockedNoReason: tru
   } }))
 // Regions that cannot be probe targets must not consume the slots the
 // profile funds. Both bad ones are listed FIRST, ahead of the two real ones.
+R.push(await run('invalid padding does not spend the lens cap', { ...BASE }, { invalidPadding: true,
+  expect: (res) => {
+    const real = (res.candidate_results || []).concat(res.found_but_not_verified || [])
+      .find((x) => x.title === 'the real one, filed last')
+    if (!real) return 'a real critical filed behind 25 unusable records was dropped entirely'
+    return res.ledger.invalid_candidates.filter((x) => /exceeded/.test(x.reason)).length === 0
+      || 'the cap was charged for records that failed evidence validation'
+  } }))
 R.push(await run('unusable regions do not eat probe slots', { ...BASE }, { invalidRegions: true,
   expect: (res) => {
     if (res.ledger.invalid_regions.length !== 3) {
@@ -2583,7 +2608,7 @@ for (const r of R) {
   if (r.res.candidate_results) {
     console.log(`  results:  ${r.res.candidate_results.map((x) => `${x.candidate_id}:${x.state}/${x.attack_grade}/${x.execution_status}`).join(' ') || '(none)'}`)
     console.log(`  classes:  subst=${r.res.substantiated.length} unres=${r.res.unresolved.length} refut=${r.res.refuted.length}`)
-    console.log(`  regions:  ${r.res.regions.map((x) => `${x.target_id}:${x.probed ? x.probe_outcome : x.not_probed_because}${x.emergent_candidate_id ? `->${x.emergent_candidate_id}` : ''}`).join(' ')}`)
+    console.log(`  regions:  ${r.res.regions.map((x) => `${x.target_id}:${x.probed ? x.probe_outcome_claimed : x.not_probed_because}${x.emergent_candidate_id ? `->${x.emergent_candidate_id}` : ''}`).join(' ')}`)
     console.log(`  breadth:  lenses=${r.res.search_breadth.lenses_run.length} suppl=${r.res.search_breadth.supplemental_lens_bought} regions=${r.res.search_breadth.regions_probed}/${r.res.search_breadth.regions_total} emergent=${r.res.search_breadth.emergent_candidates}`)
     console.log(`  depth:    verified=${r.res.verification_depth.verified} adjudicated=${r.res.verification_depth.adjudicated} executed=${r.res.verification_depth.executed}`)
     const L = r.res.ledger

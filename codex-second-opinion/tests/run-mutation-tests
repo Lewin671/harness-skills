@@ -18,7 +18,13 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SKILL="$(cd "${HERE}/.." && pwd -P)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/cso-mut-XXXXXX")"
+# Guarded, and not only for tidiness. This script does not set -e, and
+# `mutate` derives `work="${TMP}/work"` and then `rm -rf "$work"` — so an
+# empty TMP from a failed mktemp makes that `rm -rf /work`, before a single
+# mutant has run. tests/run-tests has guarded its own workdir from the start;
+# this one did not.
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/cso-mut-XXXXXX")" && [ -n "$TMP" ] || {
+  echo "cannot create the mutation workspace" >&2; exit 1; }
 trap 'rm -rf "${TMP}"' EXIT
 
 # A red baseline would score every mutant as killed for free — the same
@@ -91,6 +97,12 @@ mutate "feature state must read exactly false" lib/common.bash \
   'if [ "$state" != "false" ]; then' 'if [ "$state" = "true" ]; then'
 
 # --- standalone MCP servers ------------------------------------------------
+# The string consumer honours backslash escapes so a quote INSIDE a name
+# cannot end the token early. Removing it does not fail open — the payload
+# unbalances and is refused as incomplete — so the discriminating case is a
+# legitimate all-disabled config being rejected, which is what this pins.
+mutate "escaped quotes inside a name are consumed" lib/common.bash \
+  '            if (c == "\\") { val = val substr(s, i, 2); i += 2; continue }' '            ;'
 mutate "mcp values must be bare booleans" lib/common.bash \
   'elif ! mcp_enabled_values_boolean "$mcp_out"; then' 'elif false; then'
 mutate "an empty mcp listing is not an empty config" lib/common.bash \
@@ -157,9 +169,8 @@ mutate "a repo-local TMPDIR is relocated" lib/common.bash \
 mutate "the worktree list must be readable" lib/common.bash \
   'if [ "$wt_status" != 0 ]; then' 'if false; then'
 mutate "TMPDIR is a cd operand, not a flag" lib/common.bash \
-  'scratch="$(cd -- "$scratch" 2>/dev/null && pwd -P)" ||
-    scratch="$(cd -- /tmp 2>/dev/null && pwd -P)" || scratch="/tmp"' \
-  'scratch="$(cd "$scratch" 2>/dev/null && pwd -P)" || scratch="/tmp"'
+  '  if ! scratch="$(cd -- "$scratch" 2>/dev/null && pwd -P)"; then' \
+  '  if ! scratch="$(cd "$scratch" 2>/dev/null && pwd -P)"; then'
 mutate "the /tmp fallback is resolved" lib/common.bash \
   '    scratch="$(cd -- /tmp 2>/dev/null && pwd -P)" || scratch="/tmp"' \
   '    scratch="/tmp"'
@@ -193,23 +204,59 @@ mutate "an empty uncommitted scope exits 2" lib/review.bash \
 mutate "a scope flag carries the resolved object name" lib/review.bash \
   '      --base)   cmd+=("${resolved_base:-$scope_value}") ;;' \
   '      --base)   cmd+=("$scope_value") ;;'
+mutate "an empty --base scope exits 2" lib/review.bash \
+  '      if [ "$diff_status" -eq 0 ]; then' '      if false; then'
 mutate "--context cannot ride with --custom" lib/review.bash \
   'if [ "$context_set" -eq 1 ] && [ "$scope_flag" = "--custom" ]; then' 'if false; then'
 mutate "a resumed session is verified" lib/consult.bash \
   'if [ -n "$session_id" ] && [ "$session_out" != "$session_id" ]; then' 'if false; then'
 mutate "a follow-up is never auto-retried" lib/consult.bash \
   '  [ -n "$session_id" ] || return 1' '  return 1'
-mutate "--continue takes a UUID only" lib/consult.bash \
+# Named for the newline guard, because that is all it removes: the UUID grep
+# below it still rejects every non-UUID, so this mutant is killed by the
+# embedded-newline case alone. The regex gets its own mutant rather than being
+# reported as covered by this one.
+mutate "--continue rejects a newline hiding a UUID" lib/consult.bash \
   "        case \"\$1\" in
           ''|*[![:alnum:]-]*)" \
   "        case \"no-such-value-zzz\" in
           ''|*[![:alnum:]-]*)"
+mutate "--continue requires the UUID shape itself" lib/consult.bash \
+  "        if ! printf '%s' \"\$1\" | grep -qiE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\$'; then" \
+  "        if false; then"
+# Cancellation kills the GROUP. Signalling the pid alone removes the process
+# a `pgrep` would look for while the descendant holding the pipeline survives.
+mutate "cancellation signals the process group" lib/common.bash \
+  '    kill -TERM "-${pgid}" 2>/dev/null || true
+    sleep 2
+    kill -KILL "-${pgid}" 2>/dev/null || true' \
+  '    kill -TERM "${pgid}" 2>/dev/null || true
+    sleep 2
+    kill -KILL "${pgid}" 2>/dev/null || true'
+# `--repo` must select the repository; ambient git selectors override it.
+mutate "ambient git selectors are cleared" run-codex-second-opinion \
+  'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
+      GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM' ':'
+
+# KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
+#
+#   inside_repo exact-root match    ([ "$candidate" = "$root" ] && return 0)
+#
+# The prefix arm below it already matches whenever candidate equals root:
+# `case "${candidate}/" in "${root%/}"/*)` appends a slash to the subject, and
+# `*` matches the empty string, so `/repo/` matches `/repo/*`. Checked at the
+# shapes that could differ — root `/repo` and root `/`, candidate equal to
+# either, and a child of each — and the prefix arm alone is sufficient in
+# every one. The exact arm is kept as a statement of intent and costs one
+# comparison; a mutant for it would survive by construction, and a suite that
+# tolerates a silent survivor is what this file exists to prevent.
 
 echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. Pin the count:
 # any mutant that silently fails to launch is a failure in itself.
-EXPECTED_TOTAL=38
+EXPECTED_TOTAL=43
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1
