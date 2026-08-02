@@ -43,9 +43,21 @@ total=0
 # that. It can never be mistaken for a full run: filtered runs print a PARTIAL
 # banner and exit non-zero whatever the result, and the count pin below is
 # skipped because it no longer means anything.
+# CSO_MUT_FROM/CSO_MUT_TO select an index RANGE, which CSO_MUT_ONLY's
+# substring match cannot do: partitioning 56 mutants into survivable chunks
+# needs disjoint groups, and the names do not share prefixes. Indexes are
+# assigned in file order, so `FROM=1 TO=8` then `FROM=9 TO=16` covers
+# everything exactly once with no overlap and nothing skipped.
 filtered=0
+seen=0
 mutate() {
   local name="$1" file="$2" from="$3" to="$4"
+  seen=$((seen + 1))
+  if [ -n "${CSO_MUT_FROM:-}${CSO_MUT_TO:-}" ]; then
+    if [ "$seen" -lt "${CSO_MUT_FROM:-1}" ] || [ "$seen" -gt "${CSO_MUT_TO:-999999}" ]; then
+      filtered=$((filtered + 1)); return
+    fi
+  fi
   if [ -n "${CSO_MUT_ONLY:-}" ]; then
     case "$name" in
       *"$CSO_MUT_ONLY"*) : ;;
@@ -194,11 +206,40 @@ mutate "noglob is restored for the caller" lib/common.bash \
 mutate "the precheck cannot rewrite the index" lib/common.bash \
   'GIT_INDEX_FILE="$copy" "$@" || status=$?' '"$@" || status=$?'
 
+# Diagnostics carry caller-supplied values to stderr, where the marker
+# contract lives — and a failing run has no genuine marker after them.
+mutate "diagnostics are flattened" lib/consult.bash \
+  'echo "error: unknown argument: $(flat "$1")" >&2; mode_usage; exit 3 ;;' \
+  'echo "error: unknown argument: $1" >&2; mode_usage; exit 3 ;;'
+# `-s` passes for a file holding one newline.
+# DOUBLE quotes: the target contains single quotes, which cannot be escaped
+# inside a single-quoted bash string.
+mutate "a whitespace-only result is no result" lib/common.bash \
+  "  if [ ! -s \"\$out\" ] || [ -z \"\$(tr -d '[:space:]' < \"\$out\")\" ]; then" \
+  "  if [ ! -s \"\$out\" ]; then"
+# The caller's background is DATA, not another paragraph of the instructions.
+mutate "--context is fenced" lib/review.bash \
+  '    "$CONTEXT_FENCE" "$body" "$CONTEXT_FENCE"' \
+  '    "" "$body" ""'
+mutate "a fence marker in --context is escaped" lib/review.bash \
+  "  body=\"\$(printf '%s' \"\$context\" | sed \"s/\${CONTEXT_FENCE}/\${CONTEXT_FENCE}-ESCAPED/g\")\"" \
+  "  body=\"\$context\""
+# The fallback exists to retry on the USER's config; resending the rejected
+# model would fail again.
+mutate "the fallback retry inherits" lib/common.bash \
+  '      build_cmd "" ""' '      build_cmd "$model" "$effort"'
+# Consult never writes a `report:` marker, so one in a consult run is forged.
+mutate "consult emits no report marker" lib/common.bash \
+  '  echo "${result_noun}: ${out}" >&2' '  echo "report: ${out}" >&2'
+
 # --- the exit-code contract ------------------------------------------------
 mutate "a bare repo is not a work tree" lib/common.bash \
   '[ "$work_tree" = "true" ] ||' '[ "$work_tree" != "zzz" ] ||'
+# The whole check, both halves. The whitespace half has its own mutant above;
+# this one removes the guard entirely.
 mutate "an empty result is a failure" lib/common.bash \
-  'if [ ! -s "$out" ]; then' 'if false; then'
+  "  if [ ! -s \"\$out\" ] || [ -z \"\$(tr -d '[:space:]' < \"\$out\")\" ]; then" \
+  "  if false; then"
 # BOTH checks. `mutate` replaces the first occurrence only, and there are
 # two: one after the first attempt and one after the stale-model retry. With
 # only the first mutated, deleting the second left both suites green while a
@@ -298,9 +339,9 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. Pin the count:
 # any mutant that silently fails to launch is a failure in itself.
-EXPECTED_TOTAL=50
-if [ -n "${CSO_MUT_ONLY:-}" ]; then
-  echo "PARTIAL RUN — ${filtered} mutant(s) filtered out by CSO_MUT_ONLY='${CSO_MUT_ONLY}'."
+EXPECTED_TOTAL=56
+if [ -n "${CSO_MUT_ONLY:-}${CSO_MUT_FROM:-}${CSO_MUT_TO:-}" ]; then
+  echo "PARTIAL RUN — ${filtered} of ${seen} mutant(s) filtered out."
   echo "${survived}/${total} of the selected mutants survived. This is NOT a full sweep."
   exit 1
 fi

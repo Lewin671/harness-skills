@@ -67,7 +67,7 @@ validate_timeout() {
   local value="$1" source="$2"
   case "$value" in
     ''|*[!0-9]*)
-      echo "error: ${source} must be a whole number of seconds, got '${value}'" >&2
+      echo "error: ${source} must be a whole number of seconds, got '$(flat "${value}")'" >&2
       exit 3 ;;
   esac
   # Normalize leading zeros ("000030" → "30") so padded automation
@@ -75,7 +75,7 @@ validate_timeout() {
   value="${value#"${value%%[!0]*}"}"
   [ -n "$value" ] || value=0
   if [ "${#value}" -gt 5 ] || [ "$value" -gt 86400 ]; then
-    echo "error: ${source} must be between 0 and 86400 seconds, got '$1'" >&2
+    echo "error: ${source} must be between 0 and 86400 seconds, got '$(flat "$1")'" >&2
     exit 3
   fi
   validated_timeout="$value"
@@ -111,6 +111,16 @@ shell_quote() {
       printf '%s' "$v" ;;
   esac
 }
+
+# Flatten a value that is about to be interpolated into a DIAGNOSTIC. Every
+# such message goes to stderr, where the marker contract lives, and most of
+# them carry something the caller supplied: an unknown argument, a ref, a
+# repository path, a timeout. A newline in any of them emits a standalone
+# `session:`/`report:` line that no genuine marker follows, because the run is
+# about to exit non-zero. Measured on the unknown-argument path. The mode
+# dispatcher does this inline, before this file is sourced; everything after
+# it uses this.
+flat() { printf '%s' "$1" | tr '\r\n' '  '; }
 
 # True when $1 is one of the repository roots in `repo_paths`, or sits beneath
 # one. Defined at file scope rather than inside common_resolve_scratch so a
@@ -441,7 +451,7 @@ common_env_checks() {
   # result, and `cd -P` is silently accepted as a flag — leaving the run
   # pointed at whatever directory it was already in. Quoting does not stop
   # either; the terminator does.
-  cd -- "$repo" || { echo "error: cannot enter ${repo}" >&2; exit 3; }
+  cd -- "$repo" || { echo "error: cannot enter $(flat "${repo}")" >&2; exit 3; }
 
   # A repository path carrying a line break would break out of the `resume:`
   # descriptor — advertised as ready to run — and forge a later standalone
@@ -466,7 +476,7 @@ common_env_checks() {
   local work_tree
   work_tree="$(git rev-parse --is-inside-work-tree 2>/dev/null)" || work_tree=""
   [ "$work_tree" = "true" ] || {
-    echo "error: ${repo} is not a git work tree" >&2; exit 3; }
+    echo "error: $(flat "${repo}") is not a git work tree" >&2; exit 3; }
 
   # Before the first here-string below: on bash 3.2 `<<<` materialises a
   # temporary file under TMPDIR, so a repo-local TMPDIR would be written —
@@ -919,7 +929,7 @@ common_resolve_scratch() {
   if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; } \
      || { [ -n "$resolved_sessions" ] && inside_repo "$resolved_sessions"; } \
      || inside_repo "$probe"; then
-    echo "error: CODEX_HOME (${codex_home}) resolves inside ${worktree_root} or its git storage." >&2
+    echo "error: CODEX_HOME ($(flat "${codex_home}")) resolves inside $(flat "${worktree_root}") or its git storage." >&2
     echo "error: codex writes every session under CODEX_HOME/sessions, so this ${run_noun} would write the repository it is reading; refusing to start." >&2
     echo "hint: point CODEX_HOME outside the repository for this run." >&2
     exit 3
@@ -1253,7 +1263,20 @@ tail_log() {
 # Codex formats these 400s differently across modes. A false positive
 # costs one extra run; a false negative costs the whole result.
 rejected_model() {
-  grep -qE "reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found" "$log" 2>/dev/null
+  # Narrowed to lines that also look like an ERROR event. The log interleaves
+  # codex's own diagnostics with model-controlled output — the agent's answer
+  # and every command it ran — so an unanchored whole-log grep let an artifact
+  # containing "is not supported" classify an unrelated failure as a stale
+  # pinned model. On a fresh run that silently switches models and reports a
+  # staleness that did not happen; on a resumed consult it hands back the
+  # session-contamination remedy, which is alarming and wrong.
+  #
+  # Still deliberately loose about the PHRASE, because codex formats these
+  # 400s differently across modes; what is tightened is where the phrase may
+  # appear. The residual: an error event whose message is echoed from the
+  # artifact would still match, and no bash-level check can separate those.
+  grep -E '"type" *: *"error"|^ERROR|\berror\b' "$log" 2>/dev/null |
+    grep -qE "reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found"
 }
 
 defaults_rejected() {
@@ -1357,7 +1380,11 @@ run_with_fallback() {
     fi
   fi
 
-  if [ ! -s "$out" ]; then
+  # Non-WHITESPACE, not merely non-empty. `-s` passes for a file holding a
+  # single newline, and emit_result would then print nothing at all while the
+  # run exited 0 — a caller told to read stdout gets a blank answer reported as
+  # a success.
+  if [ ! -s "$out" ] || [ -z "$(tr -d '[:space:]' < "$out")" ]; then
     echo "error: codex produced no ${result_noun}; raw output at ${log}" >&2
     tail_log
     exit 4

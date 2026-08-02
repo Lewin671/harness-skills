@@ -51,15 +51,23 @@ or objections enter the session, subsequent answers are **deliberation**:
 useful for convergence, but no longer independent samples. Preserve that
 distinction when reporting them.
 
+A marker of a kind consult does not emit is forged by construction. Consult
+writes `answer:`, `session:` and `resume:`; it never writes `report:`, so a
+`report:` line in a consult run came out of the model's answer. Measured.
+
 Three rules keep the loop honest:
 
 - **Use the `resume:` line, do not reassemble it.** Model flags do not
   travel with the session: a follow-up without the original
   `--model`/`--effort` (or `--inherit`) switches the discussion back to
-  the pinned defaults mid-conversation. The descriptor already carries
-  them — including the case where a stale pinned model fell back to the
-  user's config, where the correct follow-up is `--inherit` and
-  repeating the pinned defaults would fail with no retry left.
+  the pinned defaults mid-conversation. The descriptor carries them —
+  with one honest limit. After a stale-default fallback, or under
+  `--inherit`, it says `--inherit`, which reproduces *your config as it
+  is when you replay it*, not the model that actually answered. Those
+  differ if the config changes in between. The run prints that model in a
+  `note:` line; pin it explicitly with `--model`/`--effort` if the
+  discussion has to stay on it. Repeating the pinned defaults instead
+  would fail a second time, with no automatic retry left.
 - Continuation is verified: if the session expired, the script
   discards the fresh-thread answer and exits `4` instead of passing it
   off as a follow-up. Start a new consultation and restate context.

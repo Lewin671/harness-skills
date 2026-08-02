@@ -38,20 +38,22 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 top_usage() {
-  cat >&2 <<'USAGE'
-Usage: run-codex-second-opinion <review|consult> [ARGS]
+  # printf, not a heredoc: on bash 3.2 a heredoc is materialised under
+  # TMPDIR, so usage text — including --help — depended on that being
+  # writable, and this runs BEFORE the scratch relocation. Reported as
+  # exiting 1 instead of 0 (or 3) on a read-only filesystem.
+  printf '%s\n' 'Usage: run-codex-second-opinion <review|consult> [ARGS]
 
   review   run `codex exec review` over a code change
   consult  ask a free-form question answered with the repo as context
 
-Run `run-codex-second-opinion <mode> --help` for that mode's arguments.
+Run `run-codex-second-opinion <mode> --help` for that mode'\''s arguments.
 
 Environment:
   CODEX_BIN                     path to the codex binary (default: codex)
   CODEX_SECOND_OPINION_MODEL    override the pinned default model
   CODEX_SECOND_OPINION_EFFORT   override the pinned default effort
-  CODEX_SECOND_OPINION_TIMEOUT  override the default timeout (seconds)
-USAGE
+  CODEX_SECOND_OPINION_TIMEOUT  override the default timeout (seconds)' >&2
 }
 
 mode="${1:-}"

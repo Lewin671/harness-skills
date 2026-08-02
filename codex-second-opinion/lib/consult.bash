@@ -6,8 +6,11 @@ run_noun="consultation"
 result_noun="answer"
 
 mode_usage() {
-  cat >&2 <<'USAGE'
-Usage: run-codex-second-opinion consult [OPTIONS] QUESTION
+  # printf, not a heredoc: on bash 3.2 a heredoc is materialised under
+  # TMPDIR, so usage text — including --help — depended on that being
+  # writable, and this runs BEFORE the scratch relocation. Reported as
+  # exiting 1 instead of 0 (or 3) on a read-only filesystem.
+  printf '%s\n' 'Usage: run-codex-second-opinion consult [OPTIONS] QUESTION
 
 The QUESTION is one free-form argument: the decision to weigh, the plan
 to critique, the trade-off to argue. Name the files or documents Codex
@@ -48,8 +51,7 @@ Environment:
   CODEX_BIN                     path to the codex binary (default: codex)
   CODEX_SECOND_OPINION_MODEL    override the pinned default model
   CODEX_SECOND_OPINION_EFFORT   override the pinned default effort
-  CODEX_SECOND_OPINION_TIMEOUT  override the default timeout (seconds)
-USAGE
+  CODEX_SECOND_OPINION_TIMEOUT  override the default timeout (seconds)' >&2
 }
 
 question=""
@@ -117,7 +119,7 @@ mode_main() {
             exit 3 ;;
         esac
         if ! printf '%s' "$1" | grep -qiE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
-          echo "error: --continue needs the session UUID printed by the previous run, got '$1'" >&2
+          echo "error: --continue needs the session UUID printed by the previous run, got '$(flat "$1")'" >&2
           exit 3
         fi
         session_id="$1"; shift ;;
@@ -142,7 +144,7 @@ mode_main() {
         fi
         question="$1"; question_set=1; shift ;;
       -*)
-        echo "error: unknown argument: $1" >&2; mode_usage; exit 3 ;;
+        echo "error: unknown argument: $(flat "$1")" >&2; mode_usage; exit 3 ;;
       *)
         if [ "$question_set" -eq 1 ]; then
           echo "error: expected exactly one QUESTION; quote the whole question as one argument" >&2
