@@ -102,17 +102,20 @@ mutate "refutation grounding must be strong" "verifierRecord && verifierRecord.g
 # (contract.md section 4), so a reproduction may not overrule the verifier's own
 # statement that the obligation is UNKNOWN — that was promoting a record whose
 # every predicate was unsettled, undoing the grounding guard one line above.
-mutate "a reproduction does not settle an unknown obligation" "  const obligationUnsettled = holdsOf(verifierRecord, 'contract_violation') === 'unsettled'
-    || (unsettledNamesValid && unsettledNames.includes('contract_violation'))" "  const obligationUnsettled = false"
+mutate "a reproduction does not settle an unknown obligation" "  const obligationEstablished = citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
+    && unsettledNamesValid && !unsettledNames.includes('contract_violation')" "  const obligationEstablished = true"
+# The half-rule this replaced: a MISSING verifier record is not "unsettled",
+# so keying on that let the run with no verification at all through the guard
+# that stopped the run with honest uncertainty.
+mutate "a missing verifier is not an established obligation" "  const obligationEstablished = citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
+    && unsettledNamesValid && !unsettledNames.includes('contract_violation')" "  const obligationEstablished = holdsOf(verifierRecord, 'contract_violation') !== 'unsettled'"
 # Both signals, because they disagree: a record can set holds='unsettled' while
 # naming only another predicate in unsettled_predicates, which is exactly the
 # shape that slipped through when only the list was read.
-mutate "the obligation-unknown check reads holds" "holdsOf(verifierRecord, 'contract_violation') === 'unsettled'
-    ||" "false ||"
 # The two execution counters must measure the same thing.
 mutate "attacks_not_executed counts what ran" "    attacks_not_executed: results.filter((r) => !(r.attack
       && (r.attack.execution_status === 'executed' || r.attack.ran_artifact_code === true))).length," "    attacks_not_executed: results.filter((r) => r.attack_grade !== 'reproduced' && r.attack_grade !== 'held').length,"
-mutate "terminal evidence override" "  if (terminal && !obligationFalsified && !obligationUnsettled && state !== 'substantiated') {" "  if (false) {"
+mutate "terminal evidence override" "  if (terminal && !obligationFalsified && obligationEstablished && state !== 'substantiated') {" "  if (false) {"
 # A control settles which patch caused the change, not whether the old
 # behaviour was owed.
 mutate "reproduction does not override the obligation" "  if (terminal && obligationFalsified && state !== 'unresolved') {" "  if (false) {"

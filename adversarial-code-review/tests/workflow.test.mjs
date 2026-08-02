@@ -1440,9 +1440,19 @@ R.push(await run('reproduction against a weakly refuted obligation', { ...BASE }
       const terminal = res.candidate_results.filter((r) => r.attack_grade === 'reproduced'
         && r.execution_status === 'executed')
       if (!terminal.length) return 'no controlled reproduction ran, so the grounding rule is untested'
-      const held = terminal.filter((r) => r.state !== 'substantiated')
-      return held.length === 0
-        || `${held[0].candidate_id} is ${held[0].state}: a refutation that never grounded itself held a controlled reproduction`
+      // A weak refutation settles nothing, so it must not REJECT the
+      // candidate. It also cannot supply the obligation, and neither can the
+      // reproduction — so the honest state is unresolved, and the ledger has
+      // to say the obligation was never established rather than blaming a
+      // refutation that grounded nothing. Before the obligation rule this
+      // landed on `substantiated`, which asserted a violated obligation that
+      // no evidence supported.
+      const rejected = terminal.filter((r) => r.state === 'refuted')
+      if (rejected.length) return `${rejected[0].candidate_id} was rejected on a refutation that never grounded itself`
+      const promoted = terminal.filter((r) => r.state === 'substantiated')
+      if (promoted.length) return `${promoted[0].candidate_id} was substantiated with no cited evidence for the obligation`
+      return res.ledger.reproduced_without_obligation.length > 0
+        || 'a reproduction was left unresolved without disclosing that the obligation was never established'
     } }))
 R.push(await run('a candidate is genuinely refuted', { ...BASE }, { verifierCleanRefute: true, adjAlwaysRefute: true,
   expect: (res) => {
@@ -2751,25 +2761,39 @@ for (const r of R) {
       && x.verifier.contract_violation.holds === 'falsifies_candidate'
       && String(x.verifier.contract_violation.cited_code || '').trim()
       && !(x.verifier.unsettled_predicates || []).includes('contract_violation'))
-    // ...and it does not outrank the verifier's own statement that the
-    // obligation is UNKNOWN either. Substantiation needs all three predicates
-    // affirmatively supported (contract.md section 4); a control supplies two
-    // of them. Where the verifier said it could not settle the third, "this
-    // patch changed the behaviour" is established and "the behaviour was owed"
-    // is not — which is unresolved, not a finding. This invariant used to
-    // allow only `substantiated`, so a record whose every predicate was
-    // unsettled was promoted on the reproduction alone, undoing the grounding
-    // guard that had just moved it out of substantiated.
-    const obligationUnknown = Boolean(x.verifier
-      && ((x.verifier.contract_violation && x.verifier.contract_violation.holds === 'unsettled')
-          || (x.verifier.unsettled_predicates || []).includes('contract_violation')))
-    const allowed = (obligationKilled || obligationUnknown)
-      ? ['substantiated', 'unresolved'] : ['substantiated']
-    if (controlled(x.attack) && obligationUnknown && !obligationKilled && x.state === 'substantiated') {
+    // Substantiation needs all three predicates affirmatively supported
+    // (contract.md section 4) and a control supplies two, so the third has to
+    // come from a verifier that CITED it. Anything less — no verifier at all,
+    // an unsettled obligation, a citation missing its code or line — leaves
+    // "this patch changed the behaviour" established and "the behaviour was
+    // owed" not, which is unresolved.
+    //
+    // This invariant has been narrowed twice from "a reproduction is always
+    // substantiated". First for an obligation the verifier called unsettled;
+    // then for the case that keyed on it, where a MISSING record is not
+    // "unsettled" either, so the run with no verification at all passed the
+    // guard that the run with honest uncertainty failed.
+    const obligationEstablished = Boolean(x.verifier
+      && x.verifier.contract_violation
+      && x.verifier.contract_violation.holds === 'supports_candidate'
+      && String(x.verifier.contract_violation.finding || '').trim()
+      && String(x.verifier.contract_violation.cited_code || '').trim()
+      && String(x.verifier.contract_violation.cited_path || '').trim()
+      && Number.isInteger(x.verifier.contract_violation.cited_line)
+      && !(x.verifier.unsettled_predicates || []).includes('contract_violation'))
+    // Both directions. Without the second, deleting the whole rule leaves the
+    // suite green: everything simply lands in the wider allowance.
+    if (controlled(x.attack) && !obligationEstablished && x.state === 'substantiated') {
       fail++
-      problems.push(`${r.name}: ${x.candidate_id} was substantiated on a reproduction while its verifier `
-        + 'could not settle the obligation — a control settles causality, not whether the behaviour was owed')
+      problems.push(`${r.name}: ${x.candidate_id} was substantiated on a reproduction with no cited `
+        + 'evidence that the obligation was violated — a control settles causality, not whether the behaviour was owed')
     }
+    if (controlled(x.attack) && obligationEstablished && !obligationKilled && x.state !== 'substantiated') {
+      fail++
+      problems.push(`${r.name}: ${x.candidate_id} has a controlled reproduction and a cited obligation `
+        + `but is ${x.state}`)
+    }
+    const allowed = ['substantiated', 'unresolved']
     if (controlled(x.attack) && !allowed.includes(x.state)) {
       fail++; problems.push(`${r.name}: ${x.candidate_id} has a controlled reproduction but is ${x.state}`)
     }

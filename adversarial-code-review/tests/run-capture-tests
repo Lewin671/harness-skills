@@ -128,6 +128,7 @@ run_capture() {
 
 commit_env=(-c user.email=t@t -c user.name=t)
 
+
 new_repo() {
   local d="${WORK}/$1"
   git init -q "$d"
@@ -241,6 +242,44 @@ if [ "$status" != 0 ]; then
   ok "an uncapturable untracked file stops the capture"
 else
   bad "an uncapturable untracked file stops the capture" "exit 0, the file was dropped silently"
+fi
+
+# The scratch directory must SURVIVE the capture. Nothing may clean it up:
+# the attack phase reads patch.diff from it in a later Bash call, and the
+# post-run snapshot compares against tree-before taken in the first one. A
+# recipe that tidied up after itself would break both, silently — the patch
+# would be gone by the time an attack tried to apply it.
+if [ -d "${tmp:-/nonexistent}" ] && [ -s "${tmp}/patch.diff" ] && [ -f "${tmp}/index-copy" ]; then
+  ok "the Phase 0 scratch directory and its patch outlive the capture"
+else
+  bad "the Phase 0 scratch directory and its patch outlive the capture" \
+    "tmp=${tmp:-unset}, patch=$([ -s "${tmp:-/nonexistent}/patch.diff" ] && echo present || echo missing)"
+fi
+
+# ...and a FAILED capture must not leave one behind. Success needs
+# persistence; failure exits under `set -e` before anything can name the
+# directory, so every retry would otherwise leave another unannounced copy of
+# a partial diff and the index.
+failtmp="$(new_repo failcap)"
+fail_out="${WORK}/failcap.out"
+# Counted immediately around THIS capture. Comparing against a snapshot taken
+# at suite start counts every successful capture's directory too — those
+# persist by design — so the check drifted by four and failed on correct code.
+acr_dirs_before="$(ls -d "${TMPDIR:-/tmp}"/acr-* 2>/dev/null | wc -l | tr -d ' ')"
+( cd "$failtmp" || exit 1
+  # A scope git cannot resolve: the capture dies after mktemp, before the
+  # patch is complete.
+  diff_args=(no-such-ref-zzz); untracked=0
+  # shellcheck source=/dev/null
+  . "${WORK}/capture.sh"
+  printf '%s' "$tmp" > "${WORK}/failcap-tmp" ) > "$fail_out" 2>&1
+fail_status=$?
+leftover="$(ls -d "${TMPDIR:-/tmp}"/acr-* 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$fail_status" != 0 ] && [ "$leftover" = "$acr_dirs_before" ]; then
+  ok "a failed capture leaves no unannounced scratch directory"
+else
+  bad "a failed capture leaves no unannounced scratch directory" \
+    "exit $fail_status, acr-* dirs before=$acr_dirs_before after=$leftover"
 fi
 
 # --- Phase 0 run from a SUBDIRECTORY ---------------------------------------

@@ -2647,17 +2647,28 @@ const results = candidates.map((c) => {
   // contract_violation.holds was "unsettled" while the list named only
   // semantics — so the rule reads both, and `holds` is the authoritative one
   // because it is the verifier's statement about THAT predicate.
-  const obligationUnsettled = holdsOf(verifierRecord, 'contract_violation') === 'unsettled'
-    || (unsettledNamesValid && unsettledNames.includes('contract_violation'))
-  if (terminal && !obligationFalsified && !obligationUnsettled && state !== 'substantiated') {
+  // AFFIRMATIVELY SUPPORTED, which is what section 4 requires of all three.
+  // Keying this on "the verifier SAID unsettled" was half a rule: with no
+  // verifier record at all `holdsOf` returns null, which is not "unsettled",
+  // so the case where nobody examined anything sailed through the guard that
+  // stopped the case where somebody looked and could not tell. An intentional
+  // breaking change, an attacker's old-behaviour test, a verifier deferred or
+  // dead — and the run reports a verified defect.
+  //
+  // The documented override survives: where a verifier completed and cited the
+  // obligation, a reproduction still outranks an ADJUDICATOR that refuted,
+  // went unresolved, or never returned. That promise is about adjudication.
+  const obligationEstablished = citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
+    && unsettledNamesValid && !unsettledNames.includes('contract_violation')
+  if (terminal && !obligationFalsified && obligationEstablished && state !== 'substantiated') {
     ledger.terminal_evidence_overrides.push({
       candidate_id: c.id, anchor: `${c.file}:${c.line}`, adjudicated_state: state, forced_state: 'substantiated',
       severity_unassigned: !v,
-      why: 'a controlled reproduction outranks a refutation of semantics or reachability, and no verifier left the obligation unsettled (contract.md section 5)'
+      why: 'a controlled reproduction outranks a refutation of semantics or reachability, and a verifier cites evidence for the violated obligation (contract.md section 5)'
         + (v ? '' : '; no verdict was returned, so its severity is unassigned'),
     })
     state = 'substantiated'
-  } else if (terminal && !obligationFalsified && obligationUnsettled) {
+  } else if (terminal && !obligationFalsified && !obligationEstablished) {
     // The control still settles the two predicates it can, so a refutation
     // resting on those does not survive it — but the result is `unresolved`,
     // not a finding. Reported with the reproduction attached, because "this
@@ -2666,13 +2677,13 @@ const results = candidates.map((c) => {
     if (state !== 'unresolved') {
       ledger.forced_unresolved.push({
         candidate_id: c.id, anchor: `${c.file}:${c.line}`,
-        why: 'a controlled reproduction shows this patch changed the behaviour, which settles semantics and reachability but not the obligation — and the verifier said it could not settle the obligation, so this is not a finding',
+        why: 'a controlled reproduction shows this patch changed the behaviour, which settles semantics and reachability but not the obligation — and no verifier cited evidence that the old behaviour was owed, so this is not a finding',
       })
       state = 'unresolved'
     }
     ledger.reproduced_without_obligation.push({
       candidate_id: c.id, anchor: `${c.file}:${c.line}`,
-      why: 'reproduced under control, but the verifier could not settle whether the previous behaviour was owed',
+      why: 'reproduced under control, but no cited evidence establishes that the previous behaviour was owed',
     })
   }
   if (v && v.state === 'unresolved' && !namesPredicate(v.unsettled_predicate)) {

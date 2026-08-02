@@ -2097,16 +2097,27 @@ fi
 # one per SUCCESSFUL run that sleeps until its original deadline. A distinctive
 # timeout makes the leak addressable by pgrep.
 leak_timeout=5171
-pkill -f "sleep ${leak_timeout}" 2>/dev/null || true
+# NEVER pkill. `sleep 5171` is a command line anyone can have, this repo
+# expects concurrent agents (AGENTS.md), and the mutation harness reruns this
+# suite once per mutant — so a blanket kill would reach unrelated processes
+# dozens of times per sweep. Compare the set of matching pids before and
+# after instead, and only report what this run added.
+leak_before="$(pgrep -f "sleep ${leak_timeout}" 2>/dev/null | sort | tr '\n' ' ')"
 "$wrapper" review --repo "$dirty" --timeout "$leak_timeout" >/dev/null 2>&1
 leak_status=$?
 sleep 1
-if [ "$leak_status" = 0 ] && ! pgrep -f "sleep ${leak_timeout}" >/dev/null 2>&1; then
+leak_after="$(pgrep -f "sleep ${leak_timeout}" 2>/dev/null | sort | tr '\n' ' ')"
+leak_new=""
+for lp in $leak_after; do
+  case " $leak_before " in *" $lp "*) : ;; *) leak_new="${leak_new}${lp} " ;; esac
+done
+if [ "$leak_status" = 0 ] && [ -z "$leak_new" ]; then
   ok "review: a successful run leaves no watchdog sleeper behind"
 else
   bad "review: a successful run leaves no watchdog sleeper behind" \
-    "exit $leak_status, survivors: $(pgrep -f "sleep ${leak_timeout}" | tr '\n' ' ')"
-  pkill -f "sleep ${leak_timeout}" 2>/dev/null || true
+    "exit $leak_status, new sleepers: ${leak_new:-none}"
+  # Only ones this run created, never a pattern sweep.
+  for lp in $leak_new; do kill -TERM "$lp" 2>/dev/null || true; done
 fi
 
 # --- the KILL backstop, for a codex that ignores TERM -------------------

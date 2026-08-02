@@ -102,7 +102,23 @@ for acr_repo in "${acr_roots[@]}"; do
     echo "no scratch directory outside the repository; set TMPDIR elsewhere" >&2; exit 1 ;;
   esac
 done
+# This directory PERSISTS after the run, and that is not an oversight: the
+# attack phase reads patch.diff out of it in a different Bash call, and the
+# post-run snapshot compares against tree-before taken in the first one. So
+# nothing here may clean up after itself, and one directory accumulates per
+# review — holding the full reviewed diff, a copy of the index, both tree
+# snapshots, and the enumeration files the chosen scope needed. Say so in the
+# report rather than leaving the user to find it:
+# the sibling skill names the two files it keeps, and this one kept six
+# without naming any.
 tmp="$(mktemp -d "${acr_root}/acr-XXXXXX")"
+# Remove it ONLY on failure. A successful capture must persist — the attack
+# phase and the post-run snapshot read it after this shell exits — but a run
+# that dies at the patch capture or a manifest exits under `set -e` before
+# anything can name the directory, so every retry would leave another
+# unannounced copy of a partial diff and the index. Success falls through with
+# the directory intact.
+trap 'acr_st=$?; [ "${acr_st}" -ne 0 ] && [ -n "${tmp:-}" ] && rm -rf "${tmp}"; exit "${acr_st}"' EXIT
 
 # Read git without letting it write the repository. A diff against the WORKING
 # TREE refreshes stale stat data and rewrites .git/index — with or without
@@ -272,6 +288,17 @@ Reviewing the submodule separately, with `--repo` pointing inside it, is the
 supported answer. Recursing here is not: `git diff --submodule=diff` produces
 output `git apply` cannot apply into the superproject, so the patch binding
 the whole attack phase rests on would become a claim rather than a fact.
+
+**What Phase 0 leaves on disk.** `${tmp}` is still there when the run ends,
+holding `patch.diff`, `index-copy` and both tree snapshots — plus
+`untracked.z` only in the uncommitted scope, and `included.z` only if the
+NUL-safe manifest block ran. Naming six unconditionally was wrong: a clean
+branch capture writes four. A disclosure that lists artifacts a run did not
+create is the same defect as one that hides artifacts it did, because the attack phase and the post-run
+snapshot both read them after Phase 0's shell has exited. Name the directory
+in the report alongside `base_sha` and the patch hash. It holds the complete
+reviewed diff, so it is exactly as sensitive as the code under review, and
+one accumulates per run.
 
 Record the pre-run tree state for the write-safety check in §7. Status
 alone is **not** enough, and this matters more than it looks: a tracked
@@ -557,6 +584,22 @@ included="$(acr_manifest -- . "${excludes[@]}")" || { echo "manifest capture fai
 everything="$(acr_manifest)" || { echo "manifest capture failed" >&2; exit 1; }
 excluded="$(comm -23 <(printf '%s\n' "${everything}") <(printf '%s\n' "${included}"))"
 ```
+
+**Print the handoff before this shell exits.** Everything §8 passes to
+`Workflow` — and everything the §7 post-run snapshot needs — was computed in a
+Bash call that is about to end, taking its variables with it. Nothing here
+persists them, and guessing the newest `/tmp/acr-*` afterwards is wrong the
+moment two reviews overlap, which AGENTS.md says to expect. End the capture
+call with them, and carry the values forward explicitly:
+
+```bash
+printf 'tmp=%s\nbase_sha=%s\npatch_sha256=%s\n' "${tmp}" "${base_sha}" "${patch_sha256}"
+printf 'included_paths:\n'; printf '%s\n' "${included}"
+printf 'excluded_paths:\n'; printf '%s\n' "${excluded}"
+```
+
+The snapshot function in §7 is defined and called in ONE call for the same
+reason; `${tmp}` is what lets the post-run half find `tree-before`.
 
 `included` and `excluded` are newline-delimited shell variables;
 `included_paths` and `excluded_paths` are JSON arrays of the same paths.

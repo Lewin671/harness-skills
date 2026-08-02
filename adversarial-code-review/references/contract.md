@@ -305,11 +305,14 @@ It does **not** settle the obligation, and that gap cuts twice. Section 4
 requires all three predicates affirmatively supported before anything is
 substantiated, and a control supplies two of them — so a reproduction is
 terminal evidence *for what it establishes*, not a substitute for the third.
-Where the verifier says it could not settle `contract_violation`, the honest
-result is `unresolved` with the reproduction attached: this patch changed the
-behaviour, and nobody established the behaviour was owed. Reading the override
-as unconditional unless the obligation was affirmatively *falsified* makes the
-failure below reachable whenever nobody managed to prove a negative.
+So the override needs the obligation CITED, not merely un-refuted: where no
+verifier record supports `contract_violation` with quoted code, the honest
+result is `unresolved` with the reproduction attached — this patch changed the
+behaviour, and nobody established the behaviour was owed. Two weaker readings
+were tried and both leak. Requiring only that the obligation was not
+*falsified* admits the case where the verifier could not settle it; requiring
+only that it was not *called unsettled* admits the case where no verifier ran
+at all, which is the same gap one level out.
 
 The difference is not academic.
 Asked to break an intentional change, an attacker can author a test for the
