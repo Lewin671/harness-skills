@@ -1961,7 +1961,11 @@ endWave()
 // already-approved candidate probes are admitted against capacity that
 // adjudication has a prior claim on, and the run ends adjudication_failed
 // having spent the budget on verifiers whose verdicts nobody can assign.
-prepaidDebtWU = adjReserveWU + escrow.adjudicator
+// Both escrows, not just adjudication's. The verifier escalation is drawn
+// after this wave, so its tokens are owed exactly the way adjudication's are
+// — and leaving it out let the remaining verifiers and the candidate probes
+// spend the headroom the escalate-once promise had already reserved.
+prepaidDebtWU = adjReserveWU + escrow.adjudicator + escrow.verifier
 
 // Priced at the observed rate now. Anything that no longer fits is deferred
 // with its reason rather than launched and paid for — the accuracy floor is
@@ -2031,6 +2035,12 @@ const weakCriticals = criticals.filter((c) => { const v = verifierById.get(c.id)
 // defined as a GROUNDED refutation, not merely a returned one. Deleting the
 // record was a critical-only special case whose only surviving effect was on
 // the reported counts, so the definition carries the rule instead.
+// The verifier escrow is being SPENT now, so it stops being a debt owed to a
+// later wave. Leaving it in would have the draw compete with itself: the
+// admission would hold room for the very units it is about to release.
+// Adjudication's share stays, because its wave is still ahead.
+prepaidDebtWU = adjReserveWU + escrow.adjudicator
+
 const escNow = []
 for (const c of weakCriticals) {
   if (drawOrReserve('verifier', W.criticalVerifierEscalated)) escNow.push(c)
@@ -2067,6 +2077,18 @@ if (escNow.length) {
   }
   endWave()
 }
+// Nothing else can draw the verifier escrow after this point: it exists for
+// exactly one rerun per weak critical, and which criticals are weak is now
+// known. Whatever is left is a reservation for a purchase that can no longer
+// happen, and holding it defers real work — an executable attack costs ten
+// units and a stale 3.5 can be the difference. Released from committedWU so
+// `cost.committed_wu` reports what the run actually took, which is what
+// contract.md section 6 asks of every number in the header.
+if (escrow.verifier > 0) {
+  committedWU -= escrow.verifier
+  escrow.verifier = 0
+}
+
 for (const c of weakCriticals) {
   const r = verifierById.get(c.id)
   if (!r || r.grounding !== 'strong') {
@@ -2342,7 +2364,12 @@ const results = candidates.map((c) => {
   const holdsOf = (r, k) => (r && r[k] && r[k].holds) || null
   // "cited" is load-bearing in both directions: a predicate that names no code
   // is an assertion, and the contract accepts assertions from nobody.
+  // `finding` is the sentence connecting the cited code to the predicate.
+  // Without it there are three citations and no claim about any of them, and
+  // "affirmatively supported by cited evidence" is satisfied by the citation
+  // alone — which is a location, not support.
   const citedAs = (r, k, verdict) => Boolean(r && r[k] && r[k].holds === verdict
+    && nonblank(r[k].finding)
     && nonblank(r[k].cited_code) && nonblank(r[k].cited_path)
     && Number.isInteger(r[k].cited_line) && r[k].cited_line >= 1)
   const groundedRefutation = Boolean(verifierRecord && verifierRecord.grounding === 'strong')

@@ -360,6 +360,13 @@ common_env_checks() {
   # the relocation that fixes that used to happen afterwards.
   common_resolve_scratch
 
+  # A partial clone fetches missing objects on demand, so a precheck that
+  # needs one reaches the network and writes .git/objects before any sandbox
+  # exists. GIT_NO_LAZY_FETCH stops that; it landed in git 2.42 and is inert
+  # below, which is why internals.md states the residual instead of claiming
+  # the prechecks cannot fetch on every git.
+  export GIT_NO_LAZY_FETCH=1
+
   codex_bin="${CODEX_BIN:-codex}"
   if ! "$codex_bin" --version >/dev/null 2>&1; then
     cat >&2 <<EOF

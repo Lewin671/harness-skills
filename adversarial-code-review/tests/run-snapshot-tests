@@ -68,6 +68,11 @@ new_repo() {
   # An untracked symlink that ALREADY dangles: status reports `??` for it
   # before and after any retarget, and shasum cannot read either target.
   ln -s missing-a "$d/dangling-link"
+  # Two symlinks whose targets contain newlines. Serialised as newline-
+  # delimited fields and then sorted, swapping their halves produces the same
+  # set of lines — and symlinks are not in the content digest at all.
+  ln -s "$(printf 'a\nX')" "$d/nl-one"
+  ln -s "$(printf 'b\nY')" "$d/nl-two"
 
   printf '%s' "$d"
 }
@@ -132,6 +137,11 @@ detects "contents of an already-modified file named -" sh -c 'printf overwritten
 detects "an untracked file replaced by a symlink"      sh -c 'rm untracked.txt && ln -s /etc/hosts untracked.txt'
 detects "a symlink retargeted to another missing path" sh -c 'ln -sf missing-b dangling-link'
 detects "a symlink retargeted to an existing path"     sh -c 'ln -sf tracked.txt dangling-link'
+# Retargeting links whose targets contain newlines — the shape the per-record
+# hashing exists for. It is a regression case for that encoding, not a
+# demonstrated collision: none was found.
+detects "newline-bearing link targets retargeted" \
+  sh -c 'ln -sfn "$(printf "b\nX")" nl-one && ln -sfn "$(printf "a\nY")" nl-two'
 
 # HEAD is the third term and nothing above touches it: an empty commit over
 # an already-dirty tree moves HEAD while leaving status and every file hash

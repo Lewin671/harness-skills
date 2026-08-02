@@ -204,7 +204,7 @@ mutate "the finder sample reprices the rest" "if (restLenses.length && !admitTok
 mutate "lens cap keeps the consequential" "  const ordered = [...(res.candidates || [])].sort((a, b) =>
     consequence(b) - consequence(a) || cmp(JSON.stringify(a), JSON.stringify(b)))" "  const ordered = [...(res.candidates || [])]"
 mutate "duplicate probe keeps its evidence" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))" "          const existing = null"
-mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + escrow.adjudicator
+mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + escrow.adjudicator + escrow.verifier
 
 // Priced at the observed rate now." "prepaidDebtWU = 0
 
@@ -339,6 +339,16 @@ mutate "the probe's prediction reaches the check" "  return p && p.constructed ?
 # adjudicator itself called unresolved.
 mutate "forced unresolved owes a predicate" "      r.state === 'unresolved' && !nonblank(r.unsettled_predicate)).length," "      r.adjudicated_state === 'unresolved' && !nonblank(r.unsettled_predicate)).length,"
 
+# A citation without a statement is a location, not support.
+mutate "predicates must state a finding" "    && nonblank(r[k].finding)" "    "
+
+# Both escrows are owed to a later wave; both stop being owed when spent.
+mutate "verifier escrow is held during repricing" "prepaidDebtWU = adjReserveWU + escrow.adjudicator + escrow.verifier" "prepaidDebtWU = adjReserveWU + escrow.adjudicator"
+mutate "verifier escrow is released once unusable" "if (escrow.verifier > 0) {
+  committedWU -= escrow.verifier
+  escrow.verifier = 0
+}" "if (false) {}"
+
 # A reviewed path may legitimately be named __proto__.
 mutate "path map has a null prototype" "const scopeBindingByPath = Object.create(null)" "const scopeBindingByPath = {}"
 
@@ -399,9 +409,28 @@ mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.finger
 # therefore be killed by the same assertion, for the same reason, and naming
 # it after the split would be the overstatement this file exists to avoid.
 #
-# KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
+# UNREACHED, which is NOT the same as equivalent:
 #
 #   rate divides by launched units  (launchedWU vs committedWU in ratePerWU)
+#
+# This sat under KNOWN-EQUIVALENT on the argument that a cumulative mean can
+# never exceed the maximum over the same waves, so the cumulative term never
+# wins ratePerWU's max() and its denominator cannot matter. That argument is
+# WRONG, and the reason is written down two hundred lines up in the script it
+# describes: the token pool is shared with the main loop and every concurrent
+# workflow. Spend appearing between waves belongs to no per-wave delta, so it
+# raises the cumulative rate and nothing else — and committedWU, always the
+# larger denominator, then suppresses the only term that can see it.
+#
+# Reachable in principle, not reached here. The budget stub charges tokens on
+# an agent call, which places every simulated foreign spend INSIDE a wave,
+# where the per-wave rate absorbs it. Injecting on a read of remaining()
+# instead lands it between waves but at an index that has to be guessed;
+# sweeps over amounts and injection points gave identical verdicts both ways.
+# Listed here so the gap is visible rather than dressed as equivalence.
+#
+# KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
+#
 #   escrow draw token gate          (admitTokens inside drawOrReserve)
 
 #
@@ -411,15 +440,6 @@ mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.finger
 # that is exactly where a selector with no content tie-break falls back to
 # "whoever answered first". They are live mutants again, killed by scenarios
 # that swap which lens filed which claim.
-#
-# The rate one is arithmetic, not a guess. ratePerWU takes the worst of the
-# prior, the cumulative mean and the per-wave maximum — and a mean over
-# completed waves can never exceed the maximum over those same waves, so the
-# cumulative term never wins that max() and its denominator cannot change an
-# admission. committedWU is only ever LARGER than launchedWU, so the mutant
-# makes an already dominated term smaller still. Measured as well: triage
-# drift from 15x to 40x returns the same verdict either way, because the
-# per-wave rate already carries it.
 #
 # The escrow one needs two cases, not the one the note used to claim. It is
 # NOT true that every draw is re-checked at launch: the first item of a
@@ -432,17 +452,17 @@ mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.finger
 #     endWave, by the same admitTokens the mutant removed.
 # Either way the removed check is asked again before anything launches.
 #
-# Both are kept as defence in depth — each is what would still be right if the
-# thing that currently dominates it were removed — but a mutant for either
-# would survive by construction, and a suite that tolerates a silent survivor
-# is the thing this file exists to prevent.
+# It is kept as defence in depth — it is what would still be right if the
+# launch-time re-check were removed — but a mutant for it would survive by
+# construction, and a suite that tolerates a silent survivor is the thing this
+# file exists to prevent.
 
 echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=193
+EXPECTED_TOTAL=196
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

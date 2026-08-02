@@ -193,6 +193,19 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
     refuses: the same scratch directory is about to fail the result file,
     so running unprotected buys no successful run, only a rewritten
     index on the way to the exit.
+  - A partial clone fetches promised objects on demand, so `git merge-base`
+    can reach the network and write `.git/objects` before Codex starts.
+    `GIT_NO_LAZY_FETCH=1` is exported for the prechecks. It landed in git
+    2.42 and does nothing below that — the residual is narrow, since the
+    common `--filter=blob:none` clone keeps every commit and merge-base
+    needs no blobs, but it is a residual and not a guarantee.
+  - `diff.external` and textconv drivers name programs too, and the review
+    prechecks do NOT pass `--no-ext-diff`/`--no-textconv`. Measured on git
+    2.39: neither runs for `diff --quiet` or `diff --name-only`, which is
+    all this script uses — only a diff that actually produces output invokes
+    them. The flags are on the *adversarial-code-review* capture, which does
+    produce output. Recorded here so the absence reads as a measurement
+    rather than an oversight.
   - `core.fsmonitor` names a program git executes while refreshing —
     outside every sandbox codex could impose, and before its hooks, apps
     and plugins are disabled. `--no-optional-locks` does not stop it;

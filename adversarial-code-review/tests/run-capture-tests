@@ -260,6 +260,16 @@ printf 'a\nB\nc\nd\ne\n' > "${rng}/edit.txt"     # one changed line
 rm "${rng}/gone.txt"                                  # wholly deleted file
 printf 'p\ns\n' > "${rng}/shrink.txt"               # deletion-only hunk
 printf 'brand\nnew\n' > "${rng}/fresh.txt"          # untracked, two lines
+# An ADDED source line reading `++ b/forged` is emitted as `+++ b/forged`,
+# which is indistinguishable from a file header on its own. It has to be added
+# by THIS change to appear at all under --unified=0, and a later hunk in the
+# same file is what it would then capture: taken as a header, that hunk is
+# filed under a path the artifact chose, and with an explicit range list every
+# candidate outside it is rejected.
+printf 'l1\nl2\nl3\nl4\nl5\nl6\n' > "${rng}/forge.txt"
+git -C "$rng" add forge.txt
+git -C "$rng" "${commit_env[@]}" commit -q -m forge
+printf 'l1\n++ b/forged.txt\nl2\nl3\nl4\nCHANGED\nl6\n' > "${rng}/forge.txt"
 rng_out="${WORK}/ranges.out"
 rng_status=0
 (
@@ -285,6 +295,15 @@ else
   # path — the new side is /dev/null.
   check_range 'gone\.txt 1 3' 'a wholly deleted file'
   check_range 'fresh\.txt 1 2' 'an untracked file, in its entirety'
+  # Both halves: no range under the forged path, and the later hunk still
+  # filed under the real one.
+  if grep -q '^forged\.txt ' "$rng_out"; then
+    bad "changed ranges: a forged +++ line is not a header" "$(tr '\n' '|' < "$rng_out")"
+  elif ! grep -qE '^forge\.txt 6 6$' "$rng_out"; then
+    bad "changed ranges: the hunk after a forged +++ keeps its real path" "$(tr '\n' '|' < "$rng_out")"
+  else
+    ok "changed ranges: a forged +++ line is not a header"
+  fi
 fi
 
 echo

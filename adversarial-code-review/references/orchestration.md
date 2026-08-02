@@ -224,9 +224,17 @@ acr_snapshot() {
         # its first ten characters on every platform this runs on; git itself
         # tracks only the executable bit, which is why nothing else here sees
         # the change.
-        printf '%s %s %s\n' "$(ls -ldL "./$f" 2>/dev/null | cut -c1-10 ||
-                                ls -ld "./$f" 2>/dev/null | cut -c1-10)" \
-                            "$(readlink "./$f" 2>/dev/null || true)" "$f"
+        # ONE HASH PER FILE, not one line per file. A symlink target may
+        # contain a newline, and three newline-delimited fields then sort as
+        # separate lines whose association with each other is lost — while
+        # symlinks are absent from the content digest, so nothing else would
+        # notice. No specific colliding pair was demonstrated; a digest cannot
+        # contain a newline, so hashing each record removes the question
+        # rather than answering it case by case.
+        printf '%s %s %s' "$(ls -ldL "./$f" 2>/dev/null | cut -c1-10 ||
+                             ls -ld "./$f" 2>/dev/null | cut -c1-10)" \
+                          "$(readlink "./$f" 2>/dev/null || true)" "$f" |
+          shasum -a 256
       done | sort | shasum -a 256
   )
   rm -f "${acr_idx}"
@@ -362,8 +370,17 @@ same filtered pathspecs, and cover all three shapes of change:
 # it renders a skill, so the unparenthesised spelling would be substituted away
 # before the recipe ever reached awk.
 git diff --no-ext-diff --no-textconv --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
-  awk '/^--- a\//{o=substr($(0),7)}
-       /^\+\+\+ /{f=($(0)=="+++ /dev/null") ? o : substr($(0),7); del=($(0)=="+++ /dev/null")}
+  awk '/^--- a\//{o=substr($(0),7); saw_old=1; next}
+       /^\+\+\+ /{
+             # ONLY when the previous line was the `--- ` half. An ADDED source
+             # line reading `++ b/forged` is emitted as `+++ b/forged`, which is
+             # indistinguishable from a header on its own — and taking it as one
+             # files every following hunk under a path the artifact chose. With
+             # an explicit range list, candidates outside it are rejected, so
+             # that silently discards real findings.
+             if (!saw_old) next
+             saw_old=0
+             f=($(0)=="+++ /dev/null") ? o : substr($(0),7); del=($(0)=="+++ /dev/null")}
        /^@@/{if(f=="") next;
              split($(3),a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2])+0;
              if(del){ split($(2),b,","); os=substr(b[1],2)+0; on=(b[2]==""?1:b[2])+0;

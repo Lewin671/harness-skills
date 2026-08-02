@@ -46,8 +46,13 @@ const WU_BY_LABEL = (label) => label.startsWith('attack:') ? 10
 // `heavy` lets drift arrive LATE — after the floors are already committed —
 // which is the only regime where the prepaid-adjudication gate and the escrow
 // draw are the binding checks rather than reserve().
-const drainer = (total, budgetWU, factor = 1, heavy = {}) => {
+// `foreign` models the one thing this run does not control: the token pool is
+// shared with the main loop and every concurrent workflow, so spend can appear
+// between waves without any agent here having run. It lands outside every
+// per-wave delta, so only the cumulative rate can see it.
+const drainer = (total, budgetWU, factor = 1, heavy = {}, foreign = null) => {
   let spent = 0
+  let calls = 0
   // A key beginning with '*' matches anywhere in the label. Escalated
   // verifiers are labelled `verify:C1:escalated`, so no prefix can single
   // them out from ordinary verifiers — and drift confined to the reruns is
@@ -58,9 +63,23 @@ const drainer = (total, budgetWU, factor = 1, heavy = {}) => {
     }
     return factor
   }
+  // Injected on a READ of remaining(), not on an agent call: spend tied to a
+  // call lands inside that call's wave and is absorbed by the per-wave rate.
+  // Only spend appearing between endWave() and the next admission is invisible
+  // to every per-wave delta, which is exactly what a concurrent workflow looks
+  // like from in here.
+  let reads = 0
+  const remaining = () => {
+    reads += 1
+    if (foreign && reads === foreign.afterReads) spent += foreign.amount
+    return Math.max(0, total - spent)
+  }
   return {
-    budget: { total, spent: () => spent, remaining: () => Math.max(0, total - spent) },
-    onCall: (label) => { spent += mult(label) * WU_BY_LABEL(label) * (total / budgetWU) },
+    budget: { total, spent: () => spent, remaining },
+    onCall: (label) => {
+      spent += mult(label) * WU_BY_LABEL(label) * (total / budgetWU)
+      calls += 1
+    },
   }
 }
 
@@ -390,6 +409,14 @@ function makeAgent(state, s) {
       // Every predicate supports the candidate, but the citation has no
       // path (or no line) — the charter asks for code quoted "with its path
       // and line", and one free string satisfies that with the word "foo".
+      // Citations present, no statement connecting them to anything.
+      if (s.blankFindings) {
+        const ids = expectedIds(prompt)
+        const q = (h) => ({ finding: '   ', cited_path: 'foo.js', cited_line: 1, cited_code: 'x = y', holds: h })
+        const one = (id) => ({ candidate_id: id, semantics: q('supports_candidate'), reachability: q('supports_candidate'),
+          contract_violation: q('supports_candidate'), strongest_refutation: 'none', unsettled_predicates: [], grounding: 'strong' })
+        return l.includes('minors') ? { verdicts: ids.map(one) } : one(ids[0])
+      }
       if (s.citationOmit) {
         const ids = expectedIds(prompt)
         const partial = (h) => {
@@ -845,6 +872,9 @@ R.push(await run('candidate text forges the fence', { ...BASE }, { fenceInjectio
     const unstripped = carrying.find((x) => !x.prompt.includes('UNTRUSTED-RECORD-ESCAPED'))
     return unstripped ? `${unstripped.label} carried a forged fence marker verbatim` : true
   } }))
+R.push(await run('predicates cite code and say nothing', { ...BASE }, { blankFindings: true, adjAlwaysSubstantiate: true, probeAlwaysFails: true,
+  expect: (res) => res.substantiated.every((x) => x.attack_grade === 'reproduced')
+    || 'a candidate was substantiated on predicates that stated nothing about the code they cited' }))
 for (const field of ['cited_path', 'cited_line']) {
   R.push(await run(`citation without ${field}`, { ...BASE }, { citationOmit: field, adjAlwaysSubstantiate: true, probeAlwaysFails: true,
     // A controlled reproduction substantiates on its own evidence, so only
@@ -1636,6 +1666,35 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
         return probes >= 1 || 'no probe ran, so the sampling is untested'
       }))
   }
+}
+{
+  // The verifier escrow is owed to a wave that has not run yet, exactly as
+  // adjudication's is. Left out of the prepaid debt, the remaining verifiers
+  // and the candidate probes spend its headroom before the weak criticals are
+  // even known, and the escalate-once promise is silently unfunded.
+  const dv = drainer(48000, 48, 1, { 'verify:': 3 })
+  R.push(await run('the verifier escrow survives repricing', { ...BASE },
+    { weakCriticalVerifier: true, onCall: dv.onCall, drift: true, unpriced: true }, dv.budget,
+    (res) => {
+      if (res.status !== 'ok') return `the run ended ${res.status}; the escrowed rerun never got its chance`
+      const esc = launchesOf(res).filter((x) => /escalated/.test(x.label)).length
+      return esc === 1
+        || `the escrowed escalation was lost (${esc} ran) after the verify wave spent its headroom`
+    }))
+
+  // And once the weak criticals are known to be none, that escrow is a
+  // reservation for a purchase that can no longer happen. Held, it defers
+  // real work and inflates the number the report calls achieved.
+  R.push(await run('an unusable verifier escrow is released', { ...BASE }, {
+    expect: (res) => {
+      const L = launchesOf(res)
+      if (L.some((x) => /escalated/.test(x.label))) return 'an escalation ran, so nothing was left to release'
+      const held = res.cost.committed_wu - L.reduce((t, x) => t + x.wu, 0)
+      // What may still be legitimately committed and unlaunched here is the
+      // adjudication escrow: 1.5 + 0.3n, at most 3.9 for a full batch.
+      return held <= 3.9 + 1e-9
+        || `${held.toFixed(2)}wu committed but unlaunched; the verifier escrow was kept after it became unusable`
+    } }))
 }
 {
   // The floor a probe admission has to leave room for must cover the sampled
