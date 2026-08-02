@@ -864,6 +864,23 @@ else
   bad "review: a non-boolean enabled field fails closed" "exit $status"
 fi
 
+# A literal that only starts like a boolean. Without a boundary after the
+# five bytes `false` counts as a well-formed value, the counts agree, and the
+# entry reads as switched off.
+for suffixed in '[{"name":"off","enabled":falsegarbage}]' '[{"name":"off","enabled":truex}]'; do
+  stderr="${workdir}/mcp-suffixbool.err"
+  argv_log="${workdir}/argv-mcp-suffixbool.log"
+  FAKE_MCP_LIST="$suffixed" FAKE_ARGV_LOG="$argv_log" \
+    "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+  status=$?
+  if [ "$status" = 3 ] && grep -q 'not a bare true or false' "$stderr" &&
+     ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+    ok "review: an enabled literal with a suffix fails closed (${suffixed})"
+  else
+    bad "review: an enabled literal with a suffix fails closed (${suffixed})" "exit $status"
+  fi
+done
+
 stderr="${workdir}/mcp-strbool-recheck.err"
 FAKE_MCP_LIST='[{"name":"github","enabled":true}]' \
 FAKE_MCP_LIST_AFTER='[{"name":"github","enabled":"false"}]' \
@@ -908,9 +925,11 @@ else
   bad "review: a listing truncated after a disabled entry fails closed" "exit $status"
 fi
 
-# Balanced, boolean-correct, and still not JSON. Neither shape can be trusted
-# to be the whole listing.
-for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]' '[{"name":"off","enabled":false,GARBAGE}]'; do
+# Balanced, boolean-correct, and still not JSON. No shape here can be trusted
+# to be the whole listing. The `other` payloads carry the bad literal on a
+# field the boolean guard never inspects, so they reach the id parser: only
+# its own boundary check separates `falsegarbage` from `false`.
+for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]' '[{"name":"off","enabled":false,GARBAGE}]' '[{"name":"a","enabled":true,"other":falsegarbage}]' '[{"name":"a","enabled":true,"other":truex}]' '[{"name":"a","enabled":true,"other":nullx}]'; do
   stderr="${workdir}/mcp-badjson.err"
   argv_log="${workdir}/argv-mcp-badjson.log"
   FAKE_MCP_LIST="$bad_json" FAKE_ARGV_LOG="$argv_log" \
@@ -925,17 +944,20 @@ for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":fa
 done
 
 # The value check must not reject legitimate JSON. Numbers, null and nested
-# objects all appear in real listings.
+# objects all appear in real listings. An array value is the case that told
+# apart brace depth from entry level: its second element is a string with no
+# key in front of it, which reads as a missing colon unless the parser knows
+# it is inside a nested value.
 argv_log="${workdir}/argv-mcp-valid-values.log"
-FAKE_MCP_LIST='[{"name":"real","enabled":true,"port":8080,"note":null,"transport":{"name":"x","enabled":true}}]' \
+FAKE_MCP_LIST='[{"name":"real","enabled":true,"port":8080,"note":null,"args":["-y","pkg","--flag"],"transport":{"name":"x","enabled":true}}]' \
 FAKE_ARGV_LOG="$argv_log" \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
 status=$?
 if [ "$status" = 0 ] && grep -q -- '^exec review.*-c mcp_servers.real.enabled=false' "$argv_log" &&
    ! grep -q -- 'mcp_servers.x' "$argv_log"; then
-  ok "review: numbers, null and nested objects are still valid values"
+  ok "review: numbers, null, arrays and nested objects are still valid values"
 else
-  bad "review: numbers, null and nested objects are still valid values" "exit $status"
+  bad "review: numbers, null, arrays and nested objects are still valid values" "exit $status"
 fi
 
 # An empty first listing is not an empty config: verified on 0.146.0, a

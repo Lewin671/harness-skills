@@ -43,10 +43,15 @@ export GIT_NO_LAZY_FETCH=1
 # Read into an array. `for x in ${roots}` splits on whitespace, and a
 # worktree path may contain some — the containment check would then look for
 # two directories that do not exist and miss the one that does.
+# `-z`, not the line form: measured, a worktree path containing a NEWLINE is
+# emitted raw and unquoted, so a line-oriented reader sees two records and the
+# real path in neither — and that root then goes unchecked.
 acr_roots=()
-while IFS= read -r acr_wt; do
-  [ -n "${acr_wt}" ] && acr_roots+=("${acr_wt}")
-done < <(git worktree list --porcelain | awk '/^worktree /{print substr($(0),10)}')
+while IFS= read -r -d '' acr_rec; do
+  case "${acr_rec}" in
+    'worktree '*) acr_roots+=("${acr_rec#worktree }") ;;
+  esac
+done < <(git worktree list --porcelain -z)
 acr_roots+=("$(git rev-parse --absolute-git-dir)")
 acr_roots+=("$(git rev-parse --path-format=absolute --git-common-dir)")
 for acr_repo in "${acr_roots[@]}"; do

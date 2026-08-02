@@ -74,6 +74,10 @@ PY3
 
 # Run the recipe in $1 with the scope prelude in $2. Echoes the exit status;
 # leaves the recipe's own variables in ${WORK}/vars for the caller to read.
+# `vars` is newline-delimited and so cannot carry a scratch path containing a
+# newline — sourcing it would truncate the value at the break and the caller
+# would compare a path that does not exist. tmp-raw is the whole thing, and
+# the one test that needs it reads that instead.
 run_capture() {
   local dir="$1" prelude="$2" status=0
   (
@@ -83,6 +87,7 @@ run_capture() {
     # shellcheck source=/dev/null
     . "${WORK}/capture.sh"
     printf 'tmp=%s\npatch_sha256=%s\nbase_sha=%s\n' "$tmp" "$patch_sha256" "$base_sha" > "${WORK}/vars"
+    printf '%s' "$tmp" > "${WORK}/tmp-raw"
     printf '%s\n' "$included" > "${WORK}/included"
   ) || status=$?
   printf '%s' "$status"
@@ -287,6 +292,38 @@ if [ "$status" = 0 ] && [ "$in_self" = no ]; then
   ok "a worktree path containing a space is still recognised"
 else
   bad "a worktree path containing a space is still recognised" "exit $status, tmp=${tmp}"
+fi
+
+# A newline in a sibling worktree path. `git worktree list --porcelain` emits
+# it RAW and unquoted, so a line reader gets two records and the real path in
+# neither — the root is then never checked and a TMPDIR under it is accepted.
+# Reviewed from the main checkout, so only the sibling record can catch it.
+nlmain="$(new_repo nlmain)"
+git -C "$nlmain" add -A
+git -C "$nlmain" "${commit_env[@]}" commit -q -m work
+nllinked="${WORK}/nl
+wt"
+git -C "$nlmain" worktree add -q -b nlwt "$nllinked" >/dev/null 2>&1
+if [ -d "$nllinked" ]; then
+  printf 'dirty\n' > "${nlmain}/untracked.txt"
+  mkdir -p "${nllinked}/scratch"
+  status="$(TMPDIR="${nllinked}/scratch" run_capture "$nlmain" 'diff_args=(HEAD); untracked=1')"
+  # Read the raw file, not `vars`: this is the one path that can hold a
+  # newline, and sourcing would cut it at the break and compare a prefix.
+  tmp="$(cat "${WORK}/tmp-raw" 2>/dev/null)"
+  nllinked_real="$(cd "$nllinked" && pwd -P)"
+  tmp_real="$(cd "$tmp" 2>/dev/null && pwd -P)" || tmp_real="$tmp"
+  case "${tmp_real}/" in
+    "${nllinked_real}"/*) in_nl=yes ;;
+    *) in_nl=no ;;
+  esac
+  if [ "$status" = 0 ] && [ "$in_nl" = no ]; then
+    ok "a worktree path containing a newline is still recognised"
+  else
+    bad "a worktree path containing a newline is still recognised" "exit $status, tmp=${tmp}"
+  fi
+else
+  bad "a worktree path containing a newline is still recognised" "fixture: git refused the path"
 fi
 
 # --- scratch never lands inside the repository -----------------------------

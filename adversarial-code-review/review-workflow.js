@@ -1713,6 +1713,11 @@ if (acceptedRegionProbes.length) {
     const floorAfter = floorsFor([...candidates,
       ...syntheticCriticals(probeSample.length + probeRestAdmitted.length + 1)])
     if (admitTokens(probePendingWU + W.probe + floorAfter)) { probePendingWU += W.probe; probeRestAdmitted.push(t); continue }
+    // Give the units back. admitOptional charged them when the wave was
+    // accepted; nothing launches for this probe now. Left committed they
+    // still count against the candidate trim below, which can then drop a
+    // real candidate to pay for a probe that never ran.
+    committedWU -= W.probe
     defer({ target_id: t.target_id, kind: 'region_probe', anchor: t.label }, 'deferred_by_budget')
   }
   const out = [...probeSampleOut, ...await parallel(probeRestAdmitted.map((t) => () => runProbe(t)))]
@@ -2001,6 +2006,10 @@ if (verifyDeferred.length) {
 const probeAdmitted = []
 for (const t of candidateProbeTargets) {
   if (admitTokens(verifyPendingWU + probeAdmitted.length * W.probe + W.probe)) { probeAdmitted.push(t); continue }
+  // Same release as the region probes and the executable attacks: the units
+  // were charged when this wave was accepted, and nothing launches for this
+  // one now. `committed_wu` is what the report calls the achieved cost.
+  committedWU -= W.probe
   defer({ target_id: t.target_id, kind: 'candidate_probe', anchor: t.label }, 'deferred_by_budget')
 }
 
@@ -2154,9 +2163,9 @@ if (acceptedExec.length) {
   // deferring it.
   endWave()
 
-  // Their weighted units were committed by admitOptional above and stay
-  // committed — same as a deferred verifier's — so this is the token half
-  // alone, cumulative because they launch together.
+  // Their weighted units were committed by admitOptional above; this is the
+  // token half, cumulative because they launch together. Whatever the token
+  // gate rejects gives its units back below.
   const execAdmitted = []
   let execPendingWU = 0
   for (const t of execRest) {

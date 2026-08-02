@@ -168,6 +168,15 @@ lexical_path() {
 # (depth 1) are read.
 mcp_enabled_ids() {
   awk '
+    # A JSON literal has to END where it claims to. BSD awk rejects an empty
+    # alternative in a regex, so end-of-line is tested as the empty string.
+    function boundary(ch) { return ch == "" || ch ~ /[ \t\r,}\]]/ }
+    # Directly inside a top-level entry, not inside a value nested in one.
+    # Brace depth alone cannot tell the two apart: an array value keeps the
+    # entry brace depth, so `"tags":["a","b"]` would otherwise read as two
+    # entry-level values and the second one — with no key in front of it —
+    # would be reported as a missing colon.
+    function entry() { return depth == 1 && bdepth == entry_bdepth }
     function flush() {
       if (enabled == 1) print (name == "" ? "?" : name)
       name = ""; enabled = 0; key = ""; just_opened = 1; pending_comma = 0; value_started = 0
@@ -199,7 +208,7 @@ mcp_enabled_ids() {
           j = i + 1
           while (j <= n && substr(s, j, 1) ~ /[ \t\r]/) j++
           if (substr(s, j, 1) == ":") {
-            if (depth == 1) {
+            if (entry()) {
               value_started = 0
               # A key must be the first thing in its entry or follow a comma.
               # `{"name":"off" "enabled":false}` balances and spells its
@@ -214,20 +223,23 @@ mcp_enabled_ids() {
             # colon is missing: `{"name":"github","enabled" true}` balances,
             # spells its boolean fine, and has no `"enabled":` for the value
             # counter to find either — so this is the only check that sees it.
-            if (depth == 1 && key == "") garbage = 1
-            if (depth == 1) { just_opened = 0; pending_comma = 0 }
-            if (depth == 1 && key == "name") name = val
+            if (entry() && key == "") garbage = 1
+            if (entry()) { just_opened = 0; pending_comma = 0 }
+            if (entry() && key == "name") name = val
             key = ""
+            # Only a value string starts a value. Setting this for a key too
+            # would re-arm the flag the key branch just cleared, and the
+            # literal check below would never see the value that follows.
+            if (entry()) value_started = 1
           }
           # A string is a significant token: it ends any pending comma, so
           # the trailing-comma check below does not fire on `{"a":"b"}`.
           trailing = 0
-          if (depth == 1) value_started = 1
           continue
         }
         # A comma before a close is a trailing comma: `[{...},]`.
         if (c == ",") {
-          if (depth == 1) pending_comma = 1
+          if (entry()) pending_comma = 1
           trailing = 1
           value_started = 0
           continue
@@ -236,7 +248,7 @@ mcp_enabled_ids() {
           if ((c == "]" || c == "}") && trailing) garbage = 1
           trailing = 0
         }
-        if (c == "{") { depth++; if (depth == 1) flush(); continue }
+        if (c == "{") { depth++; if (depth == 1) { entry_bdepth = bdepth; flush() }; continue }
         if (c == "}") { if (depth == 1) flush(); depth--; continue }
         # Brackets are tracked purely to prove the payload is whole.
         # Braces alone are not enough: a listing cut off between two
@@ -245,7 +257,7 @@ mcp_enabled_ids() {
         # server after the cut.
         if (c == "[") { bdepth++; continue }
         if (c == "]") { bdepth--; continue }
-        if (depth == 1 && key == "enabled" && substr(s, i, 4) == "true") {
+        if (entry() && key == "enabled" && substr(s, i, 4) == "true" && boundary(substr(s, i + 4, 1))) {
           enabled = 1; key = ""; i += 3
           value_started = 1
           continue
@@ -255,10 +267,14 @@ mcp_enabled_ids() {
         # this it reads as a complete listing with nothing enabled. Strings,
         # objects and arrays are consumed above; what reaches here is a
         # literal or a number, and anything else is not JSON.
-        if (depth == 1 && !value_started && c !~ /[ \t\r]/) {
+        if (entry() && !value_started && c !~ /[ \t\r]/) {
           if (c ~ /[-0-9]/) { value_started = 1; continue }
-          if (substr(s, i, 4) == "true" || substr(s, i, 4) == "null") { value_started = 1; i += 3; continue }
-          if (substr(s, i, 5) == "false") { value_started = 1; i += 4; continue }
+          # A literal must be followed by a delimiter. `falsegarbage` starts
+          # with `false`, and consuming the prefix leaves the suffix to be
+          # skipped as part of an already-started value — so the listing reads
+          # as complete with nothing enabled.
+          if ((substr(s, i, 4) == "true" || substr(s, i, 4) == "null") && boundary(substr(s, i + 4, 1))) { value_started = 1; i += 3; continue }
+          if (substr(s, i, 5) == "false" && boundary(substr(s, i + 5, 1))) { value_started = 1; i += 4; continue }
           garbage = 1
         }
       }
@@ -276,7 +292,9 @@ mcp_enabled_ids() {
 mcp_enabled_values_boolean() {
   local payload="$1" keys values
   keys="$(grep -oE '"enabled"[[:space:]]*:' <<< "$payload" | wc -l | tr -d '[:space:]')"
-  values="$(grep -oE '"enabled"[[:space:]]*:[[:space:]]*(true|false)' <<< "$payload" | wc -l | tr -d '[:space:]')"
+  # The boundary matters here too: without it `falsegarbage` counts as a
+  # well-formed value and the counts agree.
+  values="$(grep -oE '"enabled"[[:space:]]*:[[:space:]]*(true|false)([[:space:],}]|$)' <<< "$payload" | wc -l | tr -d '[:space:]')"
   [ "$keys" = "$values" ]
 }
 
@@ -600,12 +618,18 @@ common_resolve_scratch() {
   # object store with the main checkout and any siblings, so a CODEX_HOME or
   # TMPDIR under one of those is inside the repository on any reading that
   # matters — and it is outside both the current root and the git directories.
-  local wt
-  while IFS= read -r wt; do
-    [ -n "$wt" ] || continue
+  # `-z`, not the line form: measured, a worktree path containing a newline is
+  # emitted RAW and unquoted, so a line-oriented reader sees two records and
+  # the real path in neither. NUL-terminated records keep it whole.
+  local wt rec
+  while IFS= read -r -d '' rec; do
+    case "$rec" in
+      'worktree '*) wt="${rec#worktree }" ;;
+      *) continue ;;
+    esac
     resolved="$(cd -- "$wt" 2>/dev/null && pwd -P)" || continue
     repo_paths+=("$resolved")
-  done <<< "$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10)}')"
+  done < <(git worktree list --porcelain -z 2>/dev/null)
   for p in "$(git rev-parse --absolute-git-dir 2>/dev/null || true)" \
            "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"; do
     [ -n "$p" ] || continue

@@ -1803,6 +1803,98 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
     }))
 }
 {
+  // A probe the token gate turns down after the sample has re-priced the wave
+  // never launches, but admitOptional charged its units when the wave was
+  // accepted. Left committed they are spent twice over: the candidate trim
+  // gives up real findings to pay for work that did not happen, and
+  // `committed_wu` — the number the report calls achieved — counts it.
+  // The two probe waves are refused by different drift. Region probes are
+  // priced by their own role, so drift on `probe:` is what turns them down;
+  // the candidate probes ride in the VERIFY wave and are refused only once a
+  // verifier has re-priced it. Both need their own scenario, and both windows
+  // sit just above 2x, where the run still completes — a run that ends early
+  // leaves other reserved work unlaunched and a leak hides inside it.
+  const heldOK = (res, needKind) => {
+    if (res.status !== 'ok') return `the run ended ${res.status}, leaving reserved work unlaunched for other reasons`
+    const deferred = res.ledger.deferred || []
+    const refused = deferred.filter((x) => x.kind === needKind && x.reason === 'deferred_by_budget').length
+    if (!refused) return `no ${needKind.replace('_', ' ')} was refused by the token gate, so its release is untested`
+    // A deferred verifier or escalation keeps its units by design, and an
+    // allowance widened to cover them would let a probe leak hide behind
+    // them. Require the scenario to be free of both instead.
+    const muddied = deferred.filter((x) => x.kind === 'candidate_verifier' || x.kind === 'verifier_escalation')
+    if (muddied.length) return `${muddied.length} verifier deferral(s) also hold units; the probe release is not isolated`
+    // All that may still be legitimately committed and unlaunched is the
+    // adjudication escrow, and it is priced from this run's own candidate
+    // count rather than the 3.9 worst case: at the worst case a leak of two
+    // probes hides inside the slack and the check passes either way.
+    const n = res.verification_depth.candidates
+    const allowance = n ? 1.5 + 0.3 * Math.min(n, 8) : 0
+    const held = res.cost.committed_wu - launchesOf(res).reduce((t, x) => t + x.wu, 0)
+    return held <= allowance + 1e-9
+      || `${held.toFixed(2)}wu committed but unlaunched against an allowance of ${allowance.toFixed(2)}; `
+         + `${refused} refused ${needKind.replace('_', ' ')}(s) kept their units`
+  }
+  for (const [prof, factor] of [['balanced', 2.1], ['recall-first', 2.2], ['balanced', 2.4]]) {
+    const d = drainer(48000, 48, 1, { 'probe:': factor })
+    R.push(await run(`deferred region probes give their units back (${prof} ${factor}x)`, { ...BASE, profile: prof },
+      { onCall: d.onCall, drift: true, unpriced: true }, d.budget,
+      (res) => heldOK(res, 'region_probe')))
+  }
+  for (const [prof, factor] of [['balanced', 2.1], ['recall-first', 2.0], ['precision-first', 2.3]]) {
+    const d = drainer(48000, 48, 1, { 'verify:': factor })
+    R.push(await run(`deferred candidate probes give their units back (${prof} ${factor}x)`, { ...BASE, profile: prof },
+      { onCall: d.onCall, drift: true, unpriced: true }, d.budget,
+      (res) => heldOK(res, 'candidate_probe')))
+  }
+  // And the attack wave, whose units are the largest in the run — ten each, so
+  // one leaked charge is worth six probes. The default budget funds too few
+  // attacks for the WU ceiling to leave a rest behind the sample, so these
+  // raise it until the TOKEN gate is the one doing the refusing.
+  for (const [prof, bw, factor] of [['balanced', 60, 2], ['precision-first', 80, 2.5], ['balanced', 80, 3]]) {
+    const d = drainer(bw * 1000, bw, 1, { 'attack:': factor })
+    R.push(await run(`deferred attacks give their units back (${prof} ${bw}wu ${factor}x)`,
+      { ...BASE, profile: prof, budget_wu: bw },
+      { onCall: d.onCall, drift: true, unpriced: true }, d.budget,
+      (res) => heldOK(res, 'executable_attack')))
+  }
+}
+{
+  // The token pool is shared with the main loop and every concurrent
+  // workflow. Spend that appears BETWEEN waves belongs to no per-wave delta,
+  // so `lastWaveRate` never moves and the prior never does — the cumulative
+  // term is the only one that can see it. Divided by committed rather than
+  // launched units that term is suppressed: the larger denominator holds the
+  // projection at or below the prior, and the run keeps buying against a pool
+  // something else has already drained. Injected on a READ of remaining(),
+  // which is the only point between waves this harness can reach.
+  //
+  // The property measured is: a pool drained by X by someone else has to cost
+  // this run at least X of the spend it would have made with the pool intact.
+  // It is NOT universal — where the budget does not bind, a run legitimately
+  // spends the same and stays under the target either way — so each case
+  // measures against its OWN untouched-pool baseline at an amount and index
+  // where it does bind. Neither denominator ever breaches the target here;
+  // this comparison is what makes the difference visible at all.
+  for (const [prof, amount, afterReads] of [['precision-first', 8000, 16], ['recall-first', 6000, 20], ['balanced', 6000, 16]]) {
+    const b = drainer(48000, 48, 1, {})
+    const baseRun = await run(`untouched-pool baseline (${prof})`, { ...BASE, profile: prof }, { onCall: b.onCall }, b.budget)
+    const baseline = baseRun.res && baseRun.res.cost ? baseRun.res.cost.output_tokens : null
+    const d = drainer(48000, 48, 1, {}, { afterReads, amount })
+    R.push(await run(`a foreign spend between waves raises the projection (${prof} ${amount}@${afterReads})`,
+      { ...BASE, profile: prof }, { onCall: d.onCall }, d.budget,
+      (res) => {
+        if (baseline === null) return `the ${prof} baseline run did not complete, so there is nothing to compare against`
+        if (!res.cost || !res.cost.token_target) return 'the run never had a token target'
+        const own = res.cost.output_tokens - amount
+        return own <= baseline - amount + 1e-9
+          || `the run drew ${Math.round(own)} of its own tokens where an untouched pool bought `
+             + `${Math.round(baseline)}; a concurrent ${amount}-token spend gave back only `
+             + `${Math.round(baseline - own)}`
+      }))
+  }
+}
+{
   // A verify plan of exactly ONE entry: no sample to take, and the entry is
   // already inside the wave estimate from reserve(). Judged against twice its
   // own cost it gets deferred — and it belongs to the accuracy floor, the one

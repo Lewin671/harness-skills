@@ -360,6 +360,27 @@ mutate "verifier escrow is released once unusable" "if (escrow.verifier > 0) {
   escrow.verifier = 0
 }" "if (false) {}"
 
+# The cumulative term is the only one that can see spend by a CONCURRENT
+# workflow: it belongs to no per-wave delta, so neither the prior nor the
+# per-wave maximum moves. committedWU is always the larger denominator, so it
+# suppresses exactly that term. This sat under KNOWN-EQUIVALENT on the
+# argument that a cumulative mean cannot exceed the per-wave maximum, and then
+# under UNREACHED because the foreign-spend injector had no scenario using it.
+# It has one now, and the mutant is live.
+mutate "rate divides by launched units" "  if (launchedWU <= 0 || spent <= 0) return Math.max(tokensPerWU, lastWaveRate)
+  return Math.max(tokensPerWU, spent / launchedWU, lastWaveRate)" "  if (committedWU <= 0 || spent <= 0) return Math.max(tokensPerWU, lastWaveRate)
+  return Math.max(tokensPerWU, spent / committedWU, lastWaveRate)"
+
+# Work the token gate turns down after its wave has been re-priced never
+# launches. Its units were charged when the wave was accepted, and left
+# committed they starve the candidate trim and inflate the achieved cost.
+mutate "deferred attacks give their units back" "    committedWU -= W.execute
+    defer({ target_id: t.target_id, kind: 'executable_attack'" "    defer({ target_id: t.target_id, kind: 'executable_attack'"
+mutate "deferred region probes give their units back" "    committedWU -= W.probe
+    defer({ target_id: t.target_id, kind: 'region_probe'" "    defer({ target_id: t.target_id, kind: 'region_probe'"
+mutate "deferred candidate probes give their units back" "  committedWU -= W.probe
+  defer({ target_id: t.target_id, kind: 'candidate_probe'" "  defer({ target_id: t.target_id, kind: 'candidate_probe'"
+
 # A reviewed path may legitimately be named __proto__.
 mutate "path map has a null prototype" "const scopeBindingByPath = Object.create(null)" "const scopeBindingByPath = {}"
 
@@ -420,26 +441,6 @@ mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.finger
 # therefore be killed by the same assertion, for the same reason, and naming
 # it after the split would be the overstatement this file exists to avoid.
 #
-# UNREACHED, which is NOT the same as equivalent:
-#
-#   rate divides by launched units  (launchedWU vs committedWU in ratePerWU)
-#
-# This sat under KNOWN-EQUIVALENT on the argument that a cumulative mean can
-# never exceed the maximum over the same waves, so the cumulative term never
-# wins ratePerWU's max() and its denominator cannot matter. That argument is
-# WRONG, and the reason is written down two hundred lines up in the script it
-# describes: the token pool is shared with the main loop and every concurrent
-# workflow. Spend appearing between waves belongs to no per-wave delta, so it
-# raises the cumulative rate and nothing else — and committedWU, always the
-# larger denominator, then suppresses the only term that can see it.
-#
-# Reachable in principle, not reached here. The budget stub charges tokens on
-# an agent call, which places every simulated foreign spend INSIDE a wave,
-# where the per-wave rate absorbs it. Injecting on a read of remaining()
-# instead lands it between waves but at an index that has to be guessed;
-# sweeps over amounts and injection points gave identical verdicts both ways.
-# Listed here so the gap is visible rather than dressed as equivalence.
-#
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
 #
 #   escrow draw token gate          (admitTokens inside drawOrReserve)
@@ -473,7 +474,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=199
+EXPECTED_TOTAL=203
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1
