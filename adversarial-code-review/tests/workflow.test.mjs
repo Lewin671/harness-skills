@@ -594,6 +594,9 @@ function makeAgent(state, s) {
         return h
       }
       if (s.reproducedUnavailable) return { ...fullReproduced, execution_status: 'unavailable' }
+      // The prober predicted 'AssertionError'; this attacker reports whatever
+      // the run turned out to print, as though it had foreseen it.
+      if (s.signatureRewritten) return { ...fullReproduced, predicted_signature: 'TypeError: undefined is not a function' }
       if (s.plausibleClaimingExecution) return { target_id: id, grade: 'plausible', test_capability: 'ready', execution_status: 'executed' }
       if (s.bareReproduced) return { target_id: id, grade: 'reproduced', test_capability: 'ready', execution_status: 'executed' }
       if (s.bareHeld) return { target_id: id, grade: 'held', test_capability: 'unavailable', execution_status: 'executed' }
@@ -709,7 +712,19 @@ R.push(await run('recall-first', { ...BASE, profile: 'recall-first' }))
 R.push(await run('precision-first', { ...BASE, profile: 'precision-first' }))
 R.push(await run('zero finder candidates', { ...BASE }, { noCandidates: true }))
 R.push(await run('triage null', { ...BASE }, { triageNull: true }))
-R.push(await run('adjudicator null', { ...BASE }, { adjNull: true }))
+R.push(await run('adjudicator null', { ...BASE }, { adjNull: true,
+  // Adjudication failing does not un-substantiate a controlled reproduction:
+  // it substantiates on its own evidence, and the status says nobody graded
+  // the REST. A run that dropped it would suppress a contractually verified
+  // finding behind a role failure.
+  expect: (res) => {
+    if (res.status !== 'adjudication_failed') return `expected adjudication_failed, got ${res.status}`
+    const terminal = res.candidate_results.filter((r) => r.attack_grade === 'reproduced'
+      && r.execution_status === 'executed')
+    if (!terminal.length) return 'no controlled reproduction survived, so the carve-out is untested'
+    const lost = terminal.find((r) => r.state !== 'substantiated')
+    return !lost || `${lost.candidate_id} reproduced under control but came out ${lost.state}`
+  } }))
 R.push(await run('attack null', { ...BASE }, { attackNull: true }))
 R.push(await run('verifier null', { ...BASE }, { verifierNull: true }))
 R.push(await run('verifier null + adj substantiates', { ...BASE }, { verifierNull: true, adjAlwaysSubstantiate: true }))
@@ -770,6 +785,22 @@ for (const field of ['executed', 'bound', 'hash', 'capability', 'probe_command',
 for (const field of ['input', 'trace', 'expected_vs_actual', 'predicted_signature']) {
   R.push(await run(`probe missing ${field}`, { ...BASE }, { probeOmit: field }))
 }
+R.push(await run('reproduction with no predicted signature at all', { ...BASE },
+  { probeAlwaysFails: true, attackOmit: 'predicted_signature',
+    expect: (res) => {
+      const kept = res.candidate_results.filter((r) => r.attack_grade === 'reproduced')
+      return kept.length === 0
+        || `${kept[0].candidate_id} was reproduced with no predicted signature at all`
+    } }))
+R.push(await run('attacker rewrites the prediction', { ...BASE }, { signatureRewritten: true,
+  expect: (res) => {
+    const probed = res.candidate_results.filter((r) => r.probe && r.probe.constructed && r.attack)
+    if (!probed.length) return 'no attack followed a successful probe, so the binding is untested'
+    const kept = probed.filter((r) => r.attack_grade === 'reproduced')
+    if (kept.length) return `${kept[0].candidate_id} kept grade reproduced on a signature it did not predict`
+    return res.ledger.malformed_results.some((m) => /matching the probe/.test(m.why))
+      || 'the rewritten prediction was downgraded without saying why'
+  } }))
 R.push(await run('reproduced but not executed', { ...BASE }, { reproducedUnavailable: true }))
 R.push(await run('plausible claiming execution', { ...BASE }, { plausibleClaimingExecution: true }))
 // B: every predicate unsettled is the failure-to-refute case; it may not
@@ -1339,10 +1370,30 @@ R.push(await run('rejection states no decisive evidence', { ...BASE },
       || `${res.refuted.length} candidate(s) rejected on a verdict that said nothing for it` }))
 R.push(await run('unresolved verdict names no predicate', { ...BASE }, { adjUnresolvedNoPredicate: true,
   expect: (res) => {
+    // Against the FINAL state: a candidate the terminal-evidence override
+    // lifted out of unresolved is not in the section this counter is about.
+    const owed = res.candidate_results.filter((r) => r.state === 'unresolved'
+      && !(r.unsettled_predicate && String(r.unsettled_predicate).trim()))
     const n = res.disclosure_checklist.unresolved_without_named_predicate
-    return n === res.candidate_results.filter((r) => r.adjudicated_state === 'unresolved').length && n > 0
-      || `the checklist counts ${n} unnamed predicates against ${res.candidate_results.filter((r) => r.adjudicated_state === 'unresolved').length} unresolved verdicts`
+    return (n === owed.length && n > 0)
+      || `the checklist counts ${n} unnamed predicates against ${owed.length} final unresolved records`
   } }))
+// A verdict the grounding guard forces back to unresolved lands in the same
+// section and owes the same predicate, even though the adjudicator said
+// substantiated.
+// adjBlankFields substantiates with nothing said for it AND names no
+// predicate, so the guard forces unresolved and the section owes a predicate
+// nobody supplied. adjAlwaysSubstantiate cannot be used here: its stub always
+// fills unsettled_predicate, so those records legitimately name one.
+R.push(await run('forced unresolved is counted as unnamed', { ...BASE },
+  { adjBlankFields: true, probeAlwaysFails: true,
+    expect: (res) => {
+      const forced = res.candidate_results.filter((r) => r.state === 'unresolved'
+        && r.adjudicated_state === 'substantiated')
+      if (!forced.length) return 'no verdict was forced back to unresolved, so the counter is untested'
+      return res.disclosure_checklist.unresolved_without_named_predicate >= forced.length
+        || `${forced.length} forced-unresolved records name no predicate and the checklist counts ${res.disclosure_checklist.unresolved_without_named_predicate}`
+    } }))
 // A probe that returns a candidate anchored outside the region it was aimed
 // at: the candidate is kept — it is real and nobody else found it — but the
 // region may not take credit for it.

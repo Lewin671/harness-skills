@@ -75,7 +75,8 @@ mutate "repro: patch binding" "  if (!bound) missing.push('bound_to_base_sha + p
 mutate "repro: test_code" "  if (!nonblank(a.test_code)) missing.push('test_code')" "  "
 mutate "repro: command" "  if (!nonblank(a.command)) missing.push('command')" "  "
 mutate "repro: patched_result" "  if (!nonblank(a.patched_result)) missing.push('patched_result')" "  " 2
-mutate "repro: predicted_signature" "  if (!nonblank(a.predicted_signature)) missing.push('predicted_signature')" "  "
+mutate "repro: predicted_signature" "  if (!nonblank(a.predicted_signature)) missing.push('predicted_signature')
+  // When a prober already predicted" "  if (false) {} // When a prober already predicted"
 mutate "repro: ready capability" "  if (a.test_capability !== 'ready') missing.push('test_capability=ready')" "  " 2
 mutate "held: executed" "    if (!executed) missing.push('execution_status=executed')" "    "
 mutate "held: patch binding" "    if (!bound) missing.push('bound_to_base_sha + patch_hash_verified')" "    "
@@ -330,6 +331,14 @@ mutate "blank predicate is not a name" "    unsettled_predicate: v && nonblank(v
 # isolates it.
 mutate "probe floor counts the sampled probe" "      ...syntheticCriticals(probeSample.length + probeRestAdmitted.length + 1)])" "      ...syntheticCriticals(probeRestAdmitted.length + 1)])"
 
+# A prediction written after the fact is not a prediction.
+mutate "reproduction echoes the probe's prediction" "  if (nonblank(probePrediction) && String(a.predicted_signature).trim() !== String(probePrediction).trim()) {" "  if (false) {"
+mutate "the probe's prediction reaches the check" "  return p && p.constructed ? p.predicted_signature : null" "  return null"
+
+# Every FINAL unresolved record owes a named predicate, not only the ones the
+# adjudicator itself called unresolved.
+mutate "forced unresolved owes a predicate" "      r.state === 'unresolved' && !nonblank(r.unsettled_predicate)).length," "      r.adjudicated_state === 'unresolved' && !nonblank(r.unsettled_predicate)).length,"
+
 # A reviewed path may legitimately be named __proto__.
 mutate "path map has a null prototype" "const scopeBindingByPath = Object.create(null)" "const scopeBindingByPath = {}"
 
@@ -369,7 +378,7 @@ mutate "emergent count excludes uncredited" "    emergent_candidates: [...candid
 mutate "uncredited emergents are counted" "    emergent_candidates_outside_their_region: [...candidates, ...trimmed].filter((c) => c.origin === 'region_probe' && !c.from_region).length," "    emergent_candidates_outside_their_region: 0,"
 mutate "frontier ranks deferred verifiers" "    const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate', 'candidate_verifier', 'adjudication_batch']" "    const ACCURACY_KINDS = ['candidate_verification', 'supplemental_candidate']"
 
-mutate "checklist counts unnamed predicates" "      r.adjudicated_state === 'unresolved' && !nonblank(r.unsettled_predicate)).length," "      false).length,"
+mutate "checklist counts unnamed predicates" "      r.state === 'unresolved' && !nonblank(r.unsettled_predicate)).length," "      false).length,"
 
 # Previously excluded as equivalent, restored and measured instead. absorb()
 # sorts each finder's OWN list, which does not make the concatenated array
@@ -433,7 +442,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=190
+EXPECTED_TOTAL=193
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

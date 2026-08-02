@@ -872,7 +872,10 @@ ${(triage.probe_candidates || []).length
    - patched_failed: true if the reproducer FAILED against the patched code,
      false if it passed. This is the difference between finding the defect and
      not finding it, so do not guess it from the exit code of something else.
-   - patched_result, predicted_signature, signature_matched.
+   - patched_result, signature_matched, and predicted_signature — which,
+     when a prober supplied one above, must be that prediction VERBATIM. It
+     is what you set out to show; replacing it with whatever the run turned
+     out to print is not a prediction, and the result is downgraded.
    A reproduction without patch_applied and patched_failed both true is
    downgraded automatically — it is indistinguishable from a test that never
    ran against the change.
@@ -1109,7 +1112,7 @@ function unexecutedStatus(a, id) {
 // {grade:"reproduced"} is an unverified assertion, and `held` is a claim
 // ABOUT THE CODE — that it withstood an attack — so neither may be taken on
 // the agent's word when the supporting fields are absent.
-function normalizeAttack(raw, id, hasConcreteCounterexample) {
+function normalizeAttack(raw, id, hasConcreteCounterexample, probePrediction) {
   if (!raw) return blockedAttack(id, 'attack agent did not return')
   // An id we did not ask about cannot be trusted to describe this target.
   if (raw.target_id !== id) {
@@ -1192,6 +1195,14 @@ function normalizeAttack(raw, id, hasConcreteCounterexample) {
   if (a.patched_failed !== true) missing.push('patched_failed=true')
   if (!nonblank(a.patched_result)) missing.push('patched_result')
   if (!nonblank(a.predicted_signature)) missing.push('predicted_signature')
+  // When a prober already predicted the failure, the attack must echo THAT
+  // prediction. Otherwise the attacker can run the test, read what actually
+  // broke, and write it back as the thing it foresaw — which is not a
+  // prediction, and not the "matches the predicted signature" the contract
+  // means. The prompt hands it the exact string to return.
+  if (nonblank(probePrediction) && String(a.predicted_signature).trim() !== String(probePrediction).trim()) {
+    missing.push(`predicted_signature matching the probe's ("${String(probePrediction).trim()}")`)
+  }
   if (a.signature_matched !== true) missing.push('signature_matched=true')
   if (!controlled) missing.push('control_passed=true (a specification_citation does not substitute for the control run)')
   // The control's OUTPUT, on the same footing as patched_result. A bare
@@ -2068,6 +2079,12 @@ for (const c of weakCriticals) {
 // ---------------------------------------------------------------------------
 
 const hasCounterexample = (id) => Boolean((probeByTarget.get(id) || {}).constructed)
+// The signature the prober foresaw, when one did. The attack is handed this
+// exact string and has to return it.
+const predictionFor = (id) => {
+  const p = probeByTarget.get(id)
+  return p && p.constructed ? p.predicted_signature : null
+}
 
 // Ranked so that a CONSTRUCTED counterexample outranks a speculative critical.
 // A counterexample is direct evidence that execution will produce terminal
@@ -2124,14 +2141,14 @@ if (acceptedExec.length) {
   for (const o of out) {
     if (!o) continue
     if (!o.r) failed('attack', o.t.target_id, 'attack agent did not return')
-    attackById.set(o.t.target_id, normalizeAttack(o.r, o.t.target_id, hasCounterexample(o.t.target_id)))
+    attackById.set(o.t.target_id, normalizeAttack(o.r, o.t.target_id, hasCounterexample(o.t.target_id), predictionFor(o.t.target_id)))
   }
   // Only targets that were actually LAUNCHED get a synthesised blocked
   // record. One deferred for tokens above was never attacked, and calling
   // that `blocked` would say the environment stopped an attack that never
   // started; attackSummary reports it as the budget deferral it was.
   for (const t of [...execSample, ...execAdmitted]) {
-    if (!attackById.has(t.target_id)) attackById.set(t.target_id, normalizeAttack(null, t.target_id, hasCounterexample(t.target_id)))
+    if (!attackById.has(t.target_id)) attackById.set(t.target_id, normalizeAttack(null, t.target_id, hasCounterexample(t.target_id), predictionFor(t.target_id)))
   }
   endWave()
 }
@@ -2609,8 +2626,12 @@ return {
     // "we could not tell" is only actionable when it says what could not be
     // told. The script cannot supply one, so it counts the verdicts that
     // arrived without it and the report has to own the gap.
+    // The FINAL state, not the adjudicator's raw one. A verdict of
+    // substantiated or refuted that the grounding guard forced back to
+    // unresolved lands in the Unresolved Candidates section with no predicate
+    // named either — and that is the section which is worthless without one.
     unresolved_without_named_predicate: results.filter((r) =>
-      r.adjudicated_state === 'unresolved' && !nonblank(r.unsettled_predicate)).length,
+      r.state === 'unresolved' && !nonblank(r.unsettled_predicate)).length,
     actions_deferred: ledger.deferred.length,
     agent_failures: ledger.agent_failures.length,
     malformed_results: ledger.malformed_results.length,

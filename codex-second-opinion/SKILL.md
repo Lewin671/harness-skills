@@ -45,8 +45,9 @@ Standalone MCP servers from the user's own codex config sit outside that
 sandbox too, so any that are enabled get switched off for the duration of
 the run, and the script confirms with Codex that they actually went down
 before starting. It refuses to start when they cannot be enumerated or
-the switch-off cannot be confirmed — an unverifiable listing is never
-read as an empty one. `--allow-mcp` inverts that: it leaves those servers
+the switch-off cannot be confirmed. A listing that fails those checks is
+never read as an empty one — but the checks are structural, not a JSON
+validator, and `references/internals.md` bounds which shapes they catch. `--allow-mcp` inverts that: it leaves those servers
 reachable, and is only for a user who has explicitly accepted that their
 tools may mutate external systems. A request for a second opinion does
 not itself grant that approval: report what happened and ask instead of
@@ -62,12 +63,11 @@ modes**, not just consult: a review's prompt, the diff it read, and its
 findings stay on disk after the run. For consult it is also
 load-bearing — it is what makes `--continue` work.
 
-Two placements get refused rather than worked around: a `CODEX_HOME`
-inside the repository, which cannot be relocated without orphaning
-earlier sessions and so exits `3`, and a repo-local `TMPDIR`, which is
-moved. The script's own git prechecks write nothing in the repository
-and run no program its config names — `references/internals.md` says
-how, and the tests hold each of those to a measured claim.
+Two placements are refused rather than worked around: a `CODEX_HOME`
+inside the repository (it cannot be relocated without orphaning earlier
+sessions, so exit `3`), and a repo-local `TMPDIR`, which is moved. The
+script's own git prechecks write nothing in the repository and run no
+program its config names; `references/internals.md` says how.
 
 ## Independence Contract
 
@@ -162,10 +162,9 @@ real time and stays small:
   must repeat, model settings included. Use this line rather than
   reassembling the command from the id.
 
-  Consult always prints **both** lines — `unavailable — ...` when there
-  is no session — so the wrapper's own line is last of each kind even
-  when the model-controlled answer body holds a look-alike. That matters
-  most for `session:`, whose value a follow-up feeds to `--continue`.
+  Consult always prints **both** — `unavailable — ...` when there is no
+  session — so the wrapper's line is last of each kind even when the
+  model-controlled answer holds a look-alike.
 
 The script also prints `log: <path>` at startup. That file holds the
 same stream **untruncated**, so `tail` it for diagnostics; never read

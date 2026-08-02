@@ -87,12 +87,10 @@ What it guarantees beyond that flow:
 - **No write instructions outside throwaway worktrees.** The parent
   tree is snapshotted before and after — HEAD, the index, status, and a
   content hash of tracked and untracked-but-visible files — and any
-  unexpected difference is disclosed. Detection, not enforcement: Claude
-  Code has no tool-restriction knob on `agent()`. Three things sit
-  outside the snapshot and belong in the report: gitignored paths,
-  anything inside a checked-out **submodule**, and anything git does not
-  list at all. orchestration.md §1 and §7 give the commands and why a
-  stronger claim would be false.
+  unexpected difference is disclosed. Detection, not enforcement, and
+  three things sit outside it: gitignored paths, checked-out
+  **submodules**, and anything git does not list. orchestration.md §1
+  and §7 give the commands and why a stronger claim would be false.
 - **Review only.** Output a report; never apply a fix. Fixing is a
   separate task the user must ask for afterwards.
 - **Executable attacks run the artifact's own test command.** A git
@@ -123,11 +121,9 @@ Do this in the main agent; the Workflow script cannot run commands.
    a clean checkout that carries neither uncommitted changes nor
    gitignored dependencies, so without an explicit patch the attack
    phase would read different code than the review phase. Exact
-   commands, including the read-only way to include untracked files, in
-   orchestration.md §1. **Changes inside a checked-out submodule are not
-   in the patch** — a superproject diff carries the gitlink, not the
-   source — so name any submodule as uncaptured and offer to review it
-   as its own scope.
+   commands in orchestration.md §1. **A checked-out submodule's contents
+   are not in the patch** — a superproject diff carries the gitlink, not
+   the source — so name it as uncaptured and offer it as its own scope.
 3. **Exclude and partition**: drop lockfiles, `vendor/`, generated
    clients, snapshots and build output, and name the exclusions. Beyond
    roughly 1,500 changed lines or eight modules, partition or ask the
@@ -170,10 +166,10 @@ mean **stop and report, do not improvise**:
 
 | `status` | Meaning | What to do |
 |----------|---------|------------|
-| `ok` | The pipeline completed, whether or not everything it planned was affordable — individual verifiers, probes and attacks can still be deferred inside an `ok` run, and the ledger says which | Write the report — including when it found nothing. A zero-finding run still probes the high-risk regions and still owes the full ledger; silence only means something alongside the coverage that produced it. |
+| `ok` | The pipeline completed. Individual verifiers, probes and attacks can still have been deferred inside an `ok` run; the ledger says which | Write the report — including when it found nothing. A zero-finding run still probes the high-risk regions and still owes the full ledger; silence only means something alongside the coverage that produced it. |
 | `invalid_args` | The patch was not captured or bound, or a Phase 0 value is malformed — a non-hex `base_sha` or `patch_sha256`, a line break in `scope`, `intent`, `patch_path` or `repo_root` | Redo Phase 0. |
-| `budget_too_small` | A floor is unaffordable — triage, the coverage floor, or the accuracy floor plus its escrow. Reachable **after** the calibration sample too: triage and the first lens may already have run and been charged, at the rate they revealed. The accuracy-floor case additionally needs the shared token pool to move between the trim and the reservation, which only a concurrent workflow does | Report the shortfall, and that no report is coming despite the spend. Do **not** run a degraded review. |
-| `triage_failed` / `adjudication_failed` | A load-bearing role did not return | Say so plainly. Never promote candidates on finder output alone. |
+| `budget_too_small` | A floor is unaffordable. Reachable **after** the calibration sample too, so triage and the first lens may already have run and been charged | Report the shortfall, and that no report is coming despite the spend. Do **not** run a degraded review. |
+| `triage_failed` / `adjudication_failed` | A load-bearing role did not return | Say so plainly; never promote candidates on finder output alone. Anything already in `substantiated` still belongs in the report: `adjudication_failed` means nobody graded the rest, not that terminal evidence stopped counting. |
 
 ## Phase 4 — Report
 

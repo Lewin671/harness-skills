@@ -170,7 +170,7 @@ mcp_enabled_ids() {
   awk '
     function flush() {
       if (enabled == 1) print (name == "" ? "?" : name)
-      name = ""; enabled = 0; key = ""; just_opened = 1; pending_comma = 0
+      name = ""; enabled = 0; key = ""; just_opened = 1; pending_comma = 0; value_started = 0
     }
     {
       s = $0; n = length(s)
@@ -200,6 +200,7 @@ mcp_enabled_ids() {
           while (j <= n && substr(s, j, 1) ~ /[ \t\r]/) j++
           if (substr(s, j, 1) == ":") {
             if (depth == 1) {
+              value_started = 0
               # A key must be the first thing in its entry or follow a comma.
               # `{"name":"off" "enabled":false}` balances and spells its
               # boolean correctly; only the missing separator gives it away.
@@ -221,12 +222,14 @@ mcp_enabled_ids() {
           # A string is a significant token: it ends any pending comma, so
           # the trailing-comma check below does not fire on `{"a":"b"}`.
           trailing = 0
+          if (depth == 1) value_started = 1
           continue
         }
         # A comma before a close is a trailing comma: `[{...},]`.
         if (c == ",") {
           if (depth == 1) pending_comma = 1
           trailing = 1
+          value_started = 0
           continue
         }
         if (c !~ /[ \t\r]/) {
@@ -244,6 +247,19 @@ mcp_enabled_ids() {
         if (c == "]") { bdepth--; continue }
         if (depth == 1 && key == "enabled" && substr(s, i, 4) == "true") {
           enabled = 1; key = ""; i += 3
+          value_started = 1
+          continue
+        }
+        # A value has to begin with something JSON allows. `{"enabled":false,
+        # GARBAGE}` balances, counts its booleans and emits no id — so without
+        # this it reads as a complete listing with nothing enabled. Strings,
+        # objects and arrays are consumed above; what reaches here is a
+        # literal or a number, and anything else is not JSON.
+        if (depth == 1 && !value_started && c !~ /[ \t\r]/) {
+          if (c ~ /[-0-9]/) { value_started = 1; continue }
+          if (substr(s, i, 4) == "true" || substr(s, i, 4) == "null") { value_started = 1; i += 3; continue }
+          if (substr(s, i, 5) == "false") { value_started = 1; i += 4; continue }
+          garbage = 1
         }
       }
     }
@@ -1023,6 +1039,13 @@ run_with_fallback() {
       echo "warning: '${model}' at effort '${effort}' was rejected — these pinned defaults look stale." >&2
       echo "warning: retrying once with the model and effort from your codex config." >&2
       local retry_status=0
+      # Truncated before the RETRY, and only there. `$out` starts life as a
+      # fresh mktemp, so the first attempt cannot inherit anything — but a
+      # rejected first invocation can already have written `-o`, and a retry
+      # that exits 0 without writing one would then be served that stale
+      # answer by the `[ ! -s "$out" ]` check below: a result from the model
+      # that was refused, reported as the fallback's.
+      : > "$out"
       build_cmd "" ""
       execute_codex || retry_status=$?
       [ "$watchdog_fired" -eq 1 ] && exit_timed_out

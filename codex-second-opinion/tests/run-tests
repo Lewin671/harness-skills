@@ -92,10 +92,24 @@ if [ -n "${FAKE_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_FAIL_ONCE" ]; then
   # attempt's metadata sits in the log ahead of the retry's.
   [ -n "${FAKE_FAIL_MODEL:-}" ] &&
     echo '{"type":"turn.started","model":"rejected-model-xyz"}'
+  # FAKE_FAIL_WRITES: write the result file BEFORE being rejected, so a retry
+  # that produces none could inherit it.
+  if [ -n "${FAKE_FAIL_WRITES:-}" ]; then
+    prev=""
+    for a in "$@"; do
+      [ "$prev" = "-o" ] && printf 'STALE-FIRST-ATTEMPT' > "$a"
+      prev="$a"
+    done
+  fi
   echo '{"type":"error","message":"unknown model"}'
   exit 1
 fi
 [ -n "${FAKE_SLEEP:-}" ] && sleep "$FAKE_SLEEP"
+# FAKE_SILENT_RETRY: succeed without writing a result at all.
+if [ -n "${FAKE_SILENT_RETRY:-}" ]; then
+  echo '{"type":"item.completed"}'
+  exit 0
+fi
 prev=""
 for a in "$@"; do
   [ "$prev" = "-o" ] && printf '%s' "${FAKE_OUTPUT:-Looks fine overall.}" > "$a"
@@ -896,7 +910,7 @@ fi
 
 # Balanced, boolean-correct, and still not JSON. Neither shape can be trusted
 # to be the whole listing.
-for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]'; do
+for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]' '[{"name":"off","enabled":false,GARBAGE}]'; do
   stderr="${workdir}/mcp-badjson.err"
   argv_log="${workdir}/argv-mcp-badjson.log"
   FAKE_MCP_LIST="$bad_json" FAKE_ARGV_LOG="$argv_log" \
@@ -909,6 +923,20 @@ for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":fa
     bad "review: balanced but invalid MCP JSON fails closed (${bad_json})" "exit $status"
   fi
 done
+
+# The value check must not reject legitimate JSON. Numbers, null and nested
+# objects all appear in real listings.
+argv_log="${workdir}/argv-mcp-valid-values.log"
+FAKE_MCP_LIST='[{"name":"real","enabled":true,"port":8080,"note":null,"transport":{"name":"x","enabled":true}}]' \
+FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q -- '^exec review.*-c mcp_servers.real.enabled=false' "$argv_log" &&
+   ! grep -q -- 'mcp_servers.x' "$argv_log"; then
+  ok "review: numbers, null and nested objects are still valid values"
+else
+  bad "review: numbers, null and nested objects are still valid values" "exit $status"
+fi
 
 # An empty first listing is not an empty config: verified on 0.146.0, a
 # config with no servers prints `[]`. A command that exits 0 having printed
@@ -1682,6 +1710,20 @@ if ! grep -q -- '--allow-mcp' "$resume_out"; then
   ok "consult: the resume descriptor does not invent --allow-mcp"
 else
   bad "consult: the resume descriptor does not invent --allow-mcp"
+fi
+
+# A rejected first attempt can already have written its result. The retry
+# must not be served that stale answer as its own.
+cat >> "$fake" <<'EXTRA'
+EXTRA
+combined2="${workdir}/fallback-stale.out"
+FAKE_FAIL_ONCE="${workdir}/fail-once-stale" FAKE_FAIL_WRITES=1 FAKE_SILENT_RETRY=1 \
+  "$wrapper" consult --repo "$repo" --timeout 30 "question" > "$combined2" 2>&1
+status=$?
+if [ "$status" = 4 ] && ! grep -q 'STALE-FIRST-ATTEMPT' "$combined2"; then
+  ok "consult: a rejected attempt's result is not reused by the retry"
+else
+  bad "consult: a rejected attempt's result is not reused by the retry" "exit $status"
 fi
 
 # --- multiline question cannot forge progress markers ------------------
