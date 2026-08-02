@@ -455,11 +455,13 @@ string and, for a symlink, where it points. A path that is neither —
 a FIFO, a socket, a device — appears in the second and has no content to
 hash, which is the honest treatment rather than a hang.
 
-Five kinds of path stay outside it, and every one of them belongs in the
+Six kinds of change stay outside it, and every one of them belongs in the
 report rather than behind an implied "total coverage". The count is stated
-because it was wrong: the list said "two" while carrying five bullets, and a
-summary that miscounts its own exclusions is how the shorter claims below
-came to name only some of them.
+because it has been wrong twice: the list once said "two" while carrying five
+bullets, and the sixth was added only after the mode read was widened to catch
+the ACL/xattr marker — widening it proved the marker's PRESENCE is seen and
+its VALUE is not. A summary that miscounts its own exclusions is how the
+shorter claims below came to name only some of them.
 
 - **gitignored paths** — build output, `node_modules`, local caches.
 - **a symlink target differing only by a trailing newline.** `readlink`
@@ -482,6 +484,15 @@ came to name only some of them.
   superproject change and still appears; both measured. (`git apply` accepts
   the `-dirty` hunk rather than rejecting it — checked, because the opposite
   was the plausible guess.)
+- **a change to the VALUE of an existing xattr or ACL entry.** The eleventh
+  column of `ls -ld` records that a file HAS extended attributes or an ACL —
+  `@` or `+` — so adding or removing them is detected. Rewriting one in place
+  is not: measured, `com.example.k` going from `v1` to `v2` leaves the mode
+  string, the content hash, the index and every porcelain column identical.
+  Reading the values would mean `xattr -l` per file on macOS and `getfattr` on
+  Linux, one process per path in a recipe that already runs two per path;
+  disclosed instead, which is what the rest of this list does with the same
+  kind of limit.
 - **anything git does not list at all.** `git ls-files --others` and
   `git status` report neither FIFOs, sockets, nor device nodes — measured,
   both are empty for a worktree containing one. So a special file appearing,
@@ -1248,10 +1259,11 @@ The honest contract, and it is narrower than "never modifies":
 > the parent tree's HEAD, index, status, and every tracked and
 > untracked-but-visible path — with its mode, and with a content hash
 > where the file can be read — before and after the run, and reports any
-> unexpected difference. Five kinds of change are outside it, listed in
+> unexpected difference. Six kinds of change are outside it, listed in
 > §1: gitignored paths, submodule contents, anything git does not list,
-> a rewrite of a file that is unreadable both times, and a symlink
-> retargeted by a trailing newline alone.
+> a rewrite of a file that is unreadable both times, a symlink retargeted
+> by a trailing newline alone, and a rewrite of an existing xattr or ACL
+> VALUE — whose presence is seen and whose contents are not.
 
 "A content hash of every tracked and untracked-but-visible file" is what this
 paragraph used to say, and §1 has always contradicted it: a write-only file

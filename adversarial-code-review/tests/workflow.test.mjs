@@ -668,6 +668,11 @@ function makeAgent(state, s) {
         else delete h[s.heldOmit]
         return h
       }
+      // Whitespace, not absence. `nonblank` is what separates the two, and
+      // every other reproduction case DELETES a field — so the blankness half
+      // of each check had no scenario of its own and a mutant on the shared
+      // helper was being killed by candidate and probe cases instead.
+      if (s.reproducedBlank) return { ...fullReproduced, [s.reproducedBlank]: '   ' }
       if (s.reproducedUnavailable) return { ...fullReproduced, execution_status: 'unavailable' }
       // The prober predicted 'AssertionError'; this attacker reports whatever
       // the run turned out to print, as though it had foreseen it.
@@ -856,6 +861,25 @@ R.push(await run('emergent hit at 14wu', { ...BASE, budget_wu: 14 }))
 for (const field of ['control', 'control_but_cites_spec', 'control_passed_but_cites_spec', 'control_result_only', 'bound', 'hash', 'capability', 'probe_command', 'probe_result', 'signature_matched', 'test_code', 'command', 'patched_result', 'predicted_signature', 'applied', 'patched_failed']) {
   R.push(await run(`reproduced missing ${field}`, { ...BASE }, { attackOmit: field }))
 }
+// A downgraded reproduction still RAN the artifact's test command. The grade
+// vocabulary forbids `plausible` from saying `executed`, so the status moves
+// — but a report that then says `executed: 0` is making a false statement
+// about what this review did to the machine, not just understating depth.
+for (const field of ['test_code', 'command', 'patched_result', 'control_result', 'probe_command', 'probe_result', 'predicted_signature']) {
+  R.push(await run(`reproduced with whitespace-only ${field}`, { ...BASE }, { reproducedBlank: field,
+    expect: (res) => {
+      const kept = (res.candidate_results || []).some((r) => r.attack_grade === 'reproduced')
+      return !kept || `a reproduction was accepted with ${field} set to whitespace`
+    } }))
+}
+R.push(await run('a downgraded reproduction still counts as executed', { ...BASE },
+  { attackOmit: 'control_result',
+    expect: (res) => {
+      const ran = (res.candidate_results || []).some((r) => r.attack && r.attack.ran_artifact_code === true)
+      if (!ran) return 'no attack recorded that it ran artifact code'
+      return res.verification_depth.executed >= 1
+        || 'the ledger reports executed: 0 after the artifact test command was run'
+    } }))
 // The attacked critical must have NO counterexample, or the guard is untested.
 R.push(await run('plausible with no counterexample', { ...BASE }, { probeAlwaysFails: true, barePlausible: true }))
 for (const field of ['executed', 'bound', 'hash', 'capability', 'probe_command', 'probe_result', 'vectors', 'blank_vectors', 'patched_result', 'applied', 'patched_failed', 'patched_failed_true']) {
@@ -973,6 +997,17 @@ R.push(await run('ranges map omits a file', { ...BASE, changed_ranges: { 'pay.js
     || 'a file absent from the ranges map lost every candidate' }))
 R.push(await run('no scope manifest', { scope: 's', intent: 'i', base_sha: 'a', patch_path: '/tmp/p', patch_sha256: 'h', repo_root: '/r' }, {
   expect: (res) => res.status === 'invalid_args' || 'a review ran with nothing binding findings to the artifact' }))
+for (const [label, patch] of [
+  ['an object patch_path', { patch_path: {} }],
+  ['a numeric patch_path', { patch_path: 42 }],
+  ['a blank repo_root', { repo_root: '   ' }],
+  ['a blank scope', { scope: '  ' }],
+  ['an array intent', { intent: ['a'] }],
+]) {
+  R.push(await run(`prompt artifact field: ${label}`, { ...BASE, ...patch }, {
+    expect: (res) => res.status === 'invalid_args'
+      || `${label} reached every prompt and the run returned ${res.status}` }))
+}
 R.push(await run('empty scope manifest', { ...BASE, included_paths: [] }, {
   expect: (res) => res.status === 'invalid_args' || 'an empty manifest silently disabled scope binding' }))
 // A non-empty array of the WRONG THING. `includes()` compares by identity, so

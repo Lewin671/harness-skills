@@ -15,7 +15,7 @@ description: >-
   appropriate. Pure review — it produces a report and applies no fixes:
   it issues no write instructions, executable attacks run in throwaway
   worktrees, and changes to tracked or visible files in the parent tree
-  are detected and disclosed rather than prevented — detection with five
+  are detected and disclosed rather than prevented — detection with six
   named residuals, not a guarantee. Do not use when fixes are wanted.
 harnesses: [claude-code]
 ---
@@ -47,10 +47,10 @@ Three layered documents, and you need all three:
 
 `tests/run-tests` holds the contract tests; `tests/run-mutation-tests`
 breaks each protection in turn, on a copy, and requires the suite to go
-red for it — and records, by name, the ones a mutant cannot distinguish
-and why, so the count never stands in for coverage it does not have. Two more cover the protections that live in prose, extracting
-the recipes straight out of orchestration.md so the doc stays their only
-source of truth: `tests/run-snapshot-tests` for the write-safety
+red for it — naming the ones a mutant cannot distinguish, so the count
+never stands in for coverage it lacks. Two more cover the protections
+living in prose, extracting the recipes straight out of orchestration.md
+so the doc stays their only source of truth: `tests/run-snapshot-tests` for the write-safety
 snapshot, `tests/run-capture-tests` for the patch capture, its exclusions
 and its changed-range map — both found runtime defects that `bash -n`
 cannot see. Run all four after
@@ -88,12 +88,12 @@ What it guarantees beyond that flow:
   tree is snapshotted before and after — HEAD, the index, status, and
   every tracked and untracked-but-visible path with its mode, plus a
   content hash where the file can be read — and any unexpected
-  difference is disclosed. Detection, not enforcement, and **five**
+  difference is disclosed. Detection, not enforcement, and **six**
   things sit outside it: gitignored paths, checked-out **submodules**,
-  anything git does not list, a rewrite of a file that is unreadable
-  both times, and a symlink retargeted by a trailing newline alone.
-  orchestration.md §1 and §7 give the commands and why a stronger claim
-  would be false.
+  anything git does not list, a rewrite of a file unreadable both times,
+  a symlink retargeted by a trailing newline, and a rewritten xattr or
+  ACL value. orchestration.md §1 and §7 give the commands, each
+  residual, and why a stronger claim would be false.
 - **Review only.** Output a report; never apply a fix. Fixing is a
   separate task the user must ask for afterwards.
 - **Executable attacks run the artifact's own test command.** A git

@@ -340,7 +340,22 @@ mutate "re-adjudication clears its estimate" "      // every accepted batch to t
       if (reSample.length) endWave()"
 
 # Evidence strings that exist but say nothing, and citations with no shape.
-mutate "reproduction evidence is non-blank" "const nonblank = (v) => typeof v === 'string' && v.trim().length > 0" "const nonblank = (v) => Boolean(v)"
+# Named for what it is: the SHARED helper. It is not a reproduction-specific
+# mutant — blank candidate and probe scenarios kill it too — so the
+# reproduction fields get whitespace scenarios of their own rather than
+# borrowing this one's verdict.
+# Prompt-critical artifact fields must be non-blank STRINGS. `String(...)`
+# coerces anything, so `patch_path: {}` reached every prompt as the literal
+# `[object Object]` and the run still returned findings.
+mutate "artifact fields are non-blank strings" "  if (typeof A[k] !== 'string' || !A[k].trim().length) {" "  if (false) {"
+mutate "a blank intent is refused" "if (A.intent !== undefined && (typeof A.intent !== 'string' || !A.intent.trim().length)) {" "if (false) {"
+# A downgraded reproduction still RAN the artifact's test command. The grade
+# vocabulary forbids `plausible` from carrying `executed`, so the fact moves
+# to its own field — and a report saying `executed: 0` after running that
+# command is a false statement about what the review did to the machine.
+mutate "a downgrade keeps the executed fact" "    ran_artifact_code: executed," "    "
+mutate "executed is counted from what ran" "  && (r.attack.execution_status === 'executed' || r.attack.ran_artifact_code === true)).length" "  && r.attack.execution_status === 'executed').length"
+mutate "the shared nonblank helper rejects whitespace" "const nonblank = (v) => typeof v === 'string' && v.trim().length > 0" "const nonblank = (v) => Boolean(v)"
 mutate "citations carry a path" "    && nonblank(r[k].cited_code) && nonblank(r[k].cited_path)" "    && nonblank(r[k].cited_code)"
 mutate "citations carry a line" "    && Number.isInteger(r[k].cited_line) && r[k].cited_line >= 1)" "    )"
 
@@ -526,7 +541,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=217
+EXPECTED_TOTAL=221
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

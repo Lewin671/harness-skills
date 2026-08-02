@@ -118,6 +118,21 @@ for (const k of ['base_sha', 'patch_sha256']) {
     return { status: 'invalid_args', detail: `${k} must be a hexadecimal object name; got ${JSON.stringify(A[k])}` }
   }
 }
+// Non-blank STRINGS, before the line-break test. `String(...)` coerces
+// anything, so `patch_path: {}` passed every check here and reached each
+// prompt as the literal `[object Object]` — an artifact path no agent can
+// read — while `repo_root: '   '` reached them as blank. The required-args
+// test cannot catch either: `!{}` is false and `!'   '` is false. A run that
+// tells every agent to read `[object Object]` and still returns findings is
+// reporting on nothing.
+for (const k of ['scope', 'patch_path', 'repo_root']) {
+  if (typeof A[k] !== 'string' || !A[k].trim().length) {
+    return { status: 'invalid_args', detail: `${k} must be a non-empty string; got ${JSON.stringify(A[k])}` }
+  }
+}
+if (A.intent !== undefined && (typeof A.intent !== 'string' || !A.intent.trim().length)) {
+  return { status: 'invalid_args', detail: `intent must be a non-empty string when given; got ${JSON.stringify(A.intent)}` }
+}
 for (const k of ['scope', 'patch_path', 'repo_root', 'intent']) {
   if (A[k] !== undefined && /[\r\n]/.test(String(A[k]))) {
     return { status: 'invalid_args', detail: `${k} must not contain a line break: it is interpolated into every agent prompt, where a second line reads as a new instruction` }
@@ -1204,7 +1219,7 @@ function normalizeAttack(raw, id, hasConcreteCounterexample, probePrediction) {
     if (!(Array.isArray(a.vectors_attempted) && a.vectors_attempted.some(nonblank))) missing.push('vectors_attempted')
     if (!missing.length) return a
     malformed('attack', id, `claimed held without: ${missing.join(', ')} — downgraded to blocked`)
-    return { ...blockedAttack(id, `claimed held without: ${missing.join(', ')}`), downgraded_from: 'held' }
+    return { ...blockedAttack(id, `claimed held without: ${missing.join(', ')}`), downgraded_from: 'held', ran_artifact_code: executed }
   }
 
   // `plausible` rests entirely on a concrete counterexample existing — from a
@@ -1281,7 +1296,15 @@ function normalizeAttack(raw, id, hasConcreteCounterexample, probePrediction) {
   return {
     ...a,
     grade: (hasConcreteCounterexample || attackerBuilt) ? 'plausible' : 'inconclusive',
+    // `plausible` and `inconclusive` may not carry `executed` — the contract
+    // fixes their vocabulary — so the status has to move. But the FACT that
+    // artifact code ran with this session's privileges must not move with it:
+    // an attacker that ran the control and the patched command and then
+    // omitted one required field would otherwise be counted in a report that
+    // says `executed: 0`, which is a false statement about what this run did
+    // to the machine, not merely an understated depth number.
     execution_status: 'unavailable',
+    ran_artifact_code: executed,
     downgraded_from: 'reproduced',
     downgrade_reason: missing.join(', '),
   }
@@ -2656,7 +2679,13 @@ const regionResults = allRegions.map((r, i) => {
   }
 })
 
-const executedForReal = results.filter((r) => r.attack && r.attack.execution_status === 'executed').length
+// Counted from what RAN, not from the status the grade vocabulary allows. A
+// downgraded reproduction has its execution_status rewritten to `unavailable`
+// because `plausible` may not say `executed` — but the code still ran, and a
+// report claiming `executed: 0` after running the artifact's test command
+// understates what the review did to this machine.
+const executedForReal = results.filter((r) => r.attack
+  && (r.attack.execution_status === 'executed' || r.attack.ran_artifact_code === true)).length
 
 return {
   status: adjudicationFailed ? 'adjudication_failed' : 'ok',
