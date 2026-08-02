@@ -1883,9 +1883,16 @@ const verifyPlan = [
 // a safety net while catching nothing, and the statuses it advertised could
 // never be returned. Deleting it is not a relaxation: the trim reaches the
 // same states by disclosing candidates instead of deleting the review, which
-// is the whole reason it replaced the abort. What is still live is the token
-// half — `reserve()` below re-measures against real spend, which moves under
-// the run's feet — and that keeps `budget_too_small` reachable.
+// is the whole reason it replaced the abort.
+//
+// `reserve()` below re-measures the token half against real spend, and that
+// is NOT dead in the same way — but be precise about why, because the run's
+// own arithmetic cannot move it: nothing here spends between the trim and the
+// reservation. What can move is the pool, which the harness shares across the
+// main loop and every concurrent workflow. So that branch fires only when
+// something outside this run spends in the gap, which is why no scenario
+// reproduces it and why the status table describes it as a floor that could
+// not be reserved rather than one this run priced itself out of.
 const floorsWU = committedWU + floorsFor(candidates)
 const plan = { lenses: lensesRun, candidates: candidates.length, criticals: criticals.length, majors: majors.length, minors: minors.length, regions: allRegions.length, trimmed_unverified: trimmed.length }
 

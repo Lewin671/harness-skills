@@ -112,6 +112,22 @@ shell_quote() {
   esac
 }
 
+# True when $1 is one of the repository roots in `repo_paths`, or sits beneath
+# one. Defined at file scope rather than inside common_resolve_scratch so a
+# test can exercise the boundary a test cannot otherwise reach: a worktree at
+# `/`, where a naive "$root"/* pattern becomes `//*` and matches nothing — so
+# a repository containing every path on the machine would read as containing
+# none of them. The trailing slash is stripped for exactly that case.
+inside_repo() {
+  local candidate="$1" root prefix
+  for root in ${repo_paths[@]+"${repo_paths[@]}"}; do
+    [ "$candidate" = "$root" ] && return 0
+    prefix="${root%/}"
+    case "$candidate/" in "$prefix"/*) return 0 ;; esac
+  done
+  return 1
+}
+
 # Collapse `.` and `..` in an absolute path without touching the filesystem.
 # Purely lexical, so it is wrong in the presence of symlinks — which is why
 # callers test it *alongside* a resolved path rather than instead of one.
@@ -552,7 +568,8 @@ common_resolve_scratch() {
   # path checked against the worktree root alone can still sit inside the
   # repository's own storage. All three are repository paths and none of them
   # is a place for this run's scratch files or codex's sessions.
-  local worktree_root repo_paths=() p resolved
+  local worktree_root p resolved
+  repo_paths=()
   worktree_root="$(git rev-parse --show-toplevel)"
   worktree_root="$(cd "$worktree_root" && pwd -P)"
   repo_paths+=("$worktree_root")
@@ -563,15 +580,6 @@ common_resolve_scratch() {
     repo_paths+=("$resolved")
   done
 
-  # True when $1 is one of those roots or sits beneath it.
-  inside_repo() {
-    local candidate="$1" root
-    for root in "${repo_paths[@]}"; do
-      [ "$candidate" = "$root" ] && return 0
-      case "$candidate/" in "$root"/*) return 0 ;; esac
-    done
-    return 1
-  }
 
   # Codex persists every run's session under CODEX_HOME/sessions. Inside the
   # worktree that write lands in the very tree being read: it dirties git

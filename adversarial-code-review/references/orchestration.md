@@ -36,6 +36,10 @@ for acr_repo in "$(git rev-parse --show-toplevel)" \
                 "$(git rev-parse --absolute-git-dir)" \
                 "$(git rev-parse --path-format=absolute --git-common-dir)"; do
   acr_repo="$(cd "$acr_repo" 2>/dev/null && pwd -P)" || continue
+  # Trailing slash stripped before the pattern is built: a worktree at `/`
+  # would otherwise give `//*`, which matches nothing — so a repository
+  # containing every path on the machine would read as containing none.
+  acr_repo="${acr_repo%/}"
   case "${acr_root}/" in "${acr_repo}"/*|"${acr_repo}/") acr_root=/tmp ;; esac
   case "$(cd /tmp && pwd -P)/" in "${acr_repo}"/*|"${acr_repo}/")
     echo "no scratch directory outside the repository; set TMPDIR elsewhere" >&2; exit 1 ;;
@@ -111,7 +115,7 @@ patch_sha256="$(shasum -a 256 "${tmp}/patch.diff" | cut -d' ' -f1)"
 # test, so under `set -o pipefail` this otherwise perfect pipeline reports
 # failure. And each producer propagates explicitly, because `sort` succeeding
 # would otherwise hide a `git diff` that did not.
-acr_manifest() {                       # $1.. = extra pathspec arguments
+acr_manifest() {                       # ${1}.. = extra pathspec arguments
   { git diff --name-only "${diff_args[@]}" ${1+"$@"} || exit 1
     if [ "${untracked}" = 1 ]; then
       git ls-files --others --exclude-standard ${1+"$@"} || exit 1
@@ -142,7 +146,7 @@ already-dirty submodule leaves both snapshots identical. Detect it and say so:
 ```bash
 # Registered submodules with any content of their own. Named in the report as
 # uncaptured, and reviewed — if they matter — as their own scope.
-acr_submodules="$(git submodule status --recursive 2>/dev/null | awk '{print $2}')"
+acr_submodules="$(git submodule status --recursive 2>/dev/null | awk '{print $(2)}')"
 ```
 
 Reviewing the submodule separately, with `--repo` pointing inside it, is the

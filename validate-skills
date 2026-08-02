@@ -79,6 +79,31 @@ rescue Psych::Exception => e
   errors << "#{relative}: invalid YAML: #{e.message}"
 end
 
+# AGENTS.md: Claude Code substitutes bare $1-style tokens with invocation
+# arguments when it renders skill content, so one in a shell recipe is silently
+# rewritten before an agent ever runs it. The rule was stated and enforced by
+# nothing; two of them reached a documented, executable Phase 0 command.
+#
+# Everything an agent reads counts, not only SKILL.md — the references are
+# loaded the same way. Binary files and the tests are skipped: tests are run
+# by the shell, never rendered.
+skill_files.each do |skill_path|
+  dir = File.dirname(skill_path)
+  Dir.glob(File.join(dir, "**", "*")).sort.each do |path|
+    next unless File.file?(path)
+    next if path.include?("/tests/")
+    next unless path.end_with?(".md")
+
+    File.readlines(path).each_with_index do |line, i|
+      # `$(1)` and `${1}` are the escaped spellings this repo uses on purpose.
+      scrubbed = line.gsub(/\$\(/, "").gsub(/\$\{/, "")
+      next unless scrubbed.match?(/\$\d/)
+
+      errors << "#{path.delete_prefix("#{repo_root}/")}:#{i + 1}: bare $-digit token; Claude Code substitutes it with an invocation argument at render time — write $(1) or ${1}"
+    end
+  end
+end
+
 if errors.empty?
   puts "ok #{skill_files.length} skills"
 else

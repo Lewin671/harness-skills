@@ -132,6 +132,31 @@ git -C "$clean" "${commit_env[@]}" commit -q --allow-empty -m init
 bare="${workdir}/bare.git"; git init -q --bare "$bare"
 plain="${workdir}/plain";   mkdir -p "$plain"
 
+# --- inside_repo, at a boundary no fixture can build --------------------
+#
+# A worktree at `/` cannot be created in a test, and it is the case where a
+# naive "$root"/* pattern becomes `//*` and matches nothing: every path on the
+# machine would read as outside a repository that contains all of them. The
+# function is at file scope so it can be asked directly.
+(
+  run_noun=review
+  # shellcheck source=/dev/null
+  . "${here}/../lib/common.bash" >/dev/null 2>&1
+  repo_paths=(/)
+  inside_repo /tmp && inside_repo / && inside_repo /var/folders/x
+) >/dev/null 2>&1
+check_exit "inside_repo: a worktree at / contains every path" 0 "$?"
+
+(
+  run_noun=review
+  # shellcheck source=/dev/null
+  . "${here}/../lib/common.bash" >/dev/null 2>&1
+  repo_paths=(/home/user/repo)
+  inside_repo /home/user/repo && inside_repo /home/user/repo/sub &&
+    ! inside_repo /home/user/repo-sibling && ! inside_repo /tmp
+) >/dev/null 2>&1
+check_exit "inside_repo: an ordinary root matches itself and its children" 0 "$?"
+
 # --- mode dispatch -----------------------------------------------------
 
 "$wrapper" >/dev/null 2>&1
@@ -1635,6 +1660,28 @@ if [ "$status" = 0 ] && ! grep '^note: ' "$stderr" | grep -q 'rejected-model-xyz
   ok "consult: a rejected attempt's model is not reported as the one that answered"
 else
   bad "consult: a rejected attempt's model is not reported as the one that answered" "exit $status"
+fi
+
+# The descriptor is advertised as the thing to run, so it has to carry every
+# choice the run was started with. Without --allow-mcp a replay silently
+# switches the standalone servers back off.
+resume_out="${workdir}/resume-mcp.out"
+FAKE_MCP_LIST='[{"name":"github","enabled":true}]' \
+  "$wrapper" consult --repo "$repo" --timeout 30 --allow-mcp "q" > /dev/null 2> "$resume_out"
+status=$?
+if [ "$status" = 0 ] && grep -qE '^resume: .* --allow-mcp( |$)' "$resume_out"; then
+  ok "consult: the resume descriptor repeats --allow-mcp"
+else
+  bad "consult: the resume descriptor repeats --allow-mcp" "exit $status, $(grep '^resume: ' "$resume_out" | tail -1)"
+fi
+
+# And does not invent it when the run did not use it.
+resume_out="${workdir}/resume-nomcp.out"
+"$wrapper" consult --repo "$repo" --timeout 30 "q" > /dev/null 2> "$resume_out"
+if ! grep -q -- '--allow-mcp' "$resume_out"; then
+  ok "consult: the resume descriptor does not invent --allow-mcp"
+else
+  bad "consult: the resume descriptor does not invent --allow-mcp"
 fi
 
 # --- multiline question cannot forge progress markers ------------------

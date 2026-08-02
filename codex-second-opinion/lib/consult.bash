@@ -239,6 +239,13 @@ mode_main() {
     #    otherwise default to `--repo .` and either consult the wrong tree or
     #    exit 3. The resolved path, not the caller's spelling, so it does not
     #    depend on where the replay happens.
-    echo "resume: --continue ${session_out}${resume_flags} --repo $(shell_quote "$PWD")" >&2
+    #  - And --allow-mcp, when the consultation was started with it. The
+    #    descriptor is advertised as the thing to run rather than reassemble,
+    #    and replaying it without the flag silently switches the standalone
+    #    MCP servers off mid-discussion — removing tools the first answer may
+    #    have used.
+    local resume_mcp=""
+    [ "$allow_mcp" -eq 1 ] && resume_mcp=" --allow-mcp"
+    echo "resume: --continue ${session_out}${resume_flags}${resume_mcp} --repo $(shell_quote "$PWD")" >&2
   fi
 }
