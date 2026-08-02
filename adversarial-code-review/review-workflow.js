@@ -2430,10 +2430,30 @@ const results = candidates.map((c) => {
     })
     state = 'unresolved'
   }
+  // What a control run can establish, and what it cannot. It shows that THIS
+  // patch is why the test now fails — causality. It says nothing about
+  // whether the old behaviour was owed. So an attacker asked to break an
+  // INTENTIONAL change can author a test for the previous behaviour, watch it
+  // pass at base and fail after, and satisfy every reproduction check without
+  // any obligation having been violated.
+  //
+  // Terminal evidence therefore overrides a refutation of semantics or
+  // reachability — the two things it does settle — and not a grounded, cited
+  // falsification of the obligation. Where both exist the evidence conflicts,
+  // which is what `unresolved` is for.
+  const obligationFalsified = citedAs(verifierRecord, 'contract_violation', 'falsifies_candidate')
+    && unsettledNamesValid && !unsettledNames.includes('contract_violation')
+  if (terminal && obligationFalsified && state !== 'unresolved') {
+    ledger.forced_unresolved.push({
+      candidate_id: c.id, anchor: `${c.file}:${c.line}`,
+      why: 'a controlled reproduction shows this patch changed the behaviour, and a grounded refutation cites code showing no obligation was violated — a reproduction settles causality, not whether the old behaviour was owed',
+    })
+    state = 'unresolved'
+  }
   // Terminal evidence is machine-checkable, so the script enforces it rather
   // than trusting the adjudicator prompt — but only after normalizeAttack has
   // confirmed the reproduction is real.
-  if (terminal && state !== 'substantiated') {
+  if (terminal && !obligationFalsified && state !== 'substantiated') {
     ledger.terminal_evidence_overrides.push({
       candidate_id: c.id, anchor: `${c.file}:${c.line}`, adjudicated_state: state, forced_state: 'substantiated',
       severity_unassigned: !v,

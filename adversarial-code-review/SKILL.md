@@ -190,7 +190,9 @@ state is `substantiated`. Normally that requires a grounded adjudicator
 verdict. The sole exception is a normalised controlled `reproduced`
 result under contract.md §5: terminal evidence forces `substantiated`
 even when adjudication refutes it, leaves it unresolved, or never
-completes. Disclose the override, never imply the adjudicator agreed,
+completes — unless a grounded refutation cites code falsifying the
+obligation. A control settles which patch caused the change, not whether
+the old behaviour was owed, and that combination is `unresolved`. Disclose the override, never imply the adjudicator agreed,
 and report severity as unassigned when no verdict supplied one. The
 result splits this for you — `verified_findings` equals
 `adjudicator_substantiated_findings` plus

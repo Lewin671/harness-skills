@@ -465,6 +465,16 @@ function makeAgent(state, s) {
       // code, nothing left unsettled, strongly grounded. Without this nothing
       // in the suite ever reaches state `refuted`, so every assertion about
       // rejected candidates was counting zero against zero.
+      // Falsifies the OBLIGATION specifically, with the other two supporting:
+      // the intentional-change shape, where a control proves the patch caused
+      // the difference and the verifier shows nothing was owed.
+      if (s.verifierObligationRefute) {
+        const ids = expectedIds(prompt)
+        const one = (id) => ({ candidate_id: id, semantics: predicate('supports_candidate'),
+          reachability: predicate('supports_candidate'), contract_violation: predicate('falsifies_candidate'),
+          strongest_refutation: 'the new behaviour is the documented one', unsettled_predicates: [], grounding: 'strong' })
+        return l.includes('minors') ? { verdicts: ids.map(one) } : one(ids[0])
+      }
       if (s.verifierCleanRefute) {
         const ids = expectedIds(prompt)
         const mkR = (id) => ({ candidate_id: id, semantics: predicate('falsifies_candidate'),
@@ -1222,6 +1232,23 @@ R.push(await run('cap keeps the more confident candidate', { ...BASE, budget_wu:
       || 'the cap dropped the high-confidence candidate and kept low-confidence ones' } }))
 // Something must actually reach `refuted`, or every assertion about rejected
 // candidates compares zero to zero.
+// A control run proves this patch caused the change. It does not prove the
+// old behaviour was owed — so an attacker asked to break an INTENTIONAL
+// change can author a test for the previous behaviour and satisfy every
+// reproduction check with nothing violated.
+R.push(await run('reproduction against a refuted obligation', { ...BASE },
+  { verifierObligationRefute: true, adjAlwaysRefute: true,
+    expect: (res) => {
+      const terminal = res.candidate_results.filter((r) => r.attack_grade === 'reproduced'
+        && r.execution_status === 'executed')
+      if (!terminal.length) return 'no controlled reproduction ran, so the carve-out is untested'
+      const promoted = terminal.filter((r) => r.state === 'substantiated')
+      if (promoted.length) return `${promoted[0].candidate_id} was substantiated on a reproduction while its obligation was falsified`
+      const kept = terminal.filter((r) => r.state === 'refuted')
+      if (kept.length) return `${kept[0].candidate_id} was rejected despite a controlled reproduction`
+      return res.ledger.forced_unresolved.some((f) => /settles causality/.test(f.why))
+        || 'the conflict was resolved without saying which evidence disagreed'
+    } }))
 R.push(await run('a candidate is genuinely refuted', { ...BASE }, { verifierCleanRefute: true, adjAlwaysRefute: true,
   expect: (res) => {
     if (!res.refuted.length) return 'no candidate reached refuted, so the rejection path is untested'
@@ -2310,8 +2337,18 @@ for (const r of R) {
       fail++; problems.push(`${r.name}: ${x.candidate_id} kept grade reproduced without complete controlled evidence`)
     }
     // The other direction of the same contract clause: a controlled
-    // reproduction is terminal evidence and outranks any refutation.
-    if (controlled(x.attack) && x.state !== 'substantiated') {
+    // reproduction outranks a refutation of semantics or reachability — the
+    // two things a control settles. It does NOT outrank a grounded, cited
+    // falsification of the obligation, because it says nothing about whether
+    // the old behaviour was owed; that combination is `unresolved`, and it is
+    // the only state other than substantiated a reproduction may end in.
+    const obligationKilled = Boolean(x.verifier && x.verifier.grounding === 'strong'
+      && x.verifier.contract_violation
+      && x.verifier.contract_violation.holds === 'falsifies_candidate'
+      && String(x.verifier.contract_violation.cited_code || '').trim()
+      && !(x.verifier.unsettled_predicates || []).includes('contract_violation'))
+    const allowed = obligationKilled ? ['substantiated', 'unresolved'] : ['substantiated']
+    if (controlled(x.attack) && !allowed.includes(x.state)) {
       fail++; problems.push(`${r.name}: ${x.candidate_id} has a controlled reproduction but is ${x.state}`)
     }
   }

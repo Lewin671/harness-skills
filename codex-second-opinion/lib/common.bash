@@ -596,6 +596,16 @@ common_resolve_scratch() {
   worktree_root="$(git rev-parse --show-toplevel)"
   worktree_root="$(cd "$worktree_root" && pwd -P)"
   repo_paths+=("$worktree_root")
+  # Every worktree root, not only this one. A linked worktree shares its
+  # object store with the main checkout and any siblings, so a CODEX_HOME or
+  # TMPDIR under one of those is inside the repository on any reading that
+  # matters — and it is outside both the current root and the git directories.
+  local wt
+  while IFS= read -r wt; do
+    [ -n "$wt" ] || continue
+    resolved="$(cd -- "$wt" 2>/dev/null && pwd -P)" || continue
+    repo_paths+=("$resolved")
+  done <<< "$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10)}')"
   for p in "$(git rev-parse --absolute-git-dir 2>/dev/null || true)" \
            "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"; do
     [ -n "$p" ] || continue

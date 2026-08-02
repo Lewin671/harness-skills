@@ -296,8 +296,19 @@ The `held` / `blocked` / `inconclusive` split is load-bearing. Collapse
 them and an environment failure or an unfunded target reads as a clean
 bill of health.
 
-A controlled `reproduced` result is terminal evidence: it substantiates
-the candidate regardless of any refutation on the same code. An
+A controlled `reproduced` result is terminal evidence for what it actually
+establishes: that **this patch** is why the test now fails. It substantiates
+the candidate over a refutation of semantics or reachability — the two things
+a control settles.
+
+It does **not** settle the obligation, and the difference is not academic.
+Asked to break an intentional change, an attacker can author a test for the
+previous behaviour, watch it pass at `base_sha` and fail after the patch, and
+meet every reproduction requirement without anything having been violated. So
+where a grounded refutation cites code falsifying `contract_violation` and a
+controlled reproduction exists, the evidence conflicts and the state is
+`unresolved` — not substantiated on the reproduction, and not refuted despite
+it. An
 uncontrolled failing test is not — it is downgraded to `plausible`,
 because a test can fail from a missing dependency, a pre-existing
 breakage, or flakiness just as easily as from the defect.

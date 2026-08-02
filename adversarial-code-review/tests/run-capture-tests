@@ -61,6 +61,17 @@ pathlib.Path(sys.argv[3]).write_text(ranges[0])
 PY2
 [ $? -eq 0 ] || { echo "could not extract the filtered or range block from ${DOC}"; exit 1; }
 
+python3 - "$DOC" "${WORK}/submodules.sh" <<'PY3'
+import re, sys, pathlib
+doc = pathlib.Path(sys.argv[1]).read_text()
+blocks = re.findall(r'```bash\n(.*?)```', doc, re.S)
+picked = [b for b in blocks if 'acr_submodules=' in b]
+if len(picked) != 1:
+    sys.exit(f"expected one submodule block, found {len(picked)}")
+pathlib.Path(sys.argv[2]).write_text(picked[0])
+PY3
+[ $? -eq 0 ] || { echo "could not extract the submodule block from ${DOC}"; exit 1; }
+
 # Run the recipe in $1 with the scope prelude in $2. Echoes the exit status;
 # leaves the recipe's own variables in ${WORK}/vars for the caller to read.
 run_capture() {
@@ -192,6 +203,66 @@ if [ "$status" != 0 ]; then
   ok "an uncapturable untracked file stops the capture"
 else
   bad "an uncapturable untracked file stops the capture" "exit 0, the file was dropped silently"
+fi
+
+# --- a submodule path may contain spaces -----------------------------------
+#
+# The recipe promises to NAME uncaptured submodules so they can be reviewed as
+# their own scope. Splitting `git submodule status` on whitespace returns half
+# of `libs/payment core`, which names the wrong path and cannot be reviewed.
+
+subhost="${WORK}/subhost"
+subinner="${WORK}/subinner"
+git init -q "$subinner"
+printf 'inner\n' > "${subinner}/i.txt"
+git -C "$subinner" add -A
+git -C "$subinner" "${commit_env[@]}" commit -q -m inner
+git init -q "$subhost"
+printf 'outer\n' > "${subhost}/o.txt"
+git -C "$subhost" add -A
+git -C "$subhost" "${commit_env[@]}" commit -q -m outer
+if git -C "$subhost" -c protocol.file.allow=always "${commit_env[@]}" \
+     submodule add -q "$subinner" 'libs/payment core' >/dev/null 2>&1; then
+  sub_out="${WORK}/submodules.out"
+  ( cd "$subhost" && set -euo pipefail
+    # shellcheck source=/dev/null
+    . "${WORK}/submodules.sh"
+    printf '%s\n' "$acr_submodules" ) > "$sub_out" 2>/dev/null
+  sub_status=$?
+  if [ "$sub_status" = 0 ] && grep -qx 'libs/payment core' "$sub_out"; then
+    ok "a submodule path containing a space is named whole"
+  else
+    bad "a submodule path containing a space is named whole" "exit $sub_status, got: $(tr '\n' '|' < "$sub_out")"
+  fi
+else
+  bad "a submodule path containing a space is named whole" "could not create the submodule fixture"
+fi
+
+# --- and never inside a sibling worktree -----------------------------------
+#
+# A linked worktree shares its object store with the main checkout, which is
+# outside both the current root and every git directory.
+
+lwmain="$(new_repo lwmain)"
+git -C "$lwmain" add -A
+git -C "$lwmain" "${commit_env[@]}" commit -q -m work
+lwlinked="${WORK}/lwlinked"
+git -C "$lwmain" worktree add -q -b lw "$lwlinked" >/dev/null 2>&1
+printf 'dirty\n' > "${lwlinked}/untracked.txt"
+mkdir -p "${lwmain}/scratch"
+status="$(TMPDIR="${lwmain}/scratch" run_capture "$lwlinked" 'diff_args=(HEAD); untracked=1')"
+# shellcheck source=/dev/null
+. "${WORK}/vars"
+lwmain_real="$(cd "$lwmain" && pwd -P)"
+tmp_real="$(cd "$tmp" 2>/dev/null && pwd -P)" || tmp_real="$tmp"
+case "${tmp_real}/" in
+  "${lwmain_real}"/*) in_sibling=yes ;;
+  *) in_sibling=no ;;
+esac
+if [ "$status" = 0 ] && [ "$in_sibling" = no ]; then
+  ok "a TMPDIR in a sibling worktree is relocated too"
+else
+  bad "a TMPDIR in a sibling worktree is relocated too" "exit $status, tmp=${tmp}"
 fi
 
 # --- scratch never lands inside the repository -----------------------------

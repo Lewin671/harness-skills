@@ -55,10 +55,9 @@ adding the flag silently. Never use this skill to apply fixes.
 
 Read-only means the user's repository and the world outside it, not the
 local disk. Three things are written every run: the result file and the
-event log under `TMPDIR` — or under `/tmp`, when `TMPDIR` itself sits
-inside the repository (both paths are printed, and neither is cleaned
-up — that is the system's job) — and the session itself, which Codex
-persists under `CODEX_HOME/sessions`. That last one applies to **both
+event log under `TMPDIR` — or `/tmp`, if `TMPDIR` is inside the repo;
+both paths are printed and neither is cleaned up — and the session,
+which Codex persists under `CODEX_HOME/sessions`. That last one applies to **both
 modes**, not just consult: a review's prompt, the diff it read, and its
 findings stay on disk after the run. For consult it is also
 load-bearing — it is what makes `--continue` work.
@@ -66,8 +65,10 @@ load-bearing — it is what makes `--continue` work.
 Two placements are refused rather than worked around: a `CODEX_HOME`
 inside the repository (it cannot be relocated without orphaning earlier
 sessions, so exit `3`), and a repo-local `TMPDIR`, which is moved. The
-script's own git prechecks write nothing in the repository and run no
-program its config names; `references/internals.md` says how.
+script's own git prechecks run no program its config names and write
+nothing in the repository — except on git below 2.42, where a partial
+clone can still fetch a promised object. `references/internals.md` says
+how, and how narrow that is.
 
 ## Independence Contract
 
@@ -136,8 +137,8 @@ Mode details live beside this file:
 
 **Prefer `run_in_background: true`.** A run can legitimately take
 minutes — at `xhigh` a two-file, 374-line review diff blew past the Bash
-tool's 10-minute ceiling, and a tiny one still took 100s. The `high`
-default is cheaper but not reliably under that ceiling.
+tool's 10-minute ceiling, and a tiny one still took 100s; `high` is
+cheaper but not reliably under it.
 Continue Claude's independent analysis while it runs; if no useful work
 remains, end the turn and wait for the completion notification. A
 foreground run is acceptable when the chosen model, effort, and scope make

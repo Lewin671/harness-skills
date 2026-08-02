@@ -1283,6 +1283,19 @@ else
   bad "review: a CODEX_HOME in a linked worktree's git dir fails closed" "exit $status"
 fi
 
+# A linked worktree shares its object store with the main checkout, which sits
+# outside both the current root and every git directory — so a CODEX_HOME
+# there is inside the repository by any reading that matters.
+stderr="${workdir}/lw-main.err"
+CODEX_HOME="${lw_main}/codex-home" \
+  "$wrapper" review --repo "$lw_linked" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr"; then
+  ok "review: a CODEX_HOME in a sibling worktree fails closed"
+else
+  bad "review: a CODEX_HOME in a sibling worktree fails closed" "exit $status"
+fi
+
 # --- the reporting duty must be dischargeable from what is printed -----
 #
 # Both modes owe the reader the model that answered. With --inherit and no

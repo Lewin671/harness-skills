@@ -92,7 +92,12 @@ mutate "not_attempted vs inconclusive" "    : (probeFailed ? 'blocked' : 'not_at
 mutate "prepaid token debt" "  return (waveEstimateWU + wu + prepaidDebtWU) * ratePerWU() <= budget.remaining()" "  return (waveEstimateWU + wu) * ratePerWU() <= budget.remaining()"
 mutate "grounded-refutation guard" "  if (state === 'substantiated' && !canSubstantiate && !terminal) {" "  if (false) {"
 mutate "refutation grounding must be strong" "verifierRecord && verifierRecord.grounding === 'strong'" "verifierRecord"
-mutate "terminal evidence override" "  if (terminal && state !== 'substantiated') {" "  if (false) {"
+mutate "terminal evidence override" "  if (terminal && !obligationFalsified && state !== 'substantiated') {" "  if (false) {"
+# A control settles which patch caused the change, not whether the old
+# behaviour was owed.
+mutate "reproduction does not override the obligation" "  if (terminal && obligationFalsified && state !== 'unresolved') {" "  if (false) {"
+mutate "obligation falsification must be grounded" "  const obligationFalsified = citedAs(verifierRecord, 'contract_violation', 'falsifies_candidate')
+    && unsettledNamesValid && !unsettledNames.includes('contract_violation')" "  const obligationFalsified = false"
 mutate "region-probe floor escrow" "  if (admitOptional(W.probe, floorsFor([...candidates, ...syntheticCriticals(acceptedRegionProbes.length + 1)]))) acceptedRegionProbes.push(t)" "  if (admitOptional(W.probe, 0)) acceptedRegionProbes.push(t)"
 mutate "weak verdict replacement" "        if (v.grounding === 'strong') verdictById.set(id, v)" "        if (true) verdictById.set(id, v)"
 mutate "unknown-verdict-id rejection" "    if (!expected.has(id)) { ledger.unknown_verdict_ids.push({ role, id }); continue }" "    if (false) { continue }"
@@ -462,7 +467,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=196
+EXPECTED_TOTAL=198
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

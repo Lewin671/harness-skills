@@ -32,7 +32,16 @@ phase reads different code than the review phase.
 # refuse if there is nowhere left.
 acr_root="${TMPDIR:-/tmp}"
 acr_root="$(cd "$acr_root" 2>/dev/null && pwd -P)" || acr_root=/tmp
-for acr_repo in "$(git rev-parse --show-toplevel)" \
+# A partial clone fetches missing objects on demand, so a capture that needs
+# one reaches the network and writes the SHARED .git/objects — before the
+# baseline exists. Inert below git 2.42; say so rather than claim otherwise.
+export GIT_NO_LAZY_FETCH=1
+
+# Every worktree root, not just this one. A linked worktree shares its object
+# store with the main checkout and any siblings, and a TMPDIR under one of
+# those is inside the repository by any reading that matters.
+acr_roots="$(git worktree list --porcelain | awk '/^worktree /{print substr($(0),10)}')"
+for acr_repo in ${acr_roots} \
                 "$(git rev-parse --absolute-git-dir)" \
                 "$(git rev-parse --path-format=absolute --git-common-dir)"; do
   acr_repo="$(cd "$acr_repo" 2>/dev/null && pwd -P)" || continue
@@ -146,7 +155,10 @@ already-dirty submodule leaves both snapshots identical. Detect it and say so:
 ```bash
 # Registered submodules with any content of their own. Named in the report as
 # uncaptured, and reviewed — if they matter — as their own scope.
-acr_submodules="$(git submodule status --recursive 2>/dev/null | awk '{print $(2)}')"
+# The path is everything between the SHA and the trailing ` (describe)`, and
+# it may contain spaces: splitting on whitespace returns half of one.
+acr_submodules="$(git submodule status --recursive 2>/dev/null |
+  sed -e 's/^.[0-9a-f]* //' -e 's/ (.*)$//')"
 ```
 
 Reviewing the submodule separately, with `--repo` pointing inside it, is the
