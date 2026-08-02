@@ -141,6 +141,33 @@ const M = Object.assign({ cheap: 'sonnet', strong: 'opus', highEffort: 'xhigh' }
 if (!Array.isArray(A.included_paths) || !A.included_paths.length) {
   return { status: 'invalid_args', detail: 'included_paths must be a non-empty array; without it nothing binds a finding to the reviewed artifact' }
 }
+// Every ENTRY, not just the array. `[null]` and `[[]]` are non-empty arrays,
+// and a manifest serialised wrong that way is not caught anywhere else: a
+// candidate's `file` is a string, so `includedPaths.includes(c.file)` is false
+// for every one of them and the run discards the entire finder wave as
+// out-of-scope — after paying for it — and reports a clean review of a scope
+// it never checked. Same principle as the profile and budget checks above: a
+// value that is present but invalid is a caller mistake, not an omission.
+const badIncluded = A.included_paths.findIndex((p) => typeof p !== 'string' || !p.trim().length)
+if (badIncluded !== -1) {
+  return { status: 'invalid_args', detail: `included_paths[${badIncluded}] is ${JSON.stringify(A.included_paths[badIncluded])}; every entry must be a non-empty repo-relative path string` }
+}
+// excluded_paths is disclosure-only — it is echoed into the report as what
+// the review left out — but a malformed one is echoed just as faithfully,
+// and a reader cannot tell an omission from a serialisation bug.
+if (A.excluded_paths !== undefined && A.excluded_paths !== null) {
+  const badExcluded = !Array.isArray(A.excluded_paths)
+    ? -2
+    : A.excluded_paths.findIndex((p) => typeof p !== 'string' || !p.trim().length)
+  if (badExcluded !== -1) {
+    return {
+      status: 'invalid_args',
+      detail: badExcluded === -2
+        ? 'excluded_paths must be an array of non-empty path strings'
+        : `excluded_paths[${badExcluded}] is ${JSON.stringify(A.excluded_paths[badExcluded])}; every entry must be a non-empty path string`,
+    }
+  }
+}
 const includedPaths = A.included_paths
 // Optional but strongly preferred: the changed line ranges per file, from
 // `git diff --unified=0`. File-level binding still lets a candidate cite an
@@ -2341,6 +2368,18 @@ if (adjInput.length && !adjudicationTokenBlocked) {
       }
     }
   }
+}
+
+// The adjudicator escrow's exact counterpart to the verifier release above,
+// and it was missing. Nothing after this point can draw it: the escalation is
+// the last purchase the run makes, and which verdicts were weak is now known
+// — including the cases where the block above never ran at all, because there
+// were no candidates, no weak verdicts, or no tokens left to adjudicate with.
+// Held, it inflates the one number contract.md section 6 calls the achieved
+// cost, on every ordinary run whose verdicts all came back strong first time.
+if (escrow.adjudicator > 0) {
+  committedWU -= escrow.adjudicator
+  escrow.adjudicator = 0
 }
 
 // ---------------------------------------------------------------------------

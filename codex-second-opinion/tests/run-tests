@@ -186,6 +186,54 @@ check_exit "inside_repo: a worktree at / contains every path" 0 "$?"
 ) >/dev/null 2>&1
 check_exit "inside_repo: an ordinary root matches itself and its children" 0 "$?"
 
+# --- resolved_path, where the operand carries a glob metacharacter ------
+#
+# The loop splits on IFS=/ and an unquoted expansion ALSO globs. A repository
+# directory literally named `*`, with CODEX_HOME inside it, expanded that
+# component against the repository and produced a probe assembled from
+# sibling filenames — a path outside the tree, so the containment check
+# passed while codex, reading the literal environment value, wrote its
+# sessions inside the repository. Asked directly, because a fixture cannot
+# make the wrapper's own cwd the pathological one without the very bug.
+globdir="${workdir}/globby/*"
+mkdir -p "$globdir" && : > "${globdir}/alpha" && : > "${globdir}/beta"
+(
+  run_noun=review
+  # shellcheck source=/dev/null
+  . "${here}/../lib/common.bash" >/dev/null 2>&1
+  cd -- "$globdir" || exit 1
+  got="$(resolved_path "${globdir}/codex-home")"
+  [ "$got" = "${globdir}/codex-home" ]
+) >/dev/null 2>&1
+check_exit "resolved_path: a glob metacharacter is a path component, not a pattern" 0 "$?"
+
+# And the consequence, stated as the check that actually protects the repo:
+# the probe must still land inside the repository it is inside.
+(
+  run_noun=review
+  # shellcheck source=/dev/null
+  . "${here}/../lib/common.bash" >/dev/null 2>&1
+  cd -- "$globdir" || exit 1
+  repo_paths=("$globdir")
+  inside_repo "$(resolved_path "${globdir}/codex-home")"
+) >/dev/null 2>&1
+check_exit "resolved_path: a CODEX_HOME under a globby repo root is still inside it" 0 "$?"
+
+# The shell option is restored, not left on: a caller that globs afterwards
+# must not silently stop globbing.
+(
+  run_noun=review
+  # shellcheck source=/dev/null
+  . "${here}/../lib/common.bash" >/dev/null 2>&1
+  resolved_path /tmp/x >/dev/null
+  case "$-" in *f*) exit 1 ;; esac
+  set -f
+  resolved_path /tmp/x >/dev/null
+  case "$-" in *f*) exit 0 ;; esac
+  exit 1
+) >/dev/null 2>&1
+check_exit "resolved_path: noglob is restored to whatever the caller had" 0 "$?"
+
 # --- mode dispatch -----------------------------------------------------
 
 "$wrapper" >/dev/null 2>&1
@@ -1018,6 +1066,51 @@ for objroot in '{"github":{"name":"github","enabled":true}}' '{"name":"single","
   fi
 done
 
+# An entry that carries NO `enabled` field at all. Absence is not disabled:
+# this whole block keys on that field's literal bytes, so a CLI that stopped
+# emitting it for default-enabled servers would leave the entry matching no
+# `true` in the prefilter, agreeing with the key/value count that has no key
+# to check, and parsing to no enabled id — a listing read as all-clear about
+# a server it never described. Both routes into the block are covered: the
+# first payload reaches the no-`true` branch, the second the enumerating one.
+for undecl in \
+    '[{"name":"hidden"},{"name":"off","enabled":false}]' \
+    '[{"name":"hidden"},{"name":"live","enabled":true}]' \
+    '[{},{"name":"off","enabled":false}]'; do
+  stderr="${workdir}/mcp-undecl.err"
+  argv_log="${workdir}/argv-mcp-undecl.log"
+  : > "$argv_log"
+  FAKE_MCP_LIST="$undecl" FAKE_ARGV_LOG="$argv_log" \
+    "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+  status=$?
+  if [ "$status" = 3 ] && grep -q "no 'enabled' field" "$stderr" &&
+     ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+    ok "review: an MCP entry with no 'enabled' field fails closed (${undecl})"
+  else
+    bad "review: an MCP entry with no 'enabled' field fails closed (${undecl})" "exit $status"
+  fi
+done
+
+# The same silence in the RE-CHECK. The overrides are applied, codex answers
+# with a listing whose remaining entry does not say whether it is enabled, and
+# that is not confirmation that anything went down.
+#
+# The payload must still LOOK like a listing, or it is refused an arm earlier
+# as an unrecognised shape and this check is never reached — measured: a
+# re-check of `[{"name":"live"}]` alone exits 3 for that other reason, which
+# is correct but proves nothing about this one. So one entry keeps a
+# well-formed `enabled` and the other omits it.
+stderr="${workdir}/mcp-undecl-recheck.err"
+FAKE_MCP_LIST='[{"name":"live","enabled":true}]' \
+FAKE_MCP_LIST_AFTER='[{"name":"live"},{"name":"other","enabled":false}]' \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q "no 'enabled' field" "$stderr"; then
+  ok "review: a re-check entry with no 'enabled' field is not confirmation"
+else
+  bad "review: a re-check entry with no 'enabled' field is not confirmation" "exit $status"
+fi
+
 # The same shape must NOT become a way to hide a real server: an entry that is
 # genuinely enabled at depth 1 still has to be switched off, nested object or
 # not.
@@ -1336,6 +1429,45 @@ fi
 # `filtering not recognized by server, ignoring` and fetches everything, so
 # no precheck can be made to demand a missing object.
 # references/internals.md already calls this a residual and not a guarantee.
+
+# `cd` is a builtin that parses its own options, and TMPDIR is an environment
+# variable. `TMPDIR=-P` makes the scratch resolution `cd -P` with no operand,
+# which SUCCEEDS and lands on $HOME — every scratch file for the run would go
+# there, and the repo-containment test below it would judge the wrong
+# directory entirely. The `--` on `cd -- "$repo"` has carried a comment
+# explaining exactly this since it was added; these two sites did not have it.
+dashhome="${workdir}/dash-home"
+mkdir -p "$dashhome"
+# The PHYSICAL spelling, because the path under test comes back through
+# `pwd -P`. Measured: with the terminator removed the scratch landed in
+# `/private/tmp/...` while $HOME held `/tmp/...`, so a comparison against the
+# logical form matched nothing and this assertion passed with the bug in
+# place. The fallback is resolved the same way, for the same reason.
+dashhome_real="$(cd -- "$dashhome" && pwd -P)"
+dash_fallback="$(cd -- /tmp && pwd -P)"
+stderr="${workdir}/dash-tmpdir.err"
+TMPDIR="-P" HOME="$dashhome" "$wrapper" review --repo "$dirty" --timeout 30 \
+  >/dev/null 2> "$stderr"
+dash_status=$?
+dash_log="$(sed -n 's/^log: //p' "$stderr" | tail -1)"
+dash_out="$(sed -n 's/^report: //p' "$stderr" | tail -1)"
+# Positive AND negative: the run must fall back to /tmp, and must not have
+# gone to $HOME. Asserting only "not home" would pass for any third place.
+case "${dash_log}" in
+  "${dashhome_real}"/*|"${dashhome}"/*) dash_placed=home ;;
+  "${dash_fallback}"/*)                 dash_placed=elsewhere ;;
+  '')                                   dash_placed=none ;;
+  *)                                    dash_placed="somewhere else (${dash_log})" ;;
+esac
+# Leave nothing behind in the fallback directory: with TMPDIR unusable the
+# scratch legitimately lands in the real /tmp, outside this suite's workdir.
+[ -n "$dash_log" ] && rm -f "$dash_log"
+[ -n "$dash_out" ] && rm -f "$dash_out"
+if [ "$dash_status" = 0 ] && [ "$dash_placed" = elsewhere ]; then
+  ok "review: TMPDIR='-P' is an operand, not a cd flag"
+else
+  bad "review: TMPDIR='-P' is an operand, not a cd flag" "exit ${dash_status}, scratch went ${dash_placed} (${dash_log:-no log line})"
+fi
 
 # core.fsmonitor names a program git runs while refreshing, outside every
 # sandbox codex could impose and before any of its feature gates exist.

@@ -275,6 +275,27 @@ else
   bad "a submodule path containing a space is named whole" "could not create the submodule fixture"
 fi
 
+# And a path containing ` (`. BRE is greedy and the expression is anchored, so
+# ` (.*)$` strips from the FIRST ` (` on the line, not from the describe
+# suffix: `libs/foo (legacy)` came back as `libs/foo`, and the report then
+# named an uncaptured scope that does not exist and cannot be reviewed.
+if git -C "$subhost" -c protocol.file.allow=always "${commit_env[@]}" \
+     submodule add -q "$subinner" 'libs/foo (legacy)' >/dev/null 2>&1; then
+  sub_out="${WORK}/submodules-paren.out"
+  ( cd "$subhost" && set -euo pipefail
+    # shellcheck source=/dev/null
+    . "${WORK}/submodules.sh"
+    printf '%s\n' "$acr_submodules" ) > "$sub_out" 2>/dev/null
+  sub_status=$?
+  if [ "$sub_status" = 0 ] && grep -qx 'libs/foo (legacy)' "$sub_out"; then
+    ok "a submodule path containing a parenthesis keeps it"
+  else
+    bad "a submodule path containing a parenthesis keeps it" "exit $sub_status, got: $(tr '\n' '|' < "$sub_out")"
+  fi
+else
+  bad "a submodule path containing a parenthesis keeps it" "could not create the submodule fixture"
+fi
+
 # --- and never inside a sibling worktree -----------------------------------
 #
 # A linked worktree shares its object store with the main checkout, which is
@@ -774,6 +795,14 @@ printf 'brand\nnew\n' > "${rng}/fresh.txt"          # untracked, two lines
 # file-level fallback to cover the file.
 printf 'no trailing newline' > "${rng}/nonl.txt"
 : > "${rng}/empty.txt"
+# An untracked file literally named `-`. Passed to awk as a bare operand it is
+# STDIN — and stdin here is the NUL stream the enclosing `while` is reading
+# from, so awk swallows every remaining record. Measured before the fix: the
+# loop ran ONCE, emitted a bogus one-line range for `-`, and every untracked
+# file after it got no range at all. `-` sorts first in `ls-files`, so the
+# three assertions below it are the ones that catch the regression; this file
+# needs its own range checked too, or a fix that merely SKIPS `-` would pass.
+printf 'dash1\ndash2\n' > "${rng}/-"
 # An ADDED source line reading `++ b/forged` is emitted as `+++ b/forged`,
 # which is indistinguishable from a file header on its own. It has to be added
 # by THIS change to appear at all under --unified=0, and a later hunk in the
@@ -821,6 +850,7 @@ else
   check_range 'gone\.txt 1 3' 'a wholly deleted file'
   check_range 'fresh\.txt 1 2' 'an untracked file, in its entirety'
   check_range 'nonl\.txt 1 1' 'an untracked file with no trailing newline'
+  check_range '- 1 2' 'an untracked file literally named -'
   if grep -q '^empty\.txt ' "$rng_out"; then
     bad "changed ranges: an empty untracked file gets no range at all" "$(grep '^empty\.txt ' "$rng_out")"
   else
@@ -847,6 +877,32 @@ else
   # A newly added file gets its OWN range, and no range is invented for
   # whichever file the diff happened to emit before it.
   check_range 'added\.txt 1 3' 'a newly added tracked file'
+fi
+
+# The SAME recipe with untracked=0 — every branch and explicit-range scope.
+# Nothing exercised this before: the block ended in `[ "${untracked}" = 1 ] &&
+# pipeline`, whose status with a false test is 1, and as the last statement of
+# a Phase 0 Bash call that is the CALL's exit status. The tracked ranges above
+# it were produced correctly and the step still reported failure.
+rng0_out="${WORK}/ranges-untracked0.out"
+rng0_status=0
+(
+  cd "$rng" || exit 1
+  set -euo pipefail
+  diff_args=(HEAD); untracked=0; excludes=(':(exclude)no-such-path-zzz')
+  # shellcheck source=/dev/null
+  . "${WORK}/ranges.sh"
+) > "$rng0_out" 2>/dev/null || rng0_status=$?
+if [ "$rng0_status" != 0 ]; then
+  bad "the changed-range recipe succeeds with untracked=0" "exit $rng0_status"
+elif ! grep -qE '^edit\.txt 2 2$' "$rng0_out"; then
+  # Exit 0 alone is satisfied by a block that produces nothing, so the tracked
+  # half has to still be there.
+  bad "the changed-range recipe succeeds with untracked=0" "exit 0 but no tracked ranges: $(tr '\n' '|' < "$rng0_out")"
+elif grep -q '^fresh\.txt ' "$rng0_out"; then
+  bad "the changed-range recipe succeeds with untracked=0" "untracked ranges were emitted anyway"
+else
+  ok "the changed-range recipe succeeds with untracked=0"
 fi
 
 echo

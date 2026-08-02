@@ -40,7 +40,12 @@ set -euo pipefail
 # reviewed, before the baseline that could disclose it exists. Relocate, and
 # refuse if there is nowhere left.
 acr_root="${TMPDIR:-/tmp}"
-acr_root="$(cd "$acr_root" 2>/dev/null && pwd -P)" || acr_root=/tmp
+# `--`: TMPDIR is an environment variable, and `cd` is a builtin that parses
+# its own options. `TMPDIR=-P` makes this `cd -P` with no operand, which
+# succeeds and lands on $HOME — every Phase 0 scratch file, including both
+# snapshots, would then be written there while the containment checks below
+# judge the wrong directory. Quoting does not stop it; the terminator does.
+acr_root="$(cd -- "$acr_root" 2>/dev/null && pwd -P)" || acr_root=/tmp
 # A partial clone fetches missing objects on demand, so a capture that needs
 # one reaches the network and writes the SHARED .git/objects — before the
 # baseline exists. Inert below git 2.42; say so rather than claim otherwise.
@@ -202,8 +207,12 @@ already-dirty submodule leaves both snapshots identical. Detect it and say so:
 # uncaptured, and reviewed — if they matter — as their own scope.
 # The path is everything between the SHA and the trailing ` (describe)`, and
 # it may contain spaces: splitting on whitespace returns half of one.
+# `[^(]*`, not `.*`: BRE is greedy and anchored, so ` (.*)$` strips from the
+# FIRST ` (` on the line — a submodule at `libs/foo (legacy)` came back as
+# `libs/foo`, and the report then named an uncaptured scope that does not
+# exist. Measured. Only the last parenthesised group is the describe suffix.
 acr_submodules="$(git submodule status --recursive 2>/dev/null |
-  sed -e 's/^.[0-9a-f]* //' -e 's/ (.*)$//')"
+  sed -e 's/^.[0-9a-f]* //' -e 's/ ([^(]*)$//')"
 ```
 
 Reviewing the submodule separately, with `--repo` pointing inside it, is the
@@ -381,8 +390,11 @@ string and, for a symlink, where it points. A path that is neither —
 a FIFO, a socket, a device — appears in the second and has no content to
 hash, which is the honest treatment rather than a hang.
 
-Two kinds of path stay outside it, and both belong in the report rather than
-behind an implied "total coverage":
+Five kinds of path stay outside it, and every one of them belongs in the
+report rather than behind an implied "total coverage". The count is stated
+because it was wrong: the list said "two" while carrying five bullets, and a
+summary that miscounts its own exclusions is how the shorter claims below
+came to name only some of them.
 
 - **gitignored paths** — build output, `node_modules`, local caches.
 - **a symlink target differing only by a trailing newline.** `readlink`
@@ -403,8 +415,19 @@ behind an implied "total coverage":
   vanishing or changing kind is invisible here, and no amount of hashing in
   this recipe changes that, because the recipe never learns the path exists.
 
-"Changes to tracked and untracked-but-visible files are detected" is true.
-"Changes to the parent tree are detected" is not.
+So the shortest true sentence is longer than the one that used to stand here.
+"Changes to tracked and untracked-but-visible files are detected" is **not**
+quite true, and this file cannot claim it while listing the write-only case
+four bullets above: a rewrite of a file the snapshot cannot read leaves every
+digest identical. What holds is:
+
+> Every tracked and untracked-but-visible path is recorded with its mode, and
+> its contents are hashed when they can be read. A change to one is detected,
+> except a rewrite of a file that is unreadable both before and after, and
+> except a symlink retargeted to differ only by a trailing newline.
+
+"Changes to the parent tree are detected" is not true at all — the other three
+bullets are why.
 
 ### Exclusions and partitioning
 
@@ -540,15 +563,27 @@ git diff --no-ext-diff --no-textconv --unified=0 "${diff_args[@]}" -- . "${exclu
              else print f, (s>0?s:1), (s>0?s:1)}'
 
 # untracked files are changed in their entirety (uncommitted scope only)
-[ "${untracked}" = 1 ] &&
+# An `if`, not `[ ... ] &&`. With untracked=0 — every branch and explicit-range
+# scope — the AND-list's status is the FAILED test's, and as the last statement
+# of a Phase 0 Bash call that is the call's own exit status: the tracked ranges
+# above were produced correctly and the step still reports failure.
+if [ "${untracked}" = 1 ]; then
 git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
   while IFS= read -r -d '' f; do
-    n="$(awk 'END{print NR}' "$f")"
+    # `./$f`, exactly as the snapshot recipe does it, and for the same reason:
+    # a file literally named `-` makes awk read STDIN — which here is the NUL
+    # stream this loop is reading from, so awk swallows every remaining record.
+    # Measured: with `-` followed by one more path the loop runs ONCE, emits a
+    # bogus one-line range for `-`, and the following file gets no entry at
+    # all. Its candidates then fall back to file-level binding while `-`
+    # rejects every candidate past line 1.
+    n="$(awk 'END{print NR}' "./$f")"
     # An EMPTY file has zero lines, and "1 0" is not a range. Emitting it
     # makes the whole run return invalid_args; omitting the entry lets the
     # documented file-level fallback cover the file instead.
     [ "${n}" -gt 0 ] && printf '%s 1 %s\n' "$f" "${n}"
   done
+fi
 # awk, not `wc -l`: a file with no trailing newline counts 0 lines under wc,
 # which produces the range 1..0 and silently rejects every candidate in it.
 ```
@@ -1120,9 +1155,19 @@ The honest contract, and it is narrower than "never modifies":
 > Triage, finder, verifier, probe and adjudicator prompts issue no
 > write instructions. Executable attacks write only inside throwaway
 > worktrees holding the verified review patch. The launcher snapshots
-> the parent tree's HEAD, status, and a content hash of every tracked
-> and untracked-but-visible file before and after the run, and reports
-> any unexpected difference. Gitignored paths are outside that snapshot.
+> the parent tree's HEAD, index, status, and every tracked and
+> untracked-but-visible path — with its mode, and with a content hash
+> where the file can be read — before and after the run, and reports any
+> unexpected difference. Five kinds of change are outside it, listed in
+> §1: gitignored paths, submodule contents, anything git does not list,
+> a rewrite of a file that is unreadable both times, and a symlink
+> retargeted by a trailing newline alone.
+
+"A content hash of every tracked and untracked-but-visible file" is what this
+paragraph used to say, and §1 has always contradicted it: a write-only file
+contributes a constant `UNREADABLE` record, so an agent can rewrite one and
+both snapshots agree. The summary is the place that claim gets read, so it is
+the place it has to be exact.
 
 That last part is **detection, not enforcement**. Claude Code exposes no
 tool-restriction knob on `agent()` — the options are `label`, `phase`,

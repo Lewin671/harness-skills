@@ -126,6 +126,12 @@ mutate "null-finder coverage disclosure" "  if (!res) { ledger.unrun_lenses.push
 mutate "grounded refutation definition" "    verifier_completed: groundedRefutation," "    verifier_completed: verified,"
 mutate "contradictory record cannot support" "  const canSubstantiate = groundedRefutation && selfConsistent" "  const canSubstantiate = groundedRefutation"
 mutate "scope manifest is mandatory" "if (!Array.isArray(A.included_paths) || !A.included_paths.length) {" "if (false) {"
+# Non-empty is not the same as usable. `includes()` compares by identity, so a
+# manifest of nulls matches no candidate's string filename: every finding is
+# discarded as out-of-scope after the finder wave has been paid for, and the
+# run reports `ok` with zero candidates over a scope it could not read.
+mutate "scope manifest entries are strings" "const badIncluded = A.included_paths.findIndex((p) => typeof p !== 'string' || !p.trim().length)" "const badIncluded = -1"
+mutate "excluded_paths entries are strings" "if (A.excluded_paths !== undefined && A.excluded_paths !== null) {" "if (false) {"
 mutate "changed-hunk binding" "  if (ranges && !ranges.some((r) => c.line >= r[0] && c.line <= r[1])) {" "  if (false) {"
 mutate "disclosure checklist counts" "    verified_findings: results.filter((r) => r.state === 'substantiated').length," "    verified_findings: 0,"
 mutate "predicates must support substantiation" "    && PREDICATES.every((k) => citedAs(verifierRecord, k, 'supports_candidate'))" "    "
@@ -359,6 +365,15 @@ mutate "verifier escrow is released once unusable" "if (escrow.verifier > 0) {
   committedWU -= escrow.verifier
   escrow.verifier = 0
 }" "if (false) {}"
+# The counterpart, which existed as a rule for the verifier half and not for
+# this one. Unreleased it inflated committed_wu by 1.5 + 0.3n on every
+# ordinary run whose verdicts all came back strong — 3.6wu of the seven-
+# candidate baseline — and the accounting assertions allowed exactly that
+# amount, so the leak sat inside its own allowance.
+mutate "adjudicator escrow is released once unusable" "if (escrow.adjudicator > 0) {
+  committedWU -= escrow.adjudicator
+  escrow.adjudicator = 0
+}" "if (false) {}"
 
 # The cumulative term is the only one that can see spend by a CONCURRENT
 # workflow: it belongs to no per-wave delta, so neither the prior nor the
@@ -474,7 +489,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=203
+EXPECTED_TOTAL=206
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

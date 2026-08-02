@@ -15,8 +15,8 @@ description: >-
   appropriate. Pure review — it produces a report and applies no fixes:
   it issues no write instructions, executable attacks run in throwaway
   worktrees, and changes to tracked or visible files in the parent tree
-  are detected and disclosed rather than prevented. Do not use when
-  fixes are wanted.
+  are detected and disclosed rather than prevented — detection with five
+  named residuals, not a guarantee. Do not use when fixes are wanted.
 harnesses: [claude-code]
 ---
 
@@ -85,12 +85,15 @@ What it guarantees beyond that flow:
   instructs you to call Workflow — the user invoking it is the
   multi-agent opt-in.
 - **No write instructions outside throwaway worktrees.** The parent
-  tree is snapshotted before and after — HEAD, the index, status, and a
-  content hash of tracked and untracked-but-visible files — and any
-  unexpected difference is disclosed. Detection, not enforcement, and
-  three things sit outside it: gitignored paths, checked-out
-  **submodules**, and anything git does not list. orchestration.md §1
-  and §7 give the commands and why a stronger claim would be false.
+  tree is snapshotted before and after — HEAD, the index, status, and
+  every tracked and untracked-but-visible path with its mode, plus a
+  content hash where the file can be read — and any unexpected
+  difference is disclosed. Detection, not enforcement, and **five**
+  things sit outside it: gitignored paths, checked-out **submodules**,
+  anything git does not list, a rewrite of a file that is unreadable
+  both times, and a symlink retargeted by a trailing newline alone.
+  orchestration.md §1 and §7 give the commands and why a stronger claim
+  would be false.
 - **Review only.** Output a report; never apply a fix. Fixing is a
   separate task the user must ask for afterwards.
 - **Executable attacks run the artifact's own test command.** A git

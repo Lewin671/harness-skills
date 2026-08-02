@@ -48,6 +48,17 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
     would be a dependency for a payload this script only needs to enumerate.
     What it rejects is what it can name; the guarantee is structural, not
     syntactic, and this sentence is the honest bound on it.
+  - Every entry must *carry* an `enabled` field, and an entry that does
+    not prints `%` — a refusal, like `?` and `!`. Absence is not
+    disabled: the enumeration keys entirely on that field's literal
+    bytes, so a CLI that stopped emitting it for default-enabled servers
+    would leave `[{"name":"hidden"},{"name":"off","enabled":false}]`
+    passing the key/value count, matching no `true` in the prefilter, and
+    parsing to no enabled entry — a listing read as all-clear while the
+    server it never described stays reachable. Verified on 0.146.0 that
+    every entry does carry it, so the requirement costs a correct CLI
+    nothing. `[{}]` alone was already refused as an unrecognised shape;
+    `[{},{"name":"off","enabled":false}]` was not, and is now.
   - Every `"enabled"` field must be a bare `true` or `false`, checked by
     counting keys against well-formed values. The enumeration keys
     entirely on those literal bytes — the grep looks for `true`, the
@@ -101,6 +112,15 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   creates the directory on first use and a check that only looked at
   directories that already exist would wave through the very run that
   creates it.
+- The lexical half of that resolution runs under `set -f`. Splitting the
+  path on `IFS=/` is what the loop is for; pathname expansion is not, and
+  an unquoted expansion does both. Measured: a repository directory named
+  `*`, with `CODEX_HOME=/tmp/repo/*/codex-home` inside it, expanded that
+  component against the repository and produced a probe made of sibling
+  filenames — outside the tree, so the containment check passed, while
+  codex read the literal environment value and wrote its sessions inside
+  the repository. bash 3.2 has no function-local `set -f`, so the previous
+  state is saved from `$-` and restored.
 - The `CODEX_HOME` containment check covers that directory and its
   `sessions` root, both resolved through symlinks. It does not walk
   deeper, and cannot: codex creates the per-session subdirectories at

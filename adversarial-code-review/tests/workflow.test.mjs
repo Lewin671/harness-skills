@@ -947,6 +947,33 @@ R.push(await run('no scope manifest', { scope: 's', intent: 'i', base_sha: 'a', 
   expect: (res) => res.status === 'invalid_args' || 'a review ran with nothing binding findings to the artifact' }))
 R.push(await run('empty scope manifest', { ...BASE, included_paths: [] }, {
   expect: (res) => res.status === 'invalid_args' || 'an empty manifest silently disabled scope binding' }))
+// A non-empty array of the WRONG THING. `includes()` compares by identity, so
+// a candidate's string filename never matches a null or an array — every
+// candidate is discarded as out-of-scope after the finders have been paid
+// for, and the run reports a clean review of a manifest it could not read.
+// The failure has to be `invalid_args` at the door, not silence at the end.
+for (const [label, manifest] of [
+  ['null entry', [null]],
+  ['nested array entry', [[]]],
+  ['numeric entry', [1]],
+  ['blank entry', ['   ']],
+  ['one good one bad', ['auth.js', null]],
+]) {
+  R.push(await run(`scope manifest with a ${label}`, { ...BASE, included_paths: manifest }, {
+    expect: (res) => res.status === 'invalid_args'
+      || `a manifest containing a ${label} ran to ${res.status} with ${(res.candidate_results || []).length} candidate(s)` }))
+}
+// excluded_paths is disclosure-only, and a malformed one is disclosed just as
+// faithfully as a real exclusion — the reader cannot tell the difference.
+for (const [label, ex] of [
+  ['a null entry', [null]],
+  ['a non-array value', 'package-lock.json'],
+  ['a blank entry', ['']],
+]) {
+  R.push(await run(`excluded_paths with ${label}`, { ...BASE, excluded_paths: ex }, {
+    expect: (res) => res.status === 'invalid_args'
+      || `excluded_paths with ${label} was echoed into the report as ${JSON.stringify(res.run && res.run.excluded_paths)}` }))
+}
 R.push(await run('candidate outside changed hunks', { ...BASE, changed_ranges: { 'auth.js': [[1, 5]], 'pay.js': [[1, 5]], 'util.js': [[1, 5]], 'jobs.js': [[1, 5]] } }, {
   expect: (res) => res.candidate_results.every((x) => x.origin === 'region_probe')
     || 'a candidate citing an unchanged line inside a reviewed file became reportable' }))
@@ -1760,10 +1787,13 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
       const L = launchesOf(res)
       if (L.some((x) => /escalated/.test(x.label))) return 'an escalation ran, so nothing was left to release'
       const held = res.cost.committed_wu - L.reduce((t, x) => t + x.wu, 0)
-      // What may still be legitimately committed and unlaunched here is the
-      // adjudication escrow: 1.5 + 0.3n, at most 3.9 for a full batch.
-      return held <= 3.9 + 1e-9
-        || `${held.toFixed(2)}wu committed but unlaunched; the verifier escrow was kept after it became unusable`
+      // ZERO, not the adjudication escrow's 3.9. That allowance is what let
+      // the adjudicator escrow sit unreleased on every ordinary run: the
+      // verifier half was given back and its counterpart was not, and this
+      // assertion was wide enough to cover the difference. Both escrows are
+      // released now, so nothing may be committed and unlaunched here.
+      return held <= 1e-9
+        || `${held.toFixed(2)}wu committed but unlaunched; an escrow was kept after it became unusable`
     } }))
 }
 {
@@ -1847,12 +1877,12 @@ R.push(await run('budget below triage cost', { ...BASE, budget_wu: 0.5 }, {
     // them. Require the scenario to be free of both instead.
     const muddied = deferred.filter((x) => x.kind === 'candidate_verifier' || x.kind === 'verifier_escalation')
     if (muddied.length) return `${muddied.length} verifier deferral(s) also hold units; the probe release is not isolated`
-    // All that may still be legitimately committed and unlaunched is the
-    // adjudication escrow, and it is priced from this run's own candidate
-    // count rather than the 3.9 worst case: at the worst case a leak of two
-    // probes hides inside the slack and the check passes either way.
-    const n = res.verification_depth.candidates
-    const allowance = n ? 1.5 + 0.3 * Math.min(n, 8) : 0
+    // Nothing at all, now that both escrows are released once they become
+    // unusable. This used to allow the adjudication escrow — 1.5 + 0.3n —
+    // and that allowance was itself the hiding place: a probe leak of up to
+    // 2.6wu fitted inside it on a seven-candidate run, and so did the
+    // unreleased escrow this bound was written around.
+    const allowance = 0
     const held = res.cost.committed_wu - launchesOf(res).reduce((t, x) => t + x.wu, 0)
     return held <= allowance + 1e-9
       || `${held.toFixed(2)}wu committed but unlaunched against an allowance of ${allowance.toFixed(2)}; `

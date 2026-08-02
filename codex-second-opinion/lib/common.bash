@@ -132,7 +132,18 @@ inside_repo() {
 # Purely lexical, so it is wrong in the presence of symlinks — which is why
 # callers test it *alongside* a resolved path rather than instead of one.
 resolved_path() {
-  local path="$1" out="" part real
+  local path="$1" out="" part real had_noglob=0
+  # Splitting on IFS is the point of the loop below; PATHNAME EXPANSION is
+  # not, and an unquoted expansion does both. A repository directory named
+  # `*` — with `CODEX_HOME=/tmp/repo/*/codex-home` under it — expanded that
+  # component against the repository itself and produced a probe made of
+  # sibling filenames, somewhere the finished path never is. The containment
+  # check then passed while codex, reading the literal environment value,
+  # wrote its sessions inside the tree this run promises only to read.
+  # Measured. `set -f` is global in bash 3.2, so the previous state is
+  # restored rather than assumed.
+  case "$-" in *f*) had_noglob=1 ;; esac
+  set -f
   local IFS=/
   case "$path" in /*) ;; *) out="$(pwd -P)" ;; esac
   for part in $path; do
@@ -155,6 +166,7 @@ resolved_path() {
       *) out="${out}/${part}" ;;
     esac
   done
+  [ "$had_noglob" -eq 1 ] || set +f
   printf '%s' "${out:-/}"
 }
 
@@ -191,9 +203,24 @@ mcp_enabled_ids() {
     # entry-level values and the second one — with no key in front of it —
     # would be reported as a missing colon.
     function entry() { return depth == 1 && bdepth == entry_bdepth }
-    function flush() {
+    # `closing` separates the flush that ENDS an entry from the reset that
+    # begins one; only the former may judge what the entry contained.
+    #
+    # An entry with no `enabled` key at all prints `%`. Absence is NOT
+    # disabled: this whole block keys on the literal bytes of that field, so
+    # a CLI that stopped emitting it for default-enabled servers would leave
+    # `[{"name":"hidden"},{"name":"off","enabled":false}]` passing the
+    # boolean-shape count, matching no `true` in the prefilter, and parsing
+    # to no enabled entry — a listing read as all-clear while the server it
+    # did not describe stays reachable. `%` is not a TOML bare key, so like
+    # `?` and `!` it can never collide with a real id. Verified on 0.146.0:
+    # every entry carries `enabled`, so requiring it costs a correct CLI
+    # nothing and refuses the drift.
+    function flush(closing) {
+      if (closing && !seen_enabled) print "%"
       if (enabled == 1) print (name == "" ? "?" : name)
       name = ""; enabled = 0; key = ""; just_opened = 1; pending_comma = 0; value_started = 0
+      seen_enabled = 0
     }
     {
       s = $0; n = length(s)
@@ -239,6 +266,11 @@ mcp_enabled_ids() {
               if (!just_opened && !pending_comma) garbage = 1
               just_opened = 0; pending_comma = 0
               key = val
+              # Recorded on the KEY, not on a well-formed value: an entry
+              # that names the field but spells its value wrong is caught by
+              # mcp_enabled_values_boolean, and double-reporting it here
+              # would attach the wrong reason to it.
+              if (val == "enabled") seen_enabled = 1
             }
             i = j
           } else {
@@ -271,8 +303,8 @@ mcp_enabled_ids() {
           if ((c == "]" || c == "}") && trailing) garbage = 1
           trailing = 0
         }
-        if (c == "{") { depth++; if (depth == 1) { entry_bdepth = bdepth; flush() }; continue }
-        if (c == "}") { if (depth == 1) flush(); depth--; continue }
+        if (c == "{") { depth++; if (depth == 1) { entry_bdepth = bdepth; flush(0) }; continue }
+        if (c == "}") { if (depth == 1) flush(1); depth--; continue }
         # Brackets are tracked purely to prove the payload is whole.
         # Braces alone are not enough: a listing cut off between two
         # entries — after `}` but before `]` — is brace-balanced, so it
@@ -473,11 +505,28 @@ EOF
   elif ! mcp_enabled_values_boolean "$mcp_out"; then
     mcp_problem="could not verify standalone MCP exposure (an 'enabled' field is not a bare true or false)"
   elif grep -qE '"enabled"[[:space:]]*:[[:space:]]*true' <<< "$mcp_out"; then
-    local mcp_id unaddressable="" unnamed=0 truncated=0
+    local mcp_id mcp_ids unaddressable="" unnamed=0 truncated=0 undeclared=0
+    mcp_ids="$(mcp_enabled_ids <<< "$mcp_out")"
+    # `!` is a verdict about the whole PAYLOAD, and the parser can only emit
+    # it at END — after every per-entry marker. A single line-by-line scan
+    # therefore reports whichever entry-level problem came first and never
+    # reaches it: an object root, which is both unreadable AND has an entry
+    # with no `enabled`, was refused for the entry instead of for the shape.
+    # Both refuse, so this is about naming the right cause. Exact comparison,
+    # not a substring: a server named `a!b` is an addressing problem, not a
+    # truncated listing.
+    while IFS= read -r mcp_id; do
+      if [ "$mcp_id" = "!" ]; then truncated=1; break; fi
+    done <<< "$mcp_ids"
     while IFS= read -r mcp_id; do
       [ -n "$mcp_id" ] || continue
-      if [ "$mcp_id" = "!" ]; then
-        truncated=1
+      [ "$truncated" -eq 1 ] && break
+      # An entry that never says whether it is enabled has not said it is
+      # disabled. Reading absence as `false` is the fail-open this whole
+      # block exists to prevent, and the re-check below cannot see it either
+      # — the same silence looks identical there.
+      if [ "$mcp_id" = "%" ]; then
+        undeclared=1
         break
       fi
       # An enabled entry with no readable name cannot be switched off,
@@ -496,7 +545,10 @@ EOF
       esac
       mcp_disable_args+=(-c "mcp_servers.${mcp_id}.enabled=false")
       mcp_count=$((mcp_count + 1))
-    done <<< "$(mcp_enabled_ids <<< "$mcp_out")"
+      # The SAME captured output both passes read. Parsing twice would let
+      # the precedence pass and the override pass disagree about what the
+      # listing said.
+    done <<< "$mcp_ids"
 
     if [ "$truncated" -eq 1 ]; then
       mcp_disable_args=()
@@ -504,6 +556,9 @@ EOF
     elif [ "$unnamed" -eq 1 ]; then
       mcp_disable_args=()
       mcp_problem="an enabled standalone MCP server has no readable name and so cannot be switched off"
+    elif [ "$undeclared" -eq 1 ]; then
+      mcp_disable_args=()
+      mcp_problem="a standalone MCP entry carries no 'enabled' field, so whether it is reachable cannot be read from this listing"
     elif [ -n "$unaddressable" ]; then
       mcp_disable_args=()
       mcp_problem="standalone MCP server '${unaddressable}' cannot be addressed by a config override and so cannot be switched off"
@@ -564,6 +619,10 @@ EOF
           case "$verify_left" in
             *'!'*)
               mcp_problem="could not confirm the standalone MCP servers were switched off (incomplete re-check output)" ;;
+            # Before the catch-all below, which would otherwise report `%`
+            # as the name of a server that is still enabled.
+            *'%'*)
+              mcp_problem="could not confirm the standalone MCP servers were switched off (an entry in the re-check carries no 'enabled' field)" ;;
             ?*)
               mcp_problem="standalone MCP server(s) still enabled after being switched off: $(printf '%s' "$verify_left" | tr '\n' ' ')" ;;
           esac
@@ -602,6 +661,14 @@ EOF
         case "$(mcp_enabled_ids <<< "$mcp_out")" in
           *'!'*)
             mcp_problem="the standalone MCP listing is incomplete, so its enabled servers cannot be identified" ;;
+          # The arm this branch most needs, and the one it used to lack. A
+          # listing with NO `true` anywhere reaches here, and an entry that
+          # simply omits `enabled` reads as a disabled one all the way
+          # down: the prefilter finds no `true`, the boolean count sees no
+          # key to disagree with, and the parser emits no id. Nothing else
+          # in this function looks at the entry at all.
+          *'%'*)
+            mcp_problem="a standalone MCP entry carries no 'enabled' field, so whether it is reachable cannot be read from this listing" ;;
         esac ;;
       *)
         mcp_problem="could not verify standalone MCP exposure (unrecognized 'codex mcp list --json' output)" ;;
@@ -642,7 +709,19 @@ EOF
 # resolve it and fall back to /tmp when it lands inside the worktree.
 common_resolve_scratch() {
   scratch="${TMPDIR:-/tmp}"
-  scratch="$(cd "$scratch" 2>/dev/null && pwd -P)" || scratch="/tmp"
+  # `--` for the same reason as the `cd -- "$repo"` above, and this operand
+  # is no less caller-controlled: TMPDIR is an environment variable, and
+  # `TMPDIR=-P` makes this `cd -P` with no operand — which succeeds, lands
+  # on $HOME, and puts every scratch file there while the repo-containment
+  # test below judges the wrong directory. Measured.
+  # The fallback is RESOLVED, exactly as the second one below already was.
+  # Left as the literal `/tmp` it is compared, logical, against repo roots
+  # that are all physical: on macOS `/tmp` is `/private/tmp`, so a repository
+  # rooted there matched nothing and the run wrote its scratch files straight
+  # into the tree it promises only to read. Reachable whenever TMPDIR cannot
+  # be entered at all — which is the only way to get here.
+  scratch="$(cd -- "$scratch" 2>/dev/null && pwd -P)" ||
+    scratch="$(cd -- /tmp 2>/dev/null && pwd -P)" || scratch="/tmp"
   # Three roots, not one. In a linked worktree the administrative git
   # directory lives under the MAIN repository's .git/worktrees/<name>, well
   # outside `--show-toplevel`, and the common dir is elsewhere again — so a
@@ -652,7 +731,11 @@ common_resolve_scratch() {
   local worktree_root p resolved
   repo_paths=()
   worktree_root="$(git rev-parse --show-toplevel)"
-  worktree_root="$(cd "$worktree_root" && pwd -P)"
+  # `--` on every cd in this function, not only the ones whose operand is
+  # obviously external. Git's own answers start with `/` today, so these two
+  # are defence in depth rather than a fix — but a terminator that is present
+  # at three sites out of five is the shape that lets the fourth be missed.
+  worktree_root="$(cd -- "$worktree_root" && pwd -P)"
   repo_paths+=("$worktree_root")
   # Every worktree root, not only this one. A linked worktree shares its
   # object store with the main checkout and any siblings, so a CODEX_HOME or
@@ -696,7 +779,7 @@ common_resolve_scratch() {
   for p in "$(git rev-parse --absolute-git-dir 2>/dev/null || true)" \
            "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"; do
     [ -n "$p" ] || continue
-    resolved="$(cd "$p" 2>/dev/null && pwd -P)" || continue
+    resolved="$(cd -- "$p" 2>/dev/null && pwd -P)" || continue
     repo_paths+=("$resolved")
   done
 
@@ -758,7 +841,7 @@ common_resolve_scratch() {
     # Recheck the fallback: on a repo rooted at (or above) the real
     # /tmp — /private/tmp on macOS — the substitute is just as unsafe,
     # and there is nowhere non-repo left to write.
-    scratch="$(cd "$scratch" 2>/dev/null && pwd -P)" || scratch=""
+    scratch="$(cd -- "$scratch" 2>/dev/null && pwd -P)" || scratch=""
     if [ -z "$scratch" ] || inside_repo "$scratch"; then
       echo "error: no temporary directory outside the repo; set TMPDIR elsewhere" >&2
       exit 3
