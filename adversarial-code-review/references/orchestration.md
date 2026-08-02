@@ -25,6 +25,15 @@ checkout of a commit, so without an explicit patch to carry, the attack
 phase reads different code than the review phase.
 
 ```bash
+# FIRST LINE OF EVERY Phase 0 Bash call, not decoration. Almost every guard
+# below is written assuming a failure stops the run: `cp` of the index, the
+# patch capture, the pipelines whose producers propagate explicitly. Without
+# it a `git diff` that exits 128 leaves a SHORT patch, the manifest still
+# names what the patch lacks, and patch_sha256 hashes the incomplete artifact
+# — a binding that is internally consistent and describes the wrong thing.
+# Bash does not inherit this between tool calls, so repeat it in each one.
+set -euo pipefail
+
 # Everything Phase 0 writes goes under this: the index copy, the patch, both
 # snapshots. A TMPDIR inside the worktree — or inside its git storage, which a
 # linked worktree keeps elsewhere — would put all of it in the tree being
@@ -115,7 +124,13 @@ diff_args=("$(git merge-base origin/HEAD HEAD)" HEAD); untracked=0
 diff_args=("${from_ref}" "${to_ref}"); untracked=0
 
 base_sha="$(git rev-parse "${diff_args[0]}")"
-git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" > "${tmp}/patch.diff"
+# Explicit, not left to errexit alone. This one command produces the entire
+# tracked half of the artifact, and a partial write here is the failure that
+# stays invisible: the untracked half still appends, the manifest still names
+# every path, and the hash still computes — over a patch missing the tracked
+# changes the review claims to be about.
+git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" > "${tmp}/patch.diff" ||
+  { echo "could not capture the tracked patch" >&2; exit 1; }
 # Untracked files exist only in the working tree, so they belong to the
 # uncommitted scope alone. Added without touching the index.
 if [ "${untracked}" = 1 ]; then
@@ -378,7 +393,8 @@ excludes=(':(exclude)*.lock' ':(exclude)package-lock.json'
           ':(exclude)vendor/**' ':(exclude)**/node_modules/**'
           ':(exclude)**/__snapshots__/**' ':(exclude)*.min.js')
 
-git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff"
+git diff --no-ext-diff --no-textconv --binary "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff" ||
+  { echo "could not capture the tracked patch" >&2; exit 1; }
 
 # The SAME pathspecs must filter untracked files. `git check-ignore` only
 # knows about .gitignore, so it will happily let an untracked vendor/ path or

@@ -106,11 +106,15 @@ PY3
 # newline — sourcing it would truncate the value at the break and the caller
 # would compare a path that does not exist. tmp-raw is the whole thing, and
 # the one test that needs it reads that instead.
+# The harness does NOT set -euo pipefail. It used to, and that made every
+# case here a test of a shell the recipe never runs in: an agent pastes the
+# block into a plain Bash call, where a failing `git diff` is just a nonzero
+# status nobody reads. The recipe carries its own errexit now, and the point
+# of not injecting it is that a regression removing that line goes red here.
 run_capture() {
   local dir="$1" prelude="$2" status=0
   (
     cd "$dir" || exit 1
-    set -euo pipefail
     eval "$prelude"
     # shellcheck source=/dev/null
     . "${WORK}/capture.sh"
@@ -379,6 +383,30 @@ cat > "${shimdir}/git" <<GITSHIM
 case "\${ACR_SHIM_FAIL:-}" in
   worktree) [ "\${1:-}" = worktree ] && [ "\${2:-}" = list ] && {
               echo "fatal: fixture forced worktree list to fail" >&2; exit 128; } ;;
+  basesha)  # \`git rev-parse <rev>\` — the base_sha assignment, which has NO
+            # explicit failure handling. Only errexit stops the recipe there,
+            # so this is the case that proves the recipe carries its own.
+            # Option forms (--git-path, --absolute-git-dir, ...) are left
+            # alone; they are a different call with a different consequence.
+            if [ "\${1:-}" = rev-parse ]; then
+              case "\${2:-}" in
+                -*) : ;;
+                "") : ;;
+                *)  echo "fatal: fixture forced rev-parse to fail" >&2; exit 128 ;;
+              esac
+            fi ;;
+  patch)    if [ "\${1:-}" = diff ]; then
+              # The TRACKED patch capture only: --binary without --no-index.
+              # The untracked half uses --no-index and must keep working, or
+              # the case would prove nothing about a partial artifact.
+              hb=0; hn=0
+              for a in "\$@"; do
+                [ "\$a" = --binary ] && hb=1
+                [ "\$a" = --no-index ] && hn=1
+              done
+              [ "\$hb" = 1 ] && [ "\$hn" = 0 ] && {
+                echo "fatal: fixture forced the tracked patch capture to fail" >&2; exit 128; }
+            fi ;;
   nameonly) if [ "\${1:-}" = diff ]; then
               for a in "\$@"; do [ "\$a" = --name-only ] && {
                 echo "fatal: fixture forced diff --name-only to fail" >&2; exit 128; }
@@ -522,6 +550,52 @@ if [ "$(run_filtered lsfiles)" != 0 ]; then
 else
   bad "a failing enumeration stops the filtered capture" "exit 0 — the manifest would name what the patch omits"
 fi
+if [ "$(run_filtered patch)" != 0 ]; then
+  ok "a failing tracked patch capture stops the filtered capture"
+else
+  bad "a failing tracked patch capture stops the filtered capture" "exit 0 — the hash would bind an incomplete patch"
+fi
+
+# The same for the unfiltered recipe, which is the one an agent reaches for
+# first. A failed tracked capture leaves the untracked half still appending,
+# the manifest still naming every path, and patch_sha256 hashing a patch that
+# is missing the tracked changes — an artifact binding that is internally
+# consistent and describes the wrong thing.
+patchfail="$(new_repo patchfail)"
+rm -f "${WORK}/shim-count"
+pf_status=0
+(
+  cd "$patchfail" || exit 1
+  export ACR_SHIM_FAIL=patch ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count"
+  export PATH="${shimdir}:$PATH"
+  diff_args=(HEAD); untracked=1
+  # shellcheck source=/dev/null
+  . "${WORK}/capture.sh"
+) >/dev/null 2>&1 || pf_status=$?
+if [ "$pf_status" != 0 ]; then
+  ok "a failing tracked patch capture stops the unfiltered capture"
+else
+  bad "a failing tracked patch capture stops the unfiltered capture" "exit 0 — patch_sha256 would bind a patch missing the tracked changes"
+fi
+
+# And a failure with NO explicit handler behind it. base_sha is a plain
+# command substitution, so errexit is the only thing that can stop the recipe
+# there — which makes this the case that proves the recipe brings its own
+# `set -euo pipefail` rather than borrowing the harness's.
+bs_status=0
+(
+  cd "$patchfail" || exit 1
+  export ACR_SHIM_FAIL=basesha ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count"
+  export PATH="${shimdir}:$PATH"
+  diff_args=(HEAD); untracked=1
+  # shellcheck source=/dev/null
+  . "${WORK}/capture.sh"
+) >/dev/null 2>&1 || bs_status=$?
+if [ "$bs_status" != 0 ]; then
+  ok "the recipe sets its own errexit (an unhandled failure stops it)"
+else
+  bad "the recipe sets its own errexit (an unhandled failure stops it)" "exit 0 — the recipe ran on with an empty base_sha"
+fi
 
 # The NUL-safe manifest builder, run for the first time. Its two producers are
 # a `git diff` and a `git ls-files`, so the ls-files shim reaches one of them
@@ -632,7 +706,26 @@ HOOK
 chmod +x "${WORK}/ext-diff"
 git -C "$cfg" config diff.external "${WORK}/ext-diff"
 
-rm -f "$fsm_marker" "$ext_marker"
+# A textconv driver is the third program the tree can name, and it is bound by
+# .gitattributes rather than config alone — so a fixture that sets only config
+# never reaches it. Beyond executing, it also REWRITES the diff into whatever
+# prose it prints, and `git apply` cannot apply that: the captured patch would
+# stop binding the change it claims to.
+tc_marker="${WORK}/textconv-fired"
+cat > "${WORK}/textconv" <<HOOK
+#!/bin/sh
+: > "${tc_marker}"
+printf 'converted prose, not the bytes\n'
+HOOK
+chmod +x "${WORK}/textconv"
+git -C "$cfg" config diff.owned.textconv "${WORK}/textconv"
+printf '*.dat diff=owned\n' > "${cfg}/.gitattributes"
+printf 'original\n' > "${cfg}/payload.dat"
+git -C "$cfg" add .gitattributes payload.dat
+git -C "$cfg" "${commit_env[@]}" commit -q -m attrs
+printf 'changed\n' > "${cfg}/payload.dat"
+
+rm -f "$fsm_marker" "$ext_marker" "$tc_marker"
 status="$(run_capture "$cfg" 'diff_args=(HEAD); untracked=1')"
 if [ "$status" = 0 ] && [ ! -e "$fsm_marker" ]; then
   ok "the capture does not run a configured fsmonitor program"
@@ -644,14 +737,21 @@ if [ "$status" = 0 ] && [ ! -e "$ext_marker" ]; then
 else
   bad "the capture does not run a configured diff.external program" "exit $status, fired: $([ -e "$ext_marker" ] && echo yes || echo no)"
 fi
+if [ "$status" = 0 ] && [ ! -e "$tc_marker" ]; then
+  ok "the capture does not run a textconv driver named by .gitattributes"
+else
+  bad "the capture does not run a textconv driver named by .gitattributes" "exit $status, fired: $([ -e "$tc_marker" ] && echo yes || echo no)"
+fi
 # And the patch is still a real patch: an external differ that ran and was
 # ignored would leave this empty, which would pass both checks above.
 # shellcheck source=/dev/null
 . "${WORK}/vars"
-if [ -s "${tmp}/patch.diff" ] && grep -q 'tracked.txt' "${tmp}/patch.diff"; then
-  ok "the capture still produces a real patch with both programs configured"
+if [ -s "${tmp}/patch.diff" ] && grep -q 'tracked.txt' "${tmp}/patch.diff" &&
+   grep -q '^+changed$' "${tmp}/patch.diff" &&
+   ! grep -q 'converted prose' "${tmp}/patch.diff"; then
+  ok "the capture still produces a real patch with all three programs configured"
 else
-  bad "the capture still produces a real patch with both programs configured"
+  bad "the capture still produces a real patch with all three programs configured"
 fi
 
 # --- changed ranges, including the shapes the awk was written for ----------

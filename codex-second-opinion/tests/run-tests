@@ -1350,7 +1350,8 @@ fi
 
 # `..` after a component that does not exist yet: the nearest-existing-ancestor
 # walk stops at /tmp and approves it, while mkdir -p lands the sessions inside
-# the repository. Only a lexical collapse sees where the path really goes.
+# the repository. Only a textual collapse sees where the path really goes —
+# there is nothing to cd into.
 stderr="${workdir}/codex-home-dotdot.err"
 CODEX_HOME="${workdir}/does-not-exist/../$(basename "$dirty")/codex-home" \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
@@ -1360,6 +1361,40 @@ if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr"; then
 else
   bad "review: a CODEX_HOME that resolves inward through .. fails closed" "exit $status"
 fi
+
+# And the OPPOSITE blind spot: `..` after a component that exists and is a
+# SYMLINK. Collapsing textually reads `<outside>/link/../codex-home` as
+# `<outside>/codex-home` and approves it, while the kernel follows the link
+# first and mkdir lands the sessions in the repository. Verified directly:
+# `mkdir -p "$outside/link/../codex-home"` creates "$dirty/codex-home".
+sym_out="${workdir}/sym-outside"
+mkdir -p "$sym_out" "${dirty}/sym-target"
+ln -s "${dirty}/sym-target" "${sym_out}/link"
+stderr="${workdir}/codex-home-symdotdot.err"
+argv_log="${workdir}/argv-symdotdot.log"
+CODEX_HOME="${sym_out}/link/../codex-home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a CODEX_HOME that climbs through a symlink into the repo fails closed"
+else
+  bad "review: a CODEX_HOME that climbs through a symlink into the repo fails closed" "exit $status"
+fi
+# The same shape pointing OUTSIDE must still run, or the case above would pass
+# for a rule that simply rejects every path containing a symlink and `..`.
+mkdir -p "${sym_out}/elsewhere"
+ln -s "${sym_out}/elsewhere" "${sym_out}/outlink"
+argv_log="${workdir}/argv-symdotdot-ok.log"
+CODEX_HOME="${sym_out}/outlink/../codex-home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a symlink-and-.. CODEX_HOME that lands outside still runs"
+else
+  bad "review: a symlink-and-.. CODEX_HOME that lands outside still runs" "exit $status"
+fi
+rm -rf "${dirty}/sym-target"
 
 # The parent can sit outside while the child codex actually writes points
 # back in: `sessions` is a symlink into the repository.

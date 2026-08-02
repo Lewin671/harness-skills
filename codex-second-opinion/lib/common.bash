@@ -131,13 +131,27 @@ inside_repo() {
 # Collapse `.` and `..` in an absolute path without touching the filesystem.
 # Purely lexical, so it is wrong in the presence of symlinks — which is why
 # callers test it *alongside* a resolved path rather than instead of one.
-lexical_path() {
-  local path="$1" out="" part
+resolved_path() {
+  local path="$1" out="" part real
   local IFS=/
+  case "$path" in /*) ;; *) out="$(pwd -P)" ;; esac
   for part in $path; do
     case "$part" in
-      ''|.) ;;
-      ..) out="${out%/*}" ;;
+      ''|.) continue ;;
+      ..)
+        # Follow the symlink BEFORE climbing, which is what the kernel does.
+        # A purely lexical collapse reads `/outside/link/../home` as
+        # `/outside/home` and approves it, while `link -> /repo/sub` puts the
+        # real directory at `/repo/home` — inside the tree this run promises
+        # only to read. Resolve whatever exists so far, then climb from there.
+        if [ -d "$out" ]; then
+          real="$(cd -- "$out" 2>/dev/null && pwd -P)" && out="$real"
+        fi
+        # A component that does NOT exist cannot be a symlink, so climbing
+        # over it lexically is exact — and it is the case `pwd -P` alone
+        # cannot handle, since there is nothing to cd into.
+        out="${out%/*}"
+        ;;
       *) out="${out}/${part}" ;;
     esac
   done
@@ -685,14 +699,15 @@ common_resolve_scratch() {
     # the repository — inside it by construction.
     *)  probe="${PWD}/${codex_home}" ;;
   esac
-  # Collapse `.` and `..` textually FIRST. The ancestor walk below stops at
-  # the nearest directory that exists, and `..` after a component that does
-  # not exist yet sends it somewhere the finished path will never be:
-  # `/tmp/new/../../repo/home` with no `/tmp/new` walks up to `/tmp` and is
-  # approved, while mkdir -p lands it in `repo`. Lexical collapse is not
-  # symlink-aware, which is why both it and the resolved ancestor are checked
-  # below — either landing inside the repository is a refusal.
-  probe="$(lexical_path "$probe")"
+  # Work out where the path really LANDS before anything else. The ancestor
+  # walk below stops at the nearest directory that exists, and `..` after a
+  # component that does not exist yet sends it somewhere the finished path
+  # never will be: `/tmp/new/../../repo/home` with no `/tmp/new` walks up to
+  # `/tmp` and is approved, while mkdir -p lands it in `repo`. A collapse that
+  # is purely textual has the opposite blind spot — it climbs over a symlink
+  # instead of through it — so resolved_path does both, and the resolved
+  # ancestor is still checked separately below.
+  probe="$(resolved_path "$probe")"
   while [ -n "$probe" ] && [ ! -d "$probe" ]; do
     parent="${probe%/*}"
     [ "$parent" = "$probe" ] && parent=""
