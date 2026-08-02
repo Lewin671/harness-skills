@@ -242,6 +242,42 @@ else
   bad "an uncapturable untracked file stops the capture" "exit 0, the file was dropped silently"
 fi
 
+# --- Phase 0 run from a SUBDIRECTORY ---------------------------------------
+#
+# `git ls-files` is scoped to the current directory and prints paths relative
+# to it — unlike `git diff` and `git status`. Measured: from `src/`, it omits
+# a sibling `vendor/` entry and reports `src/s.txt` as `s.txt`. Every
+# enumeration in the recipe is an ls-files, so without the cd to the top level
+# a Phase 0 run from anywhere but the root silently reviews a subtree while
+# reporting it as the repository. Nothing covered this before.
+subd="$(new_repo subdir)"
+mkdir -p "${subd}/src" "${subd}/vendor"
+printf 'v\n' > "${subd}/vendor/v.txt"
+printf 's\n' > "${subd}/src/s.txt"
+git -C "$subd" add -A
+git -C "$subd" "${commit_env[@]}" commit -q -m sub
+printf 'edited\n' >> "${subd}/vendor/v.txt"
+printf 'edited\n' >> "${subd}/src/s.txt"
+printf 'fresh\n' > "${subd}/vendor/new.txt"
+status="$(run_capture "${subd}/src" 'diff_args=(HEAD); untracked=1')"
+if [ "$status" != 0 ]; then
+  bad "the capture recipe runs from a subdirectory" "exit $status"
+else
+  ok "the capture recipe runs from a subdirectory"
+  # The sibling directory's tracked change and its untracked file both have to
+  # be in the manifest, under paths relative to the ROOT.
+  if grep -qx 'vendor/v.txt' "${WORK}/included" && grep -qx 'src/s.txt' "${WORK}/included"; then
+    ok "a subdirectory run still names every changed path from the root"
+  else
+    bad "a subdirectory run still names every changed path from the root" "$(tr '\n' '|' < "${WORK}/included")"
+  fi
+  if grep -qx 'vendor/new.txt' "${WORK}/included"; then
+    ok "a subdirectory run still names untracked files outside the cwd"
+  else
+    bad "a subdirectory run still names untracked files outside the cwd" "$(tr '\n' '|' < "${WORK}/included")"
+  fi
+fi
+
 # --- a submodule path may contain spaces -----------------------------------
 #
 # The recipe promises to NAME uncaptured submodules so they can be reviewed as

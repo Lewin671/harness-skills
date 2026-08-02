@@ -34,6 +34,18 @@ phase reads different code than the review phase.
 # Bash does not inherit this between tool calls, so repeat it in each one.
 set -euo pipefail
 
+# AT THE TOP LEVEL, before anything enumerates. `git ls-files` — unlike
+# `git diff` and `git status` — is scoped to the CURRENT DIRECTORY and prints
+# paths relative to it. Measured: from `src/`, `git ls-files --stage` omits a
+# sibling `vendor/` gitlink entirely and reports `src/s.txt` as `s.txt`. Every
+# enumeration below is an ls-files — the untracked half of the patch, both
+# manifests, the changed-range list, the submodule disclosure and the
+# write-safety snapshot — so a Phase 0 run from a subdirectory silently
+# reviews a subtree while reporting it as the repository. One cd fixes all of
+# them; a pathspec on each would have to be right at six sites.
+cd -- "$(git rev-parse --show-toplevel)" ||
+  { echo "could not reach the repository root" >&2; exit 1; }
+
 # Everything Phase 0 writes goes under this: the index copy, the patch, both
 # snapshots. A TMPDIR inside the worktree — or inside its git storage, which a
 # linked worktree keeps elsewhere — would put all of it in the tree being
@@ -272,6 +284,12 @@ acr_snapshot() {
   [ -f "${acr_real}" ] && cp "${acr_real}" "${acr_idx}"
 
   (
+    # The top level, for the same reason as the capture block: both `ls-files`
+    # calls below are scoped to the current directory, so a snapshot taken
+    # from a subdirectory hashes a SUBTREE — and does so identically before
+    # and after, which is the silent all-clear this function exists to rule
+    # out. Inside the subshell, so the caller's directory is untouched.
+    cd -- "$(git rev-parse --show-toplevel)" || exit 1
     # Exported inside a subshell so it cannot outlive the snapshot. An index
     # that does not exist yet — a repository with nothing added — is left
     # unset rather than pointed at an empty file, which git rejects.

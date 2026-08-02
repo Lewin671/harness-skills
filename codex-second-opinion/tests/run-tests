@@ -1120,10 +1120,18 @@ done
 # all. A primitive has no `enabled` key for the count to weigh, no `true` for
 # the prefilter, and no entry for the parser to close — so it is described by
 # nothing and the listing reads as all-disabled around it.
+#
+# A NESTED ARRAY is the same kind of element and was the harder half: it
+# produced no marker at all, and `[[{"name":"x","enabled":true}]]` went
+# further and emitted `x` as though it were a top-level entry — an id one
+# level deeper than the shape this parser understands, read as a server to
+# switch off. Both measured.
 for prim in \
     '["hidden",{"name":"off","enabled":false}]' \
     '[1,{"name":"off","enabled":false}]' \
-    '[{"name":"off","enabled":false},"hidden"]'; do
+    '[{"name":"off","enabled":false},"hidden"]' \
+    '[["hidden"],{"name":"off","enabled":false}]' \
+    '[[{"name":"x","enabled":true}]]'; do
   stderr="${workdir}/mcp-prim.err"
   argv_log="${workdir}/argv-mcp-prim.log"
   : > "$argv_log"

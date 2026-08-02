@@ -391,6 +391,43 @@ for mode in tracked untracked stage flags head status; do
   fi
 done
 
+# --- taken from a SUBDIRECTORY ---------------------------------------------
+#
+# Both `ls-files` calls in the function are scoped to the current directory,
+# so a snapshot taken from a subdirectory hashes a SUBTREE — identically
+# before and after, which is exactly the silent all-clear this whole function
+# exists to rule out. The cd to the top level inside the subshell is what
+# stops it, and nothing exercised that until now.
+subrepo="$(new_repo subdirsnap)"
+mkdir -p "${subrepo}/deep"
+printf 'inner\n' > "${subrepo}/deep/inner.txt"
+git -C "$subrepo" add -A
+git -C "$subrepo" -c user.email=t@t -c user.name=t commit -q -m deep
+# Dirty it the way every other case here does, so `git status` cannot be what
+# notices the change below.
+printf 'already modified\n' >> "${subrepo}/deep/inner.txt"
+sub_before="$(cd "${subrepo}/deep" && acr_snapshot)"
+sub_status_before="$(cd "$subrepo" && git status --porcelain=v1)"
+# A change OUTSIDE the directory the snapshot was taken from.
+printf 'changed by an agent\n' >> "${subrepo}/tracked.txt"
+sub_after="$(cd "${subrepo}/deep" && acr_snapshot)"
+sub_status_after="$(cd "$subrepo" && git status --porcelain=v1)"
+if [ "$sub_status_before" != "$sub_status_after" ]; then
+  bad "a snapshot from a subdirectory still covers the whole tree" "git status alone caught it, so the case tests nothing"
+elif [ "$sub_before" = "$sub_after" ]; then
+  bad "a snapshot from a subdirectory still covers the whole tree" "the snapshot did not change"
+else
+  ok "a snapshot from a subdirectory still covers the whole tree"
+fi
+# And the caller's directory is not moved by taking one.
+sub_cwd_before="$(pwd -P)"
+acr_snapshot >/dev/null 2>&1
+if [ "$(pwd -P)" = "$sub_cwd_before" ]; then
+  ok "taking a snapshot does not move the caller"
+else
+  bad "taking a snapshot does not move the caller" "cwd became $(pwd -P)"
+fi
+
 echo
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]

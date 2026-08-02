@@ -98,29 +98,51 @@ mutate "an empty mcp listing is not an empty config" lib/common.bash \
   "'[]'|'') : ;;"
 mutate "an entry with no enabled field is refused" lib/common.bash \
   '      if (closing && !seen_enabled) print "%"' ''
-mutate "the enumerating branch acts on that refusal" lib/common.bash \
+# The no-true branch is the one where the sentinel carries the REFUSAL itself:
+# with this arm gone the case matches nothing, mcp_problem stays empty, and
+# the run starts. Measured — exit 0.
+mutate "the no-true branch refuses on that sentinel" lib/common.bash \
+  "          *'%'*)
+            mcp_problem=\"a standalone MCP entry carries no 'enabled' field, so whether it is reachable cannot be read from this listing\" ;;" ''
+
+# These two are named for the REASON, not the refusal, and the distinction is
+# real: `%` is not a TOML bare key, so with the sentinel arm deleted it falls
+# into the generic unaddressable-id refusal — and in the re-check, into the
+# `?*` still-enabled arm. Measured: both still exit 3. What breaks is what the
+# operator is told, and it is told something false — "standalone MCP server
+# '%' cannot be addressed", sending them after a server that does not exist,
+# or "still enabled after being switched off" about a listing that never said
+# so. This whole block exists to state truthfully why a run was refused, so
+# that is worth pinning; naming these after the refusal would have claimed a
+# safety property the mutant does not actually remove.
+mutate "a %-sentinel is not reported as an unaddressable id" lib/common.bash \
   '      if [ "$mcp_id" = "%" ]; then
         undeclared=1
         break
       fi' ''
-mutate "the no-true branch acts on it too" lib/common.bash \
-  "          *'%'*)
-            mcp_problem=\"a standalone MCP entry carries no 'enabled' field, so whether it is reachable cannot be read from this listing\" ;;" ''
-mutate "the re-check acts on it too" lib/common.bash \
+mutate "a %-sentinel is not reported as still-enabled" lib/common.bash \
   "            *'%'*)
               mcp_problem=\"could not confirm the standalone MCP servers were switched off (an entry in the re-check carries no 'enabled' field)\" ;;" ''
 mutate "a truncated payload outranks a bad entry" lib/common.bash \
   '    while IFS= read -r mcp_id; do
       if [ "$mcp_id" = "!" ]; then truncated=1; break; fi
     done <<< "$mcp_ids"' ''
-mutate "an unnamed enabled entry is refused" lib/common.bash \
+# Named for the reason too, for the same measured reason: `?` is not a bare
+# key either, so the refusal survives via the unaddressable arm and only the
+# stated cause changes.
+mutate "a ?-sentinel is not reported as an unaddressable id" lib/common.bash \
   '      if [ "$mcp_id" = "?" ]; then
         unnamed=1
         break
       fi' ''
 mutate "a primitive array element is refused" lib/common.bash \
   '        if (depth == 0 && bdepth == 1 && c != "{" && c != "}" && c != "," &&
-            c != "[" && c != "]" && c !~ /[ \t\r]/) garbage = 1' ''
+            c != "]" && c !~ /[ \t\r]/) garbage = 1' ''
+# `[` exempt again. A nested array produced no marker at all, and one holding
+# an entry emitted that entry's id as though it sat at the top level.
+mutate "a nested array is not an entry either" lib/common.bash \
+  '            c != "]" && c !~ /[ \t\r]/) garbage = 1' \
+  '            c != "[" && c != "]" && c !~ /[ \t\r]/) garbage = 1'
 mutate "an unaddressable id is refused" lib/common.bash \
   '        *[!A-Za-z0-9_-]*) unaddressable="$mcp_id"; break ;;' '        no-such-pattern-zzz) : ;;'
 
@@ -187,7 +209,7 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. Pin the count:
 # any mutant that silently fails to launch is a failure in itself.
-EXPECTED_TOTAL=37
+EXPECTED_TOTAL=38
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

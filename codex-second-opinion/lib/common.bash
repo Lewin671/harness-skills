@@ -252,8 +252,14 @@ mcp_enabled_ids() {
         # the listing reads as all-disabled while that element goes
         # undescribed. Same fail-open as an entry that omits `enabled`, one
         # level out.
+        # `[` is NOT exempt here, only `]`. A nested array is as much an
+        # unrecognised element as a string is: `[["hidden"],{...}]` produced
+        # no marker of any kind, and — worse — `[[{"name":"x","enabled":true}]]`
+        # emitted `x` as though it were a top-level entry, so an id one level
+        # deeper than the shape this parser understands was being read as a
+        # server to switch off. Both measured.
         if (depth == 0 && bdepth == 1 && c != "{" && c != "}" && c != "," &&
-            c != "[" && c != "]" && c !~ /[ \t\r]/) garbage = 1
+            c != "]" && c !~ /[ \t\r]/) garbage = 1
         if (c == "\"") {
           # Consume the whole string token, honouring backslash escapes,
           # so that a brace or colon inside it cannot move the parser.
