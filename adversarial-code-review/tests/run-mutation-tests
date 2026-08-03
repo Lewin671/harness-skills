@@ -122,7 +122,7 @@ mutate "a missing verifier is not an established obligation" "  const obligation
 # The two execution counters must measure the same thing.
 mutate "attacks_not_executed counts what ran" "    attacks_not_executed: results.filter((r) => !(r.attack
       && (r.attack.execution_status === 'executed' || r.attack.ran_artifact_code === true))).length," "    attacks_not_executed: results.filter((r) => r.attack_grade !== 'reproduced' && r.attack_grade !== 'held').length,"
-mutate "terminal evidence override" "  if (terminal && !controlOutranked && obligationEstablished && state !== 'substantiated') {" "  if (false) {"
+mutate "terminal evidence override" "  if (terminal && !controlOutranked && predicatesEstablished && state !== 'substantiated') {" "  if (false) {"
 # A control settles which patch caused the change, not whether the old
 # behaviour was owed.
 mutate "reproduction does not override the obligation" "  if (terminal && controlOutranked && state !== 'unresolved') {" "  if (false) {"
@@ -547,6 +547,17 @@ mutate "the reachability carve-out needs grounding" "  const reachabilityFalsifi
     && citedAs(verifierRecord, 'reachability', 'falsifies_candidate')" "  const reachabilityFalsified = Boolean(verifierRecord)
     && citedAs(verifierRecord, 'reachability', 'falsifies_candidate')"
 
+# Honest uncertainty is not support. Blocking only an explicit falsification
+# handled the verifier that DENIED reachability and let through the one that
+# said it could not tell — the weaker evidence of the two.
+mutate "reachability must be established, not merely unrefuted" \
+  "  const predicatesEstablished = obligationEstablished && reachabilityEstablished" \
+  "  const predicatesEstablished = obligationEstablished"
+# And the disclosure has to name WHICH predicate went unestablished.
+mutate "an unestablished reachability is disclosed" \
+  "      ledger.reproduced_without_reachability.push({" \
+  "      ledger.reproduced_without_obligation.push({"
+
 # The disclosure counts themselves. A checklist entry that exists and reports
 # zero beside a non-empty ledger array is the false-disclosure defect class in
 # its purest form — the report has a number to print, and the number is wrong.
@@ -604,7 +615,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=233
+EXPECTED_TOTAL=235
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

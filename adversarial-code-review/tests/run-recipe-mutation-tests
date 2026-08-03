@@ -5,7 +5,7 @@
 # real shell, and they are where this skill's user-facing correctness lives:
 # which commit the review binds to, what reaches the patch, where scratch
 # lands, what the handoff says happened, whether the post-run snapshot can see
-# a change at all. review-workflow.js has 231 registered mutants. The prose
+# a change at all. review-workflow.js has 233 registered mutants. The prose
 # had none — so every recipe protection rested on tests nobody had ever seen
 # fail, which is the exact manufactured confidence the sibling harness was
 # written to catch.

@@ -298,14 +298,23 @@ bill of health.
 
 A controlled `reproduced` result is terminal evidence for what it actually
 establishes: that **this patch** is why the test now fails. It substantiates
-the candidate over a refutation of semantics or reachability — the two things
-a control settles.
+the candidate over a refutation of **semantics** — the one thing a control
+settles.
 
-It does **not** settle the obligation, and that gap cuts twice. Section 4
-requires all three predicates affirmatively supported before anything is
-substantiated, and a control supplies two of them — so a reproduction is
+It does not settle **reachability**. The control shows the changed code
+misbehaves when the TEST calls it, and an attacker can call an internal
+function directly with a state a caller's invariant excludes: base passes,
+patched fails, every reproduction requirement met, and the state still cannot
+arise in the program. This paragraph used to say a control settled
+reachability too. It does not, and reading it that way substantiated findings
+whose only record on the question was a verifier saying it could not tell.
+
+It does **not** settle the obligation either, and that gap cuts twice. Section
+4 requires all three predicates affirmatively supported before anything is
+substantiated, and a control supplies ONE of them — so a reproduction is
 terminal evidence *for what it establishes*, not a substitute for the third.
-So the override needs the obligation CITED, not merely un-refuted: where no
+So the override needs the obligation AND reachability CITED, not merely
+un-refuted: where no
 verifier record supports `contract_violation` with quoted code, the honest
 result is `unresolved` with the reproduction attached — this patch changed the
 behaviour, and nobody established the behaviour was owed. Two weaker readings

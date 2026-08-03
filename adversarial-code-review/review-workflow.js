@@ -272,6 +272,7 @@ const ledger = {
   unrun_lenses: [],
   terminal_evidence_overrides: [],
   reproduced_without_obligation: [],
+  reproduced_without_reachability: [],
   forced_unresolved: [],
   unknown_verdict_ids: [],
   coverage_risks: [],
@@ -2688,7 +2689,20 @@ const results = candidates.map((c) => {
   const obligationEstablished = groundedRefutation
     && citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
     && unsettledNamesValid && !unsettledNames.includes('contract_violation')
-  if (terminal && !controlOutranked && obligationEstablished && state !== 'substantiated') {
+  // Reachability the same way, and for the same reason. Once a control is
+  // held not to settle reachability — it shows the code misbehaves when the
+  // TEST calls it — the predicate has to be supported by a citation like any
+  // other, or section 4's "all three affirmatively supported" is satisfied by
+  // two. Blocking only an explicit falsification was half the rule: it
+  // handled the verifier that DENIED reachability and let through the one
+  // that said outright it could not tell, which is the weaker evidence of the
+  // two. A reproduction promoted on that says a defect is real while the only
+  // record on the question is an admission of ignorance.
+  const reachabilityEstablished = groundedRefutation
+    && citedAs(verifierRecord, 'reachability', 'supports_candidate')
+    && unsettledNamesValid && !unsettledNames.includes('reachability')
+  const predicatesEstablished = obligationEstablished && reachabilityEstablished
+  if (terminal && !controlOutranked && predicatesEstablished && state !== 'substantiated') {
     ledger.terminal_evidence_overrides.push({
       candidate_id: c.id, anchor: `${c.file}:${c.line}`, adjudicated_state: state, forced_state: 'substantiated',
       severity_unassigned: !v,
@@ -2696,7 +2710,7 @@ const results = candidates.map((c) => {
         + (v ? '' : '; no verdict was returned, so its severity is unassigned'),
     })
     state = 'substantiated'
-  } else if (terminal && !controlOutranked && !obligationEstablished) {
+  } else if (terminal && !controlOutranked && !predicatesEstablished) {
     // The control still settles the two predicates it can, so a refutation
     // resting on those does not survive it — but the result is `unresolved`,
     // not a finding. Reported with the reproduction attached, because "this
@@ -2709,10 +2723,20 @@ const results = candidates.map((c) => {
       })
       state = 'unresolved'
     }
-    ledger.reproduced_without_obligation.push({
-      candidate_id: c.id, anchor: `${c.file}:${c.line}`,
-      why: 'reproduced under control, but no cited evidence establishes that the previous behaviour was owed',
-    })
+    // One entry per predicate that was not established, because "which one"
+    // is the whole content of the disclosure.
+    if (!obligationEstablished) {
+      ledger.reproduced_without_obligation.push({
+        candidate_id: c.id, anchor: `${c.file}:${c.line}`,
+        why: 'reproduced under control, but no cited evidence establishes that the previous behaviour was owed',
+      })
+    }
+    if (!reachabilityEstablished) {
+      ledger.reproduced_without_reachability.push({
+        candidate_id: c.id, anchor: `${c.file}:${c.line}`,
+        why: 'reproduced under control, but no cited evidence establishes that a production caller can reach this state — the test called the changed code directly',
+      })
+    }
   }
   if (v && v.state === 'unresolved' && !namesPredicate(v.unsettled_predicate)) {
     malformed('adjudicator', c.id,
@@ -2974,6 +2998,9 @@ return {
     // was owed" is a different and more actionable statement than a bare
     // unresolved.
     reproduced_without_obligation: ledger.reproduced_without_obligation.length,
+    // The sibling count. A reproduction whose reachability nobody established
+    // is the same class of outcome and the report owes the reader both.
+    reproduced_without_reachability: ledger.reproduced_without_reachability.length,
     findings_verified_below_final_severity: results.filter((r) => r.verified_below_final_severity).length,
     severity_unassigned: results.filter((r) => r.severity_unassigned && r.state === 'substantiated').length,
   },

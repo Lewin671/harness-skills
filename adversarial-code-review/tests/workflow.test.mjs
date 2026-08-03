@@ -570,6 +570,16 @@ function makeAgent(state, s) {
           strongest_refutation: 'probably guarded', unsettled_predicates: [], grounding: 'weak' })
         return l.includes('minors') ? { verdicts: ids.map(one) } : one(ids[0])
       }
+      // Honest uncertainty about reachability, everything else supported and
+      // cited. contract.md section 4 requires all three predicates
+      // affirmatively supported, and a control cannot supply this one.
+      if (s.verifierReachabilityUnsettled) {
+        const ids = expectedIds(prompt)
+        const one = (id) => ({ candidate_id: id, semantics: predicate('supports_candidate'),
+          reachability: predicate('unsettled'), contract_violation: predicate('supports_candidate'),
+          strongest_refutation: 'none', unsettled_predicates: ['reachability'], grounding: 'strong' })
+        return l.includes('minors') ? { verdicts: ids.map(one) } : one(ids[0])
+      }
       if (s.verifierCleanRefute) {
         const ids = expectedIds(prompt)
         const mkR = (id) => ({ candidate_id: id, semantics: predicate('falsifies_candidate'),
@@ -1444,6 +1454,32 @@ R.push(await run('cap keeps the more confident candidate', { ...BASE, budget_wu:
 // internal function directly with a state a caller's invariant excludes and
 // meet every reproduction requirement while the state cannot arise in the
 // program — the same shape as the obligation carve-out, one predicate over.
+// Honest uncertainty is not support. A control shows the changed code
+// misbehaves when the TEST calls it; where the verifier said outright that it
+// could not tell whether production callers reach this state, nothing has
+// established reachability and section 4 is not satisfied. Blocking only an
+// explicit falsification left this open: the denial was handled and the
+// admission of ignorance was not.
+R.push(await run('reproduction where reachability was left unsettled', { ...BASE },
+  { verifierReachabilityUnsettled: true, adjAlwaysRefute: true,
+    expect: (res) => {
+      const terminal = res.candidate_results.filter((r) => r.attack_grade === 'reproduced'
+        && r.execution_status === 'executed')
+      if (!terminal.length) return 'no controlled reproduction ran, so the carve-out is untested'
+      const promoted = terminal.filter((r) => r.state === 'substantiated')
+      if (promoted.length) return `${promoted[0].candidate_id} was substantiated while the verifier said it could not tell whether the state is reachable`
+      // WHICH array grew, not just that one did. The obligation here was
+      // cited and established; only reachability was not. Filing this under
+      // reproduced_without_obligation would be a false statement about what
+      // the run failed to establish, and the checklist counts stay
+      // self-consistent either way — so nothing else can catch it.
+      if (!res.ledger.reproduced_without_reachability.length) {
+        return 'the reproduction was not disclosed as one whose reachability nobody established'
+      }
+      return res.ledger.reproduced_without_obligation.length === 0
+        || 'an established obligation was disclosed as unestablished'
+    } }))
+
 R.push(await run('reproduction against a grounded reachability refutation', { ...BASE },
   { verifierReachabilityRefute: true, adjAlwaysRefute: true,
     expect: (res) => {
@@ -2902,7 +2938,7 @@ for (const r of R) {
     // then for the case that keyed on it, where a MISSING record is not
     // "unsettled" either, so the run with no verification at all passed the
     // guard that the run with honest uncertainty failed.
-    const obligationEstablished = Boolean(x.verifier
+    const predicatesEstablished = Boolean(x.verifier
       // Grounding too, matching the rule. A citation says nothing about
       // whether the analysis behind it could ground itself, and a record
       // still weak after its one rerun has settled nothing — so the test's
@@ -2915,15 +2951,28 @@ for (const r of R) {
       && String(x.verifier.contract_violation.cited_code || '').trim()
       && String(x.verifier.contract_violation.cited_path || '').trim()
       && Number.isInteger(x.verifier.contract_violation.cited_line)
-      && !(x.verifier.unsettled_predicates || []).includes('contract_violation'))
+      && !(x.verifier.unsettled_predicates || []).includes('contract_violation')
+      // Reachability on the same terms. A control settles that THIS PATCH
+      // caused the failure, not that a production caller can reach the state
+      // the test constructed, so section 4's third predicate has to be cited
+      // like the others. Without this term the invariant demanded the very
+      // promotion the rule exists to prevent — it required `substantiated`
+      // for a record that said outright it could not tell.
+      && x.verifier.reachability
+      && x.verifier.reachability.holds === 'supports_candidate'
+      && String(x.verifier.reachability.finding || '').trim()
+      && String(x.verifier.reachability.cited_code || '').trim()
+      && String(x.verifier.reachability.cited_path || '').trim()
+      && Number.isInteger(x.verifier.reachability.cited_line)
+      && !(x.verifier.unsettled_predicates || []).includes('reachability'))
     // Both directions. Without the second, deleting the whole rule leaves the
     // suite green: everything simply lands in the wider allowance.
-    if (controlled(x.attack) && !obligationEstablished && x.state === 'substantiated') {
+    if (controlled(x.attack) && !predicatesEstablished && x.state === 'substantiated') {
       fail++
       problems.push(`${r.name}: ${x.candidate_id} was substantiated on a reproduction with no cited `
-        + 'evidence that the obligation was violated — a control settles causality, not whether the behaviour was owed')
+        + 'evidence that the obligation was violated and the state is reachable — a control settles causality, not whether the behaviour was owed nor whether a real caller gets there')
     }
-    if (controlled(x.attack) && obligationEstablished && !obligationKilled && !reachabilityKilled && x.state !== 'substantiated') {
+    if (controlled(x.attack) && predicatesEstablished && !obligationKilled && !reachabilityKilled && x.state !== 'substantiated') {
       fail++
       problems.push(`${r.name}: ${x.candidate_id} has a controlled reproduction and a cited obligation `
         + `but is ${x.state}`)
