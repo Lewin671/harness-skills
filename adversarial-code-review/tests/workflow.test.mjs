@@ -1497,12 +1497,10 @@ R.push(await run('cap keeps the more confident candidate', { ...BASE, budget_wu:
 // established reachability and section 4 is not satisfied. Blocking only an
 // explicit falsification left this open: the denial was handled and the
 // admission of ignorance was not.
-// The other direction, which is the one I asked to be attacked. A
-// reproduction driven through the program's real entrypoint DOES establish
-// reachability — the verifier could not settle it statically, and exercising
-// the route settles it. Refusing this would send dynamic routes, CLI dispatch
-// and framework callbacks to unresolved with a disclosure saying the test
-// called the code directly, which nobody checked.
+// The other direction, which is the one I asked to be attacked. Refusing
+// every attack-side reachability claim sends dynamic routes, CLI dispatch and
+// framework callbacks to unresolved under a disclosure saying the test called
+// the code directly — a claim nobody checked.
 //
 // What this case proves is exactly the gate: a well-shaped, fully cited
 // record is promoted. It does NOT prove an HTTP route was exercised — no

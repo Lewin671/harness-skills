@@ -843,7 +843,10 @@ fan-out afterwards.
 - **Coverage floor** — triage plus every lens triage selected. Without
   it the review has no breadth and its silence means nothing.
 - **Accuracy floor** — a verifier for every surviving candidate, plus
-  reserved adjudication capacity. Without it breadth produces
+  reserved adjudication capacity. One exception, and it is the
+  measured one: when a sampled verifier costs far more than projected,
+  the rest of that wave is deferred rather than launched into an
+  overspend, and the deferral is disclosed. Without the floor breadth produces
   candidates that can never become findings.
 
 The token target is projected at a rate the run **calibrates as it goes**.
@@ -1157,7 +1160,9 @@ without it candidates can never become findings at all.
 2. **Cheap coverage** — region probes, per profile, funded only after
    the projected accuracy floor is set aside.
 3. **Accuracy floor** — a verifier for every candidate, emergent ones
-   included. Never trimmed.
+   included. Never trimmed to buy something else; deferred only when a
+   sampled verifier reprices the wave past the budget, which the ledger
+   reports as `actions_deferred`.
 4. **Cheap coverage, part two** — probes for critical and major
    candidates.
 5. **Conditional depth** — executable attacks, in exactly this rank

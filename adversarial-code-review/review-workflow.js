@@ -2737,12 +2737,17 @@ const results = candidates.map((c) => {
   const verifierReachability = groundedRefutation
     && citedAs(verifierRecord, 'reachability', 'supports_candidate')
     && unsettledNamesValid && !unsettledNames.includes('reachability')
-  // Or the attack established it. A reproduction driven through the program's
-  // real entrypoint demonstrates the path a static reviewer could not settle,
-  // and refusing it would send a whole class of genuine defects — dynamic
-  // routes, CLI dispatch, framework callbacks — to unresolved with a
-  // disclosure claiming the test called the code directly, which nobody
-  // checked and which would often be false.
+  // Or the attack CLAIMED it, with a citation. What is checked here is the
+  // shape of the record, never the route: nothing runs the cited dispatch or
+  // observes which entry the reproducer used, so an attacker naming a real
+  // route and citing the real line that registers it is promoted whether or
+  // not its test went that way (contract.md section 5 states this).
+  //
+  // Accepted anyway, because the alternative is worse in a checkable way:
+  // refusing every attack-side claim sends dynamic routes, CLI dispatch and
+  // framework callbacks to unresolved under a disclosure saying the test
+  // called the code directly — which nobody checked either, and which would
+  // often be false. One unverifiable claim is disclosed; the other was not.
   //
   // Held to the same evidence bar as a verifier citation: the kind stated
   // explicitly, the entrypoint named, and code cited at a path and line. A
