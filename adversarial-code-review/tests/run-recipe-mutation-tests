@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# Do run-capture-tests and run-snapshot-tests actually catch anything?
+#
+# The recipes in references/orchestration.md are prose a user pastes into a
+# real shell, and they are where this skill's user-facing correctness lives:
+# which commit the review binds to, what reaches the patch, where scratch
+# lands, what the handoff says happened, whether the post-run snapshot can see
+# a change at all. review-workflow.js has 231 registered mutants. The prose
+# had none — so every recipe protection rested on tests nobody had ever seen
+# fail, which is the exact manufactured confidence the sibling harness was
+# written to catch.
+#
+# Each mutant below breaks ONE protection a recipe promises, and requires one
+# of those two suites to go red for it. A survivor means that protection is
+# unguarded.
+#
+# Exit 0 when every mutant is killed.
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SKILL="$(cd "${HERE}/.." && pwd -P)"
+# Guarded: this script does not set -e, and `mutate` derives
+# `work="${TMP}/work"` and then `rm -rf "$work"` — an empty TMP from a failed
+# mktemp makes that `rm -rf /work` before a single mutant has run.
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/acr-recipemut-XXXXXX")" && [ -n "$TMP" ] || {
+  echo "cannot create the mutation workspace" >&2; exit 1; }
+trap 'rm -rf "${TMP}"' EXIT
+
+# A red baseline scores every mutant as killed for free.
+# BOTH suites: orchestration.md carries the post-run snapshot recipe as well as
+# the capture, and a mutant in one is only measured by the suite that runs it.
+for acr_suite in run-capture-tests run-snapshot-tests; do
+  if ! "${HERE}/${acr_suite}" >/dev/null 2>&1; then
+    echo "baseline ${acr_suite} is already failing — fix that first; mutation results would be meaningless"
+    exit 1
+  fi
+done
+
+survived=0
+total=0
+filtered=0
+seen=0
+# ACR_RECIPEMUT_ONLY runs just the mutants whose name contains this substring.
+# A filtered run prints a PARTIAL banner and exits non-zero whatever the
+# result, and skips the count pin, so it can never be mistaken for a sweep.
+mutate() {
+  local name="$1" from="$2" to="$3"
+  seen=$((seen + 1))
+  if [ -n "${ACR_RECIPEMUT_ONLY:-}" ]; then
+    case "$name" in
+      *"$ACR_RECIPEMUT_ONLY"*) : ;;
+      *) filtered=$((filtered + 1)); return ;;
+    esac
+  fi
+  total=$((total + 1))
+  local work="${TMP}/work"
+  rm -rf "$work"
+  cp -R "$SKILL" "$work" || { printf '%-56s %s\n' "$name" "SKIP (could not copy the skill)"; survived=$((survived + 1)); return; }
+
+  # Status captured explicitly: inside `if ! cmd; then`, `$?` is the status of
+  # the NEGATION and always 0, so the two outcomes below would be identical.
+  local mstat=0
+  ACR_FILE="${work}/references/orchestration.md" ACR_FROM="$from" ACR_TO="$to" python3 - <<'PY' || mstat=$?
+import os, pathlib, sys
+p = pathlib.Path(os.environ['ACR_FILE'])
+s = p.read_text()
+frm, to = os.environ['ACR_FROM'], os.environ['ACR_TO']
+n = s.count(frm)
+# Exactly once, not "at least once". This document explains its own code in
+# prose, so command text usually appears twice — once in the comment above it
+# and once for real — and a first-occurrence replace then edits the COMMENT.
+# The recipe behaves exactly as before, the suite stays green, and the mutant
+# is scored as a survivor for a protection nobody removed: a mutant that tests
+# nothing while looking like a finding. Neither verdict fits, so it is a
+# harness error. Not hypothetical — the quotePath mutant was written that way
+# and reported a false survivor until this check caught it.
+if n == 0:
+    sys.exit(9)
+if n != 1:
+    sys.exit(8)
+p.write_text(s.replace(frm, to, 1))
+PY
+  if [ "$mstat" != 0 ]; then
+    if [ "$mstat" = 8 ]; then
+      printf '%-56s %s\n' "$name" "AMBIGUOUS (target text appears more than once — make it unique)"
+    else
+      printf '%-56s %s\n' "$name" "SKIP (target text not found — update this mutant)"
+    fi
+    survived=$((survived + 1))
+    return
+  fi
+
+  # A mutant that does not PARSE takes the suite down whatever it changed:
+  # every extracted block fails to source and each case goes red for a reason
+  # no assertion had anything to do with. Counting that as a kill is the same
+  # manufactured confidence this file exists to catch. The check runs against
+  # the block the suite EXTRACTS, not the markdown, because that is what gets
+  # executed — and a mutant that breaks extraction itself is caught here too.
+  if ! ACR_DOC="${work}/references/orchestration.md" ACR_OUT="${TMP}/blocks" python3 - <<'PY'
+import os, re, pathlib, sys
+doc = pathlib.Path(os.environ['ACR_DOC']).read_text()
+blocks = re.findall(r'```bash\n(.*?)```', doc, re.S)
+picked = [b for b in blocks if 'patch_sha256=' in b and 'acr_manifest()' in b]
+if len(picked) != 1:
+    sys.exit(9)
+pathlib.Path(os.environ['ACR_OUT']).write_text(picked[0])
+PY
+  then
+    printf '%-56s %s\n' "$name" "INVALID (the capture block no longer extracts)"
+    survived=$((survived + 1))
+    return
+  fi
+  if ! bash -n "${TMP}/blocks" 2>/dev/null; then
+    printf '%-56s %s\n' "$name" "INVALID (mutant does not parse — it would kill the suite for the wrong reason)"
+    survived=$((survived + 1))
+    return
+  fi
+
+  # Killed if EITHER suite goes red. A mutant in the snapshot recipe leaves
+  # the capture suite green and vice versa, so requiring one specific suite to
+  # fail would score half the document as unguarded no matter what it covers.
+  if "${work}/tests/run-capture-tests" >/dev/null 2>&1 &&
+     "${work}/tests/run-snapshot-tests" >/dev/null 2>&1; then
+    printf '%-56s %s\n' "$name" "SURVIVED"
+    survived=$((survived + 1))
+  else
+    printf '%-56s %s\n' "$name" "killed"
+  fi
+}
+
+# --- what the review is BOUND to -------------------------------------------
+# base_sha and patch_sha256 are the whole binding. An attack in Phase 2 is
+# checked against them, so a wrong or empty value produces a review that is
+# internally consistent and describes a tree nobody captured.
+mutate "the recipe refuses a non-bash shell" \
+  '[ -n "${BASH_VERSION:-}" ] || {' \
+  'false && {'
+mutate "the scratch path may not carry a line break" \
+  'case "${acr_root}" in
+  *"${acr_lf}"*)' \
+  'case "${acr_root}" in
+  *"no-such-marker-zzz"*)'
+
+# --- where scratch lands ---------------------------------------------------
+# Everything Phase 0 writes goes under acr_root before the baseline that could
+# disclose it exists. Inside the repository, it is in the tree being reviewed.
+mutate "TMPDIR is resolved with a -- terminator" \
+  'acr_root="$(cd -- "$acr_root" 2>/dev/null && pwd -P)" || acr_root=/tmp' \
+  'acr_root="$(cd "$acr_root" 2>/dev/null && pwd -P)" || acr_root=/tmp'
+mutate "worktree paths are read NUL-separated" \
+  "done < <(git worktree list --porcelain -z && printf 'acr_status 0\\0' || printf 'acr_status %s\\0' \"\$?\")" \
+  "done < <(git worktree list --porcelain | tr '\\n' '\\0' && printf 'acr_status 0\\0' || printf 'acr_status %s\\0' \"\$?\")"
+mutate "a failed worktree enumeration is not an empty one" \
+  'if [ "${acr_wt_status}" != 0 ]; then' \
+  'if false; then'
+
+# --- cleanup that must not eat a successful capture ------------------------
+# The scratch directory persists on purpose: Phase 2 and the post-run snapshot
+# read it from later shells. It is removed ONLY on failure.
+mutate "a failed capture removes its scratch directory" \
+  'trap '"'"'acr_st=$?; [ "${acr_st}" -ne 0 ] && [ -n "${tmp:-}" ] && rm -rf "${tmp}"; exit "${acr_st}"'"'"' EXIT' \
+  ':'
+
+# --- what reaches the patch ------------------------------------------------
+# Enumeration is scoped to the current directory for ls-files and to the
+# repository for diff/status. Mixing the two reviews a subtree while calling
+# it the repository.
+mutate "the capture runs from the repository top level" \
+  'cd -- "$(git rev-parse --show-toplevel)" ||
+  { echo "could not reach the repository root" >&2; exit 1; }' \
+  ':'
+# The same defect in the other recipe: a snapshot taken from a subdirectory
+# hashes a SUBTREE, identically before and after, which is the silent
+# all-clear that function exists to rule out.
+mutate "the snapshot runs from the repository top level" \
+  '    cd -- "$(git rev-parse --show-toplevel)" || exit 1' \
+  '    :'
+mutate "non-ASCII paths are not C-quoted in the diff headers" \
+  'git -c core.quotePath=false diff --no-ext-diff --no-textconv --unified=0' \
+  'git -c core.quotePath=true diff --no-ext-diff --no-textconv --unified=0'
+
+echo
+# EXCLUDED, with the measurement, rather than left to survive silently:
+#
+#   acr_roots+=("$(git rev-parse --absolute-git-dir)")
+#   acr_roots+=("$(git rev-parse --path-format=absolute --git-common-dir)")
+# Both unmeasured, and the reason is worth writing down rather than asserting
+# a coverage nobody has. Measured on this machine, three shapes:
+#   - separate git dir: absolute-git-dir and common-dir are the SAME path
+#   - linked worktree:  absolute-git-dir is `<common>/worktrees/<name>`,
+#                       inside common-dir
+#   - GIT_DIR + GIT_WORK_TREE: both are GIT_DIR
+# and in every one of them `git worktree list --porcelain` ALREADY reports the
+# git storage as a worktree root, so the enumeration above catches any scratch
+# path these two would. No fixture here separates them, so a mutant for either
+# survives by construction — and a suite that tolerates a silent survivor is
+# the thing this file exists to prevent.
+#
+# They are kept: they are what would still be right if worktree list reported
+# differently on another git. But "kept as defence in depth" is a claim about
+# intent, not about evidence, and this file only counts evidence.
+#
+#   acr_repo="${acr_repo%/}"
+# NOT CONSTRUCTIBLE here. The only input that distinguishes it is a worktree
+# whose root is `/` — `pwd -P` returns a trailing slash for no other path — and
+# a test cannot make the machine root a repository. The guard is real (without
+# it that worktree yields the pattern `//*`, which matches nothing, so a
+# repository containing every path on the machine reads as containing none)
+# and it is unmeasured. Said here rather than counted as covered.
+
+# A `mutate` line whose arguments fail to expand never reaches the function,
+# so neither counter moves and the run still prints success — the manufactured
+# confidence this script exists to catch, one level up again.
+EXPECTED_TOTAL=9
+if [ -n "${ACR_RECIPEMUT_ONLY:-}" ]; then
+  echo "PARTIAL RUN: ${total} of $((total + filtered)) mutants selected. This is NOT a sweep."
+  echo "${survived}/${total} of the selected mutants survived."
+  exit 1
+fi
+if [ "$seen" != "$EXPECTED_TOTAL" ]; then
+  echo "expected ${EXPECTED_TOTAL} mutants, ${seen} reached the runner — a mutant line failed to expand"
+  exit 1
+fi
+if [ "$survived" != 0 ]; then
+  echo "${survived}/${total} mutants SURVIVED — those protections are unguarded"
+  exit 1
+fi
+echo "all ${total} mutants killed — the recipe suites have teeth"

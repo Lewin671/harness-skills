@@ -534,6 +534,19 @@ mutate "the frontier names the last victim" "trimmed[trimmed.length - 1]" "trimm
 mutate "victim tie-break is deterministic" "    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c" "    if (d < 0) worst = c"
 mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.fingerprint))" "  || 0"
 
+# The disclosure counts themselves. A checklist entry that exists and reports
+# zero beside a non-empty ledger array is the false-disclosure defect class in
+# its purest form — the report has a number to print, and the number is wrong.
+mutate "a disclosure count is the array length" \
+  "    reproduced_without_obligation: ledger.reproduced_without_obligation.length," \
+  "    reproduced_without_obligation: 0,"
+# And the count must be found under its OWN name. The assertion that guards
+# this used to match key names by substring, so `deferred` was checked only
+# because `actions_deferred` happens to contain it; nothing compared them.
+mutate "every ledger array is counted under its own name" \
+  "    actions_deferred: ledger.deferred.length," \
+  "    actions_deferred_total: ledger.deferred.length,"
+
 # A note on the six "sample reprices the rest" mutants above, because their
 # earlier names claimed more than they proved. Each removes the post-sample
 # admission guard, not the sequential split that feeds it. That is deliberate:
@@ -578,7 +591,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=229
+EXPECTED_TOTAL=231
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

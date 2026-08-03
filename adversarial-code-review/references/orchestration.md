@@ -34,6 +34,18 @@ phase reads different code than the review phase.
 # Bash does not inherit this between tool calls, so repeat it in each one.
 set -euo pipefail
 
+# BASH, not merely "a shell". Everything below uses bash arrays, `read -r -d ''`
+# and `${arr[@]+"${arr[@]}"}`. Under zsh — the default login shell on macOS —
+# arrays are 1-indexed, so `${diff_args[0]}` is UNSET: measured, `base_sha`
+# comes out empty while the patch is still written and hashed, which is a
+# binding that is internally consistent and describes the wrong thing. That is
+# the exact failure this file's capture rules exist to prevent, so it refuses
+# rather than producing it.
+[ -n "${BASH_VERSION:-}" ] || {
+  echo "Phase 0 requires bash: this recipe uses bash arrays and read -d, and under zsh base_sha comes out empty while the patch still looks captured" >&2
+  exit 1
+}
+
 # AT THE TOP LEVEL, before anything enumerates. `git ls-files` — unlike
 # `git diff` and `git status` — is scoped to the CURRENT DIRECTORY and prints
 # paths relative to it. Measured: from `src/`, `git ls-files --stage` omits a
@@ -58,6 +70,21 @@ acr_root="${TMPDIR:-/tmp}"
 # snapshots, would then be written there while the containment checks below
 # judge the wrong directory. Quoting does not stop it; the terminator does.
 acr_root="$(cd -- "$acr_root" 2>/dev/null && pwd -P)" || acr_root=/tmp
+# A line break in the scratch path would forge records in the §8 handoff.
+# `tmp` is printed as `tmp=%s\nbase_sha=%s\n`, so a TMPDIR ending in
+# `<newline>base_sha=<forty hex>` yields a handoff whose second line the
+# reader takes as the base commit — a review then binds its attacks to a
+# commit nobody captured, and the patch hash it checks belongs to a different
+# tree. Refuse at the root, before mktemp derives anything from it.
+# Held in a variable: `$(printf '\n')` strips the very newline it is meant to
+# match, leaving the pattern `**`, which matches every path.
+acr_lf='
+'
+case "${acr_root}" in
+  *"${acr_lf}"*)
+    echo "the scratch path contains a line break, which would forge records in the Phase 0 handoff; set TMPDIR elsewhere" >&2
+    exit 1 ;;
+esac
 # A partial clone fetches missing objects on demand, so a capture that needs
 # one reaches the network and writes the SHARED .git/objects — before the
 # baseline exists. Inert below git 2.42; say so rather than claim otherwise.

@@ -2662,27 +2662,45 @@ for (const r of R) {
     }
   }
 
-  // Every ledger array must have a disclosure_checklist count. The checklist
-  // is what tells a report author what to account for, so an array with no
-  // count is one the report has no signal to include — and the array added
-  // for reproductions-without-obligation, which is the whole point of the
-  // obligation rule, was exactly that.
+  // Every ledger array must have a disclosure_checklist count, and that count
+  // must be the array's LENGTH. The checklist is what tells a report author
+  // what to account for, so an array with no count is one the report has no
+  // signal to include — and the array added for reproductions-without-
+  // obligation, which is the whole point of the obligation rule, was exactly
+  // that.
+  //
+  // Checked by value, not by name. The name-only version of this assertion
+  // was itself a false disclosure: it read `JSON.stringify(keys).includes(n)`,
+  // so a checklist reporting `reproduced_without_obligation: 0` beside three
+  // ledger entries passed, and so did any key that merely CONTAINED the name.
+  // A count that exists and lies is worse than one that is missing, because
+  // the report has a number to print.
   if (r.res.ledger && r.res.disclosure_checklist) {
     const arrays = Object.keys(r.res.ledger).filter((k) => Array.isArray(r.res.ledger[k]))
-    const checklist = JSON.stringify(Object.keys(r.res.disclosure_checklist))
+    const checklist = r.res.disclosure_checklist
     // Several arrays are counted under a different name; the map is explicit
     // so that adding an array without a count is a failure rather than a
     // guess about which spelling to look for.
+    // `deferred` is here because the name-only check never tested it: the
+    // checklist spells it `actions_deferred`, which CONTAINS "deferred", so
+    // the substring passed while nothing compared the two.
     const alias = {
       terminal_evidence_overrides: 'terminal_overrides',
       invalid_candidates: 'candidates_dropped_invalid',
       invalid_regions: 'regions_dropped_invalid',
       unrun_lenses: 'lenses_selected_but_unrun',
+      deferred: 'actions_deferred',
     }
-    const uncounted = arrays.filter((k) => !checklist.includes(alias[k] || k))
-    if (uncounted.length) {
-      fail++
-      problems.push(`${r.name}: ledger array(s) ${uncounted.join(', ')} have no disclosure_checklist count`)
+    for (const k of arrays) {
+      const n = alias[k] || k
+      if (!Object.prototype.hasOwnProperty.call(checklist, n)) {
+        fail++
+        problems.push(`${r.name}: ledger array ${k} has no disclosure_checklist count (expected key ${n})`)
+      } else if (checklist[n] !== r.res.ledger[k].length) {
+        fail++
+        problems.push(`${r.name}: disclosure_checklist.${n} says ${checklist[n]} `
+          + `but ledger.${k} holds ${r.res.ledger[k].length} entr${r.res.ledger[k].length === 1 ? 'y' : 'ies'}`)
+      }
     }
   }
 

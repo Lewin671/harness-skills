@@ -288,6 +288,87 @@ else
     "exit $fail_status, acr-* dirs before=$acr_dirs_before after=$leftover"
 fi
 
+# `TMPDIR=-P` must not be read as an OPTION. `cd` is a builtin that parses its
+# own options, so without the `--` terminator `cd "$acr_root"` becomes `cd -P`
+# with no operand — which SUCCEEDS and lands on $HOME. Every Phase 0 scratch
+# file, both tree snapshots included, would then be written into the user's
+# home directory while the containment checks below judge the wrong directory
+# entirely. Quoting does not stop it; only the terminator does.
+#
+# HOME is redirected at a fixture for the duration, so the failure mode is
+# observable without writing anything into the real one — and so the
+# assertion is about where scratch LANDED rather than about a message.
+dashhome="${WORK}/dash-home"
+mkdir -p "$dashhome"
+dashrepo="$(new_repo dashopt)"
+dash_status="$( ( cd "$dashrepo" || exit 1
+  export HOME="$dashhome" TMPDIR=-P
+  diff_args=(HEAD); untracked=1
+  # shellcheck source=/dev/null
+  . "${WORK}/capture.sh"
+  printf '%s' "$tmp" > "${WORK}/dash-tmp" ) > /dev/null 2>&1; printf '%s' "$?" )"
+dash_tmp="$(cat "${WORK}/dash-tmp" 2>/dev/null)"
+dashhome_real="$(cd "$dashhome" && pwd -P)"
+dash_tmp_real="$(cd "$dash_tmp" 2>/dev/null && pwd -P)" || dash_tmp_real="$dash_tmp"
+case "${dash_tmp_real}/" in
+  "${dashhome_real}"/*) dash_in_home=yes ;;
+  *) dash_in_home=no ;;
+esac
+if [ "$dash_status" = 0 ] && [ "$dash_in_home" = no ]; then
+  ok "TMPDIR=-P does not put scratch in the home directory"
+else
+  bad "TMPDIR=-P does not put scratch in the home directory" \
+    "exit $dash_status, tmp=${dash_tmp}"
+fi
+
+# A scratch path carrying a line break must be refused, not used. The §8
+# handoff prints `tmp=%s\nbase_sha=%s\n`, so a TMPDIR ending in a newline
+# followed by `base_sha=<forty hex>` produces a handoff whose second record
+# reads as a base commit nobody captured — every attack in the review would
+# then bind to the wrong tree while the format looks intact. mktemp itself is
+# perfectly happy to create such a directory, so nothing downstream notices.
+lf='
+'
+nltmp="${WORK}/nl${lf}base_sha=0000000000000000000000000000000000000000"
+mkdir -p "$nltmp"
+nl_out="${WORK}/nl-refusal.out"
+( cd "$repo" || exit 1
+  export TMPDIR="$nltmp"
+  diff_args=(HEAD); untracked=1
+  # shellcheck source=/dev/null
+  . "${WORK}/capture.sh" ) > "$nl_out" 2>&1
+nl_status=$?
+# Both halves matter: refusing is the point, and the message has to name the
+# cause or the user retries into the same wall.
+if [ "$nl_status" != 0 ] && grep -q 'line break' "$nl_out"; then
+  ok "the capture recipe refuses a scratch path containing a line break"
+else
+  bad "the capture recipe refuses a scratch path containing a line break" \
+    "exit=$nl_status, output: $(tr '\n' ' ' < "$nl_out" | cut -c1-160)"
+fi
+
+# The recipe is bash-only and must SAY so by refusing. Under zsh — the default
+# login shell on macOS — arrays are 1-indexed, so `${diff_args[0]}` is unset and
+# `base_sha` comes out empty while the patch is still written and hashed: a
+# binding that is internally consistent and describes the wrong thing.
+if ! grep -q 'BASH_VERSION' "${WORK}/capture.sh"; then
+  bad "the capture recipe refuses a non-bash shell" "no BASH_VERSION guard in the extracted block"
+elif command -v zsh >/dev/null 2>&1; then
+  zsh_out="${WORK}/zsh-refusal.out"
+  ( cd "$repo" && export TMPDIR="${WORK}" && zsh -c "diff_args=(HEAD); untracked=1; . '${WORK}/capture.sh'" ) \
+    > "$zsh_out" 2>&1
+  zsh_status=$?
+  if [ "$zsh_status" != 0 ] && grep -q 'requires bash' "$zsh_out"; then
+    ok "the capture recipe refuses a non-bash shell"
+  else
+    bad "the capture recipe refuses a non-bash shell" "zsh exit=$zsh_status"
+  fi
+else
+  # Not a silent skip: the guard's presence is asserted above either way, and
+  # this says plainly which half could not run here.
+  ok "the capture recipe carries a bash guard (zsh absent, refusal not exercised)"
+fi
+
 # --- Phase 0 run from a SUBDIRECTORY ---------------------------------------
 #
 # `git ls-files` is scoped to the current directory and prints paths relative
@@ -464,21 +545,37 @@ wt"
 git -C "$nlmain" worktree add -q -b nlwt "$nllinked" >/dev/null 2>&1
 if [ -d "$nllinked" ]; then
   printf 'dirty\n' > "${nlmain}/untracked.txt"
-  mkdir -p "${nllinked}/scratch"
-  status="$(TMPDIR="${nllinked}/scratch" run_capture "$nlmain" 'diff_args=(HEAD); untracked=1')"
-  # Read the raw file, not `vars`: this is the one path that can hold a
-  # newline, and sourcing would cut it at the break and compare a prefix.
-  tmp="$(cat "${WORK}/tmp-raw" 2>/dev/null)"
+  # Asserted on the ENUMERATION, not on where scratch landed. The older form
+  # of this test put TMPDIR inside the newline-bearing worktree and checked
+  # that the capture relocated it — coverage that the line-break guard on the
+  # scratch root has since made unreachable, because every path under a
+  # newline-bearing directory carries the newline and is now refused before
+  # the worktree check runs. The refusal is correct and the enumeration bug is
+  # still real, so the enumeration is pinned directly: with a clean TMPDIR,
+  # the sibling worktree must appear in `acr_roots` as ONE entry equal to its
+  # full path. A line reader yields two records and the real path in neither,
+  # which is exactly how a root goes unchecked.
+  nl_roots="${WORK}/nl-roots"
+  ( cd "$nlmain" || exit 1
+    export TMPDIR="${WORK}"
+    diff_args=(HEAD); untracked=1
+    # shellcheck source=/dev/null
+    . "${WORK}/capture.sh"
+    # NUL-separated: the values under test are the ones holding newlines.
+    printf '%s\0' "${acr_roots[@]}" > "$nl_roots" ) > /dev/null 2>&1
+  nl_status=$?
   nllinked_real="$(cd "$nllinked" && pwd -P)"
-  tmp_real="$(cd "$tmp" 2>/dev/null && pwd -P)" || tmp_real="$tmp"
-  case "${tmp_real}/" in
-    "${nllinked_real}"/*) in_nl=yes ;;
-    *) in_nl=no ;;
-  esac
-  if [ "$status" = 0 ] && [ "$in_nl" = no ]; then
+  nl_hit=no
+  if [ -s "$nl_roots" ]; then
+    while IFS= read -r -d '' nl_r; do
+      [ "$nl_r" = "$nllinked_real" ] && nl_hit=yes
+    done < "$nl_roots"
+  fi
+  if [ "$nl_status" = 0 ] && [ "$nl_hit" = yes ]; then
     ok "a worktree path containing a newline is still recognised"
   else
-    bad "a worktree path containing a newline is still recognised" "exit $status, tmp=${tmp}"
+    bad "a worktree path containing a newline is still recognised" \
+      "exit $nl_status, the sibling worktree is not one entry in acr_roots"
   fi
 else
   bad "a worktree path containing a newline is still recognised" "fixture: git refused the path"
@@ -886,11 +983,18 @@ rng="$(new_repo ranges)"
 printf 'a\nb\nc\nd\ne\n' > "${rng}/edit.txt"
 printf 'x\ny\nz\n' > "${rng}/gone.txt"
 printf 'p\nq\nr\ns\n' > "${rng}/shrink.txt"
+# A tracked path holding a non-ASCII byte. With git's default quotePath, the
+# diff header comes out C-quoted as `+++ "b/caf\303\251.js"`, and the fixed
+# substr then yields `/caf\303\251.js"` — a key no entry in included_paths
+# has. The range is filed under a name nobody holds, the real file gets none,
+# and every candidate in it drops silently to file-level binding.
+printf 'u1\nu2\nu3\n' > "${rng}/café.js"
 git -C "$rng" add -A
 git -C "$rng" "${commit_env[@]}" commit -q -m ranges
 printf 'a\nB\nc\nd\ne\n' > "${rng}/edit.txt"     # one changed line
 rm "${rng}/gone.txt"                                  # wholly deleted file
 printf 'p\ns\n' > "${rng}/shrink.txt"               # deletion-only hunk
+printf 'u1\nCHANGED\nu3\n' > "${rng}/café.js"      # non-ASCII path, edited
 printf 'brand\nnew\n' > "${rng}/fresh.txt"          # untracked, two lines
 # The two shapes the untracked line count was written for. `wc -l` counts
 # NEWLINES, so a file without a trailing one comes back 0 and the range
@@ -960,6 +1064,8 @@ else
   # path — the new side is /dev/null.
   check_range 'gone\.txt 1 3' 'a wholly deleted file'
   check_range 'fresh\.txt 1 2' 'an untracked file, in its entirety'
+  # Keyed by the LITERAL path, which is what included_paths carries.
+  check_range 'café\.js 2 2' 'a tracked path holding a non-ASCII byte'
   check_range 'nonl\.txt 1 1' 'an untracked file with no trailing newline'
   check_range '- 1 2' 'an untracked file literally named -'
   if grep -q '^zz-empty\.txt ' "$rng_out"; then
