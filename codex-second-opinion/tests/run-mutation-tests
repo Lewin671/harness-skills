@@ -233,6 +233,9 @@ mutate "consult emits no report marker" lib/common.bash \
   '  echo "${result_noun}: ${out}" >&2' '  echo "report: ${out}" >&2'
 
 # --- the exit-code contract ------------------------------------------------
+# `grep -q` exits at its first match, so a pipeline's producer takes SIGPIPE
+# and pipefail turns that into 141 — read as "no rejection", skipping the
+# stale-default fallback. Measured with a rejection followed by a long tail.
 mutate "a bare repo is not a work tree" lib/common.bash \
   '[ "$work_tree" = "true" ] ||' '[ "$work_tree" != "zzz" ] ||'
 # The whole check, both halves. The whitespace half has its own mutant above;
@@ -323,6 +326,24 @@ mutate "ambient git selectors are cleared" run-codex-second-opinion \
       GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM' ':'
 
 # KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
+#
+#   rejection detection is not a pipeline   (rejected_model)
+#
+# The defect is real and was measured: `grep "$log" | grep -qE ...` makes the
+# external producer take SIGPIPE the moment the consumer matches, and pipefail
+# reports 141 — read as "no rejection", so the stale-default fallback never
+# fires. Reproduced standalone at 141, and once end-to-end through the wrapper
+# (exit 4, no fallback). It is fixed by collecting first and matching with a
+# here-string, which has no producer to kill.
+#
+# No STABLE mutant could be built for it. Three near-identical restorations of
+# the pipeline — from the log, from a here-string, via printf — did not
+# reproduce the failure through the wrapper, because SIGPIPE delivery depends
+# on buffer state and timing. A mutant that fires intermittently is worse than
+# none: it reports survivors that are not real and trains the reader to ignore
+# them. The path is still exercised by "a rejection buried under a long error
+# tail still triggers the fallback" in run-tests, which pins the behaviour even
+# though it cannot discriminate the construct.
 #
 #   inside_repo exact-root match    ([ "$candidate" = "$root" ] && return 0)
 #

@@ -2394,7 +2394,25 @@ R.push(await run('no room for a supplemental lens', { ...BASE, profile: 'recall-
     || 'an optional lens was bought with no room left for the floor it would grow' }))
 R.push(await run('recall-first, roomy budget', { ...BASE, profile: 'recall-first', budget_wu: 60 }))
 R.push(await run('weak verifier, escalation dies', { ...BASE }, { weakCriticalVerifier: true, escalatedVerifierNull: true, adjAlwaysSubstantiate: true }))
-R.push(await run('weak verifier, rerun still weak', { ...BASE }, { weakCriticalVerifier: true, escalatedVerifierStillWeak: true, adjAlwaysSubstantiate: true }))
+R.push(await run('weak verifier, rerun still weak', { ...BASE }, { weakCriticalVerifier: true, escalatedVerifierStillWeak: true, adjAlwaysSubstantiate: true,
+  expect: (res) => {
+    // `verifier_completed` means a GROUNDED refutation, not merely a returned
+    // one — that definition is what makes the weak-verdict rule uniform, and
+    // nothing pinned it directly: the global check only fires for a candidate
+    // that reports completed AND weak, which no scenario produced any more, so
+    // redefining the field to `Boolean(verifierRecord)` went unnoticed.
+    const weak = (res.candidate_results || []).filter((x) => x.verifier && x.verifier_grounding === 'weak')
+    if (!weak.length) return 'no weakly grounded verifier record survived, so the definition is untested'
+    const counted = weak.filter((x) => x.verifier_completed)
+    if (counted.length) {
+      return `${counted[0].candidate_id} reports verifier_completed with a ${counted[0].verifier_grounding} refutation`
+    }
+    // ...and the depth number must agree with the field.
+    const claimed = res.verification_depth.verified
+    const grounded = (res.candidate_results || []).filter((x) => x.verifier_completed).length
+    return claimed === grounded
+      || `verification_depth.verified is ${claimed} but ${grounded} candidates report a completed verifier`
+  } }))
 R.push(await run('low-confidence triage, 5wu', { ...BASE, budget_wu: 5 }, { triageLowConfidence: true }))
 R.push(await run('low-confidence triage discloses risk', { ...BASE }, { triageLowConfidence: true }))
 {
@@ -2644,6 +2662,30 @@ for (const r of R) {
     }
   }
 
+  // Every ledger array must have a disclosure_checklist count. The checklist
+  // is what tells a report author what to account for, so an array with no
+  // count is one the report has no signal to include — and the array added
+  // for reproductions-without-obligation, which is the whole point of the
+  // obligation rule, was exactly that.
+  if (r.res.ledger && r.res.disclosure_checklist) {
+    const arrays = Object.keys(r.res.ledger).filter((k) => Array.isArray(r.res.ledger[k]))
+    const checklist = JSON.stringify(Object.keys(r.res.disclosure_checklist))
+    // Several arrays are counted under a different name; the map is explicit
+    // so that adding an array without a count is a failure rather than a
+    // guess about which spelling to look for.
+    const alias = {
+      terminal_evidence_overrides: 'terminal_overrides',
+      invalid_candidates: 'candidates_dropped_invalid',
+      invalid_regions: 'regions_dropped_invalid',
+      unrun_lenses: 'lenses_selected_but_unrun',
+    }
+    const uncounted = arrays.filter((k) => !checklist.includes(alias[k] || k))
+    if (uncounted.length) {
+      fail++
+      problems.push(`${r.name}: ledger array(s) ${uncounted.join(', ')} have no disclosure_checklist count`)
+    }
+  }
+
   for (const x of r.res.candidate_results || []) {
     const a = x.attack
     if (a && a.grade === 'held' && !(a.execution_status === 'executed' && a.bound_to_base_sha === true
@@ -2774,6 +2816,12 @@ for (const r of R) {
     // "unsettled" either, so the run with no verification at all passed the
     // guard that the run with honest uncertainty failed.
     const obligationEstablished = Boolean(x.verifier
+      // Grounding too, matching the rule. A citation says nothing about
+      // whether the analysis behind it could ground itself, and a record
+      // still weak after its one rerun has settled nothing — so the test's
+      // idea of "established" has to be the contract's, or the invariant
+      // fires on correct code. It did.
+      && x.verifier.grounding === 'strong'
       && x.verifier.contract_violation
       && x.verifier.contract_violation.holds === 'supports_candidate'
       && String(x.verifier.contract_violation.finding || '').trim()

@@ -262,11 +262,17 @@ fi
 # a partial diff and the index.
 failtmp="$(new_repo failcap)"
 fail_out="${WORK}/failcap.out"
-# Counted immediately around THIS capture. Comparing against a snapshot taken
-# at suite start counts every successful capture's directory too — those
-# persist by design — so the check drifted by four and failed on correct code.
-acr_dirs_before="$(ls -d "${TMPDIR:-/tmp}"/acr-* 2>/dev/null | wc -l | tr -d ' ')"
+# A TMPDIR of its own, so the count cannot race. Comparing global
+# `${TMPDIR}/acr-*` counts made this assertion depend on what other reviews
+# were doing: a concurrent successful capture between the snapshots fails it,
+# and an unrelated deletion can offset this test's own leak into a false pass.
+# AGENTS.md says concurrent agents are expected, so a global count is not
+# evidence about this run.
+failscratch="${WORK}/failcap-scratch"
+mkdir -p "$failscratch"
+acr_dirs_before="$(ls -d "${failscratch}"/acr-* 2>/dev/null | wc -l | tr -d ' ')"
 ( cd "$failtmp" || exit 1
+  export TMPDIR="$failscratch"
   # A scope git cannot resolve: the capture dies after mktemp, before the
   # patch is complete.
   diff_args=(no-such-ref-zzz); untracked=0
@@ -274,7 +280,7 @@ acr_dirs_before="$(ls -d "${TMPDIR:-/tmp}"/acr-* 2>/dev/null | wc -l | tr -d ' '
   . "${WORK}/capture.sh"
   printf '%s' "$tmp" > "${WORK}/failcap-tmp" ) > "$fail_out" 2>&1
 fail_status=$?
-leftover="$(ls -d "${TMPDIR:-/tmp}"/acr-* 2>/dev/null | wc -l | tr -d ' ')"
+leftover="$(ls -d "${failscratch}"/acr-* 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$fail_status" != 0 ] && [ "$leftover" = "$acr_dirs_before" ]; then
   ok "a failed capture leaves no unannounced scratch directory"
 else

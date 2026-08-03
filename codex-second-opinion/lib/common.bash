@@ -1275,8 +1275,23 @@ rejected_model() {
   # 400s differently across modes; what is tightened is where the phrase may
   # appear. The residual: an error event whose message is echoed from the
   # artifact would still match, and no bash-level check can separate those.
-  grep -E '"type" *: *"error"|^ERROR|\berror\b' "$log" 2>/dev/null |
-    grep -qE "reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found"
+  # NOT a pipeline. `grep -q` exits at its first match, and under the
+  # wrapper's `pipefail` the producer's SIGPIPE becomes the pipeline's status
+  # — measured at 141 with a rejection line followed by a long tail, which
+  # reads as "no rejection" and skips the stale-default fallback entirely.
+  # Collect first, then match.
+  # Patterns in variables so neither this function nor the mutant that
+  # guards it has to nest quote styles.
+  local err_pat rej_pat errlines
+  err_pat='"type" *: *"error"|^ERROR|\berror\b'
+  rej_pat="reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found"
+  errlines="$(grep -E "$err_pat" "$log" 2>/dev/null || true)"
+  [ -n "$errlines" ] || return 1
+  # A here-string, not a pipe. Piping just moves the SIGPIPE to `printf`:
+  # measured, that returned 1 AND leaked "write error: Broken pipe" to the
+  # stderr the marker contract lives on. `<<<` has no producer process to
+  # kill. Same reason the MCP checks use here-strings a few functions up.
+  grep -qE "$rej_pat" <<< "$errlines"
 }
 
 defaults_rejected() {

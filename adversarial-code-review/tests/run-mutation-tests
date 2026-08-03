@@ -102,12 +102,19 @@ mutate "refutation grounding must be strong" "verifierRecord && verifierRecord.g
 # (contract.md section 4), so a reproduction may not overrule the verifier's own
 # statement that the obligation is UNKNOWN — that was promoting a record whose
 # every predicate was unsettled, undoing the grounding guard one line above.
-mutate "a reproduction does not settle an unknown obligation" "  const obligationEstablished = citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
+mutate "a reproduction does not settle an unknown obligation" "  const obligationEstablished = groundedRefutation
+    && citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
     && unsettledNamesValid && !unsettledNames.includes('contract_violation')" "  const obligationEstablished = true"
 # The half-rule this replaced: a MISSING verifier record is not "unsettled",
 # so keying on that let the run with no verification at all through the guard
 # that stopped the run with honest uncertainty.
-mutate "a missing verifier is not an established obligation" "  const obligationEstablished = citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
+# A citation says nothing about whether the analysis behind it could ground
+# itself. A record still weak after its one permitted rerun has settled
+# nothing, including the obligation.
+mutate "a weak verifier cannot establish the obligation" "  const obligationEstablished = groundedRefutation
+    && citedAs(verifierRecord, 'contract_violation', 'supports_candidate')" "  const obligationEstablished = citedAs(verifierRecord, 'contract_violation', 'supports_candidate')"
+mutate "a missing verifier is not an established obligation" "  const obligationEstablished = groundedRefutation
+    && citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
     && unsettledNamesValid && !unsettledNames.includes('contract_violation')" "  const obligationEstablished = holdsOf(verifierRecord, 'contract_violation') !== 'unsettled'"
 # Both signals, because they disagree: a record can set holds='unsettled' while
 # naming only another predicate in unsettled_predicates, which is exactly the
@@ -571,7 +578,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=228
+EXPECTED_TOTAL=229
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

@@ -2658,7 +2658,14 @@ const results = candidates.map((c) => {
   // The documented override survives: where a verifier completed and cited the
   // obligation, a reproduction still outranks an ADJUDICATOR that refuted,
   // went unresolved, or never returned. That promise is about adjudication.
-  const obligationEstablished = citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
+  // `groundedRefutation` too. citedAs checks the CITATION; it says nothing
+  // about whether the analysis behind it could ground itself, and a record
+  // still weak after its one permitted rerun has settled nothing at all
+  // (contract.md section 4). Without this, a weak verifier that cited the
+  // obligation established it, and a reproduction promoted on that — the same
+  // rule missing a fourth dimension after three rewrites got the first three.
+  const obligationEstablished = groundedRefutation
+    && citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
     && unsettledNamesValid && !unsettledNames.includes('contract_violation')
   if (terminal && !obligationFalsified && obligationEstablished && state !== 'substantiated') {
     ledger.terminal_evidence_overrides.push({
@@ -2937,6 +2944,15 @@ return {
     coverage_risks: ledger.coverage_risks.length,
     unknown_verdict_ids: ledger.unknown_verdict_ids.length,
     terminal_overrides: ledger.terminal_evidence_overrides.length,
+    // Reproductions that established causality and not the obligation. This
+    // is the outcome the obligation rule exists to produce, and it was the
+    // only ledger array with no count here — so the report had no signal to
+    // account for it, which is how a disclosure array becomes decorative.
+    // These belong in Unresolved Candidates WITH their reproduction attached:
+    // "this patch changed the behaviour and nobody established the behaviour
+    // was owed" is a different and more actionable statement than a bare
+    // unresolved.
+    reproduced_without_obligation: ledger.reproduced_without_obligation.length,
     findings_verified_below_final_severity: results.filter((r) => r.verified_below_final_severity).length,
     severity_unassigned: results.filter((r) => r.severity_unassigned && r.state === 'substantiated').length,
   },

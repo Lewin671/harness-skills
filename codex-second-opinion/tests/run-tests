@@ -55,6 +55,7 @@ cat > "$fake" <<'FAKE'
 #   FAKE_OUTPUT         result body, written verbatim (no trailing newline added)
 #   FAKE_ARGV_LOG       file to append each invocation's argv to, one line per call
 #   FAKE_FAIL           reject the model: emit a stale-model line and exit 1
+#   FAKE_ERROR_TAIL     emit N more error-like lines after a rejection
 #   FAKE_FAIL_ONCE      path: fail like FAKE_FAIL only while this file is
 #                       absent (created on the first failure)
 #   FAKE_EXIT           exit with this status after the event stream (default 0)
@@ -103,6 +104,16 @@ if [ -n "${FAKE_CONFIG_ERR:-}" ]; then
 fi
 if [ -n "${FAKE_FAIL:-}" ]; then
   echo '{"type":"error","message":"unknown model"}'
+  # FAKE_ERROR_TAIL: N more error-like lines AFTER the rejection, which is
+  # the order that matters. If the detector reads the log through a pipeline,
+  # `grep -q` exits at this match and the producer takes SIGPIPE on the
+  # remaining output; pipefail turns that into 141, read as "no rejection",
+  # and the fallback never fires. Emitting the tail BEFORE the match instead
+  # lets the consumer read to the end and the case proves nothing — measured,
+  # the mutant survived that ordering.
+  if [ -n "${FAKE_ERROR_TAIL:-}" ]; then
+    awk -v n="$FAKE_ERROR_TAIL" 'BEGIN{for(i=0;i<n;i++) print "{\"type\":\"error\",\"message\":\"padding line\"}"}'
+  fi
   exit 1
 fi
 if [ -n "${FAKE_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_FAIL_ONCE" ]; then
@@ -823,6 +834,24 @@ if [ "$fb_status" = 0 ] && grep -q 'came from your configured model' "$stderr"; 
 else
   bad "consult: fallback success emits the note and the answer"
 fi
+# A rejection followed by a long tail of error-like output. The detector must
+# still find it: reading the log through `grep | grep -q` makes the producer
+# take SIGPIPE the moment the second grep matches, and pipefail reports 141,
+# which reads as "no rejection" and skips the fallback entirely. Measured at
+# 141 before the fix, so the tail has to be long enough to fill a pipe buffer.
+tail_once="${workdir}/tail-fail-once"
+tail_err="${workdir}/tail-fallback.err"
+rm -f "$tail_once"
+FAKE_FAIL_ONCE="$tail_once" FAKE_ERROR_TAIL=20000 \
+  "$wrapper" review --repo "$dirty" --timeout 60 >/dev/null 2> "$tail_err"
+tail_status=$?
+if [ "$tail_status" = 0 ] && grep -q 'came from your configured model' "$tail_err"; then
+  ok "review: a rejection buried under a long error tail still triggers the fallback"
+else
+  bad "review: a rejection buried under a long error tail still triggers the fallback" \
+    "exit $tail_status"
+fi
+
 # The RETRY must inherit the user's configuration. Resending the model that was
 # just rejected is the one thing the fallback cannot do — and the fake succeeds
 # on its second call whatever the arguments, so only the argv shows it. First
@@ -2114,10 +2143,13 @@ done
 if [ "$leak_status" = 0 ] && [ -z "$leak_new" ]; then
   ok "review: a successful run leaves no watchdog sleeper behind"
 else
+  # REPORTED, never killed. A pid appearing between the two snapshots proves
+  # only when it started, not who started it — a concurrent agent's sleeper
+  # would be indistinguishable, and this repo expects concurrent agents. A
+  # leaked sleeper exits on its own deadline; killing a stranger's does not
+  # undo itself.
   bad "review: a successful run leaves no watchdog sleeper behind" \
-    "exit $leak_status, new sleepers: ${leak_new:-none}"
-  # Only ones this run created, never a pattern sweep.
-  for lp in $leak_new; do kill -TERM "$lp" 2>/dev/null || true; done
+    "exit $leak_status, sleepers that appeared during this run (not killed): ${leak_new:-none}"
 fi
 
 # --- the KILL backstop, for a codex that ignores TERM -------------------
@@ -2573,11 +2605,16 @@ fi
 # marker afterwards, so a forged one is final by construction. Every
 # diagnostic that interpolates such a value goes through `flat`; these cover
 # one path per file.
+# `--continue` is deliberately NOT here: its character-class guard rejects
+# anything outside [alnum-] before the diagnostic runs, so that `flat` call can
+# never receive a newline and a case aimed at it passes with the flattening
+# deleted. Measured — the run exited 3 on the constant error without ever
+# echoing the value. These four operands do reach their diagnostics.
 for diag in \
     'consult|--oops' \
-    'consult|--continue' \
     'review|--oops' \
-    'review|--base'; do
+    'review|--base' \
+    'review|--commit'; do
   dmode="${diag%%|*}"; dflag="${diag##*|}"
   dstderr="${workdir}/diag-forge.err"
   # The forged text is the value the DIAGNOSTIC will echo. Passing it as a
