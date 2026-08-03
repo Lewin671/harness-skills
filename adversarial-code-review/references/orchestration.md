@@ -80,9 +80,15 @@ acr_root="$(cd -- "$acr_root" 2>/dev/null && pwd -P)" || acr_root=/tmp
 # match, leaving the pattern `**`, which matches every path.
 acr_lf='
 '
+# CR too, not only LF. A carriage return is not a record separator here, but
+# the Workflow boundary rejects any patch_path carrying one — so a TMPDIR with
+# a `\r` completed Phase 0, persisted a scratch directory, and produced a
+# capture nothing downstream could consume. Refusing both is the only reading
+# under which "the handoff is intact" and "the run can continue" agree.
+acr_cr="$(printf '\r')"
 case "${acr_root}" in
-  *"${acr_lf}"*)
-    echo "the scratch path contains a line break, which would forge records in the Phase 0 handoff; set TMPDIR elsewhere" >&2
+  *"${acr_lf}"*|*"${acr_cr}"*)
+    echo "the scratch path contains a line break, which would forge records in the Phase 0 handoff and is refused at the Workflow boundary; set TMPDIR elsewhere" >&2
     exit 1 ;;
 esac
 # A partial clone fetches missing objects on demand, so a capture that needs
@@ -116,6 +122,15 @@ if [ "${acr_wt_status}" != 0 ]; then
   echo "could not enumerate worktrees (${acr_wt_status}); refusing to place scratch blind" >&2
   exit 1
 fi
+# The CURRENT checkout, explicitly. `git worktree list` does NOT report it in
+# every layout: measured on git 2.39.5, a repository created with
+# `--separate-git-dir` — and one driven by GIT_DIR + GIT_WORK_TREE — reports
+# the GIT STORAGE as the worktree record and omits the checkout entirely. A
+# TMPDIR inside the tree under review then passed every containment check
+# below, and Phase 0 wrote the patch, both snapshots and the manifests into
+# the very tree it was about to diff, before the baseline that could disclose
+# it existed. The shell is already at the top level, so this is that path.
+acr_roots+=("$(pwd -P)")
 acr_roots+=("$(git rev-parse --absolute-git-dir)")
 acr_roots+=("$(git rev-parse --path-format=absolute --git-common-dir)")
 for acr_repo in "${acr_roots[@]}"; do

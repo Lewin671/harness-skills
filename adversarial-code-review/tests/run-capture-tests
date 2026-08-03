@@ -321,6 +321,59 @@ else
     "exit $dash_status, tmp=${dash_tmp}"
 fi
 
+# The checkout root of a SEPARATE-GIT-DIR repository. Measured on git 2.39.5:
+# `git worktree list --porcelain` reports the git STORAGE as the worktree
+# record and omits the checkout entirely, so nothing in the containment loop
+# ever names the tree being reviewed — and a TMPDIR inside it was accepted.
+# Phase 0 then wrote the patch, both snapshots and the manifests into the very
+# tree it was about to diff, before the baseline that could disclose it.
+sgd_git="${WORK}/sgd-storage"
+sgd_wt="${WORK}/sgd-checkout"
+mkdir -p "$sgd_git"
+git init -q --separate-git-dir="$sgd_git" "$sgd_wt" 2>/dev/null
+if [ -d "$sgd_wt" ]; then
+  printf 'one\n' > "${sgd_wt}/tracked.txt"
+  git -C "$sgd_wt" add -A
+  git -C "$sgd_wt" "${commit_env[@]}" commit -q -m base
+  printf 'two\n' >> "${sgd_wt}/tracked.txt"
+  mkdir -p "${sgd_wt}/scratch"
+  sgd_status="$(TMPDIR="${sgd_wt}/scratch" run_capture "$sgd_wt" 'diff_args=(HEAD); untracked=1')"
+  sgd_tmp="$(cat "${WORK}/tmp-raw" 2>/dev/null)"
+  sgd_wt_real="$(cd "$sgd_wt" && pwd -P)"
+  sgd_tmp_real="$(cd "$sgd_tmp" 2>/dev/null && pwd -P)" || sgd_tmp_real="$sgd_tmp"
+  case "${sgd_tmp_real}/" in
+    "${sgd_wt_real}"/*) sgd_in_wt=yes ;;
+    *) sgd_in_wt=no ;;
+  esac
+  if [ "$sgd_status" = 0 ] && [ "$sgd_in_wt" = no ]; then
+    ok "scratch stays out of a separate-git-dir checkout"
+  else
+    bad "scratch stays out of a separate-git-dir checkout" "exit $sgd_status, tmp=${sgd_tmp}"
+  fi
+else
+  bad "scratch stays out of a separate-git-dir checkout" "fixture: git refused --separate-git-dir"
+fi
+
+# A carriage return, not only a newline. It forges no record here, but the
+# Workflow boundary refuses any patch_path carrying one — so without this the
+# recipe persisted a scratch directory and produced a capture that nothing
+# downstream could consume, which is a worse outcome than refusing.
+crtmp="${WORK}/cr$(printf '\r')dir"
+mkdir -p "$crtmp"
+cr_out="${WORK}/cr-refusal.out"
+( cd "$repo" || exit 1
+  export TMPDIR="$crtmp"
+  diff_args=(HEAD); untracked=1
+  # shellcheck source=/dev/null
+  . "${WORK}/capture.sh" ) > "$cr_out" 2>&1
+cr_status=$?
+if [ "$cr_status" != 0 ] && grep -q 'line break' "$cr_out"; then
+  ok "the capture recipe refuses a scratch path containing a carriage return"
+else
+  bad "the capture recipe refuses a scratch path containing a carriage return" \
+    "exit=$cr_status"
+fi
+
 # A scratch path carrying a line break must be refused, not used. The §8
 # handoff prints `tmp=%s\nbase_sha=%s\n`, so a TMPDIR ending in a newline
 # followed by `base_sha=<forty hex>` produces a handoff whose second record
@@ -1059,7 +1112,10 @@ else
   check_range 'edit\.txt 2 2' 'a one-line edit'
   # A deletion-only hunk has new-side length 0; it anchors where the deletion
   # sits rather than being dropped.
-  check_range 'shrink\.txt [0-9]+ [0-9]+' 'a deletion-only hunk'
+  # The exact range, not `[0-9]+ [0-9]+`. The shape form accepted
+  # `shrink.txt 999 999` — an explicit range that rejects every candidate in
+  # the hunk — which is the same defect the assertion exists to catch.
+  check_range 'shrink\.txt 1 1' 'a deletion-only hunk anchors where the deletion sits'
   # A wholly deleted file takes its span from the OLD side, under the OLD
   # path — the new side is /dev/null.
   check_range 'gone\.txt 1 3' 'a wholly deleted file'

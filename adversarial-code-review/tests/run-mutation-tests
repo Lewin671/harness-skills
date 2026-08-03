@@ -122,10 +122,10 @@ mutate "a missing verifier is not an established obligation" "  const obligation
 # The two execution counters must measure the same thing.
 mutate "attacks_not_executed counts what ran" "    attacks_not_executed: results.filter((r) => !(r.attack
       && (r.attack.execution_status === 'executed' || r.attack.ran_artifact_code === true))).length," "    attacks_not_executed: results.filter((r) => r.attack_grade !== 'reproduced' && r.attack_grade !== 'held').length,"
-mutate "terminal evidence override" "  if (terminal && !obligationFalsified && obligationEstablished && state !== 'substantiated') {" "  if (false) {"
+mutate "terminal evidence override" "  if (terminal && !controlOutranked && obligationEstablished && state !== 'substantiated') {" "  if (false) {"
 # A control settles which patch caused the change, not whether the old
 # behaviour was owed.
-mutate "reproduction does not override the obligation" "  if (terminal && obligationFalsified && state !== 'unresolved') {" "  if (false) {"
+mutate "reproduction does not override the obligation" "  if (terminal && controlOutranked && state !== 'unresolved') {" "  if (false) {"
 mutate "obligation falsification is a real one" "  const obligationFalsified = groundedRefutation
     && citedAs(verifierRecord, 'contract_violation', 'falsifies_candidate')" "  const obligationFalsified = false
     && citedAs(verifierRecord, 'contract_violation', 'falsifies_candidate')"
@@ -534,6 +534,19 @@ mutate "the frontier names the last victim" "trimmed[trimmed.length - 1]" "trimm
 mutate "victim tie-break is deterministic" "    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c" "    if (d < 0) worst = c"
 mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.fingerprint))" "  || 0"
 
+# The reachability half of the terminal-evidence rule. A control shows the
+# changed code misbehaves WHEN THE TEST CALLS IT; an attacker can call an
+# internal function directly with a state a caller's invariant excludes and
+# meet every reproduction requirement while the state cannot arise.
+mutate "a reproduction does not outrank a grounded reachability refutation" \
+  "  const controlOutranked = obligationFalsified || reachabilityFalsified" \
+  "  const controlOutranked = obligationFalsified"
+# And grounding gates that carve-out, so an ungrounded denial is not disclosed
+# as a grounded analysis showing the state cannot arise.
+mutate "the reachability carve-out needs grounding" "  const reachabilityFalsified = groundedRefutation
+    && citedAs(verifierRecord, 'reachability', 'falsifies_candidate')" "  const reachabilityFalsified = Boolean(verifierRecord)
+    && citedAs(verifierRecord, 'reachability', 'falsifies_candidate')"
+
 # The disclosure counts themselves. A checklist entry that exists and reports
 # zero beside a non-empty ledger array is the false-disclosure defect class in
 # its purest form — the report has a number to print, and the number is wrong.
@@ -591,7 +604,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=231
+EXPECTED_TOTAL=233
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

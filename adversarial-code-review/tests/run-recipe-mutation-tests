@@ -90,22 +90,33 @@ PY
   fi
 
   # A mutant that does not PARSE takes the suite down whatever it changed:
-  # every extracted block fails to source and each case goes red for a reason
-  # no assertion had anything to do with. Counting that as a kill is the same
-  # manufactured confidence this file exists to catch. The check runs against
-  # the block the suite EXTRACTS, not the markdown, because that is what gets
-  # executed — and a mutant that breaks extraction itself is caught here too.
+  # the block fails to source and each case goes red for a reason no assertion
+  # had anything to do with. Counting that as a kill is the same manufactured
+  # confidence this file exists to catch.
+  #
+  # EVERY bash block in the document, not just the capture one. Checking only
+  # the capture block meant a snapshot mutant that did not parse was scored
+  # `killed` — run-snapshot-tests could not source the recipe — while this
+  # gate looked at an untouched block and passed it. That is precisely the
+  # wrong-reason kill the gate claims to reject, so the gate itself was making
+  # the claim it exists to check. Blocks are concatenated into one file
+  # because `bash -n` reports the first syntax error in any of them, and no
+  # verdict here depends on which block it came from.
+  rm -f "${TMP}/blocks"
   if ! ACR_DOC="${work}/references/orchestration.md" ACR_OUT="${TMP}/blocks" python3 - <<'PY'
 import os, re, pathlib, sys
 doc = pathlib.Path(os.environ['ACR_DOC']).read_text()
 blocks = re.findall(r'```bash\n(.*?)```', doc, re.S)
-picked = [b for b in blocks if 'patch_sha256=' in b and 'acr_manifest()' in b]
-if len(picked) != 1:
+if not blocks:
     sys.exit(9)
-pathlib.Path(os.environ['ACR_OUT']).write_text(picked[0])
+# Each block in its own subshell: they are alternatives a reader chooses
+# between, not a script, so one block's `exit` or unbalanced `fi` must not be
+# parsed as continuing into the next.
+pathlib.Path(os.environ['ACR_OUT']).write_text(
+    ''.join('(\n' + b + '\n)\n' for b in blocks))
 PY
   then
-    printf '%-56s %s\n' "$name" "INVALID (the capture block no longer extracts)"
+    printf '%-56s %s\n' "$name" "INVALID (no bash blocks left to check)"
     survived=$((survived + 1))
     return
   fi
@@ -136,9 +147,20 @@ mutate "the recipe refuses a non-bash shell" \
   'false && {'
 mutate "the scratch path may not carry a line break" \
   'case "${acr_root}" in
-  *"${acr_lf}"*)' \
+  *"${acr_lf}"*|*"${acr_cr}"*)' \
   'case "${acr_root}" in
   *"no-such-marker-zzz"*)'
+# CR as well as LF. It forges no record, but the Workflow boundary refuses any
+# patch_path carrying one, so LF-only leaves a persisted capture that nothing
+# downstream can consume.
+mutate "a carriage return is refused too" \
+  '  *"${acr_lf}"*|*"${acr_cr}"*)' \
+  '  *"${acr_lf}"*)'
+# The checkout root of a separate-git-dir repository is reported by nothing
+# else: `git worktree list` names the git STORAGE and omits the tree.
+mutate "the current checkout root is enumerated" \
+  'acr_roots+=("$(pwd -P)")' \
+  ':'
 
 # --- where scratch lands ---------------------------------------------------
 # Everything Phase 0 writes goes under acr_root before the baseline that could
@@ -210,7 +232,7 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success — the manufactured
 # confidence this script exists to catch, one level up again.
-EXPECTED_TOTAL=9
+EXPECTED_TOTAL=11
 if [ -n "${ACR_RECIPEMUT_ONLY:-}" ]; then
   echo "PARTIAL RUN: ${total} of $((total + filtered)) mutants selected. This is NOT a sweep."
   echo "${survived}/${total} of the selected mutants survived."

@@ -2615,10 +2615,31 @@ const results = candidates.map((c) => {
   const obligationFalsified = groundedRefutation
     && citedAs(verifierRecord, 'contract_violation', 'falsifies_candidate')
     && unsettledNamesValid && !unsettledNames.includes('contract_violation')
-  if (terminal && obligationFalsified && state !== 'unresolved') {
+  // The same shape one predicate over, and it took as long to see. A control
+  // shows the changed code misbehaves WHEN THE TEST CALLS IT. That is
+  // reachability from the test, which is not the claim: an attacker can call
+  // an internal function directly with a state a caller's invariant excludes,
+  // watch it pass at base and fail after, and satisfy every reproduction
+  // requirement while the state remains unreachable in the program. So where
+  // a grounded refutation cites code showing the state cannot arise, the
+  // reproduction does not outrank it — the evidence conflicts, and that is
+  // what `unresolved` is for.
+  //
+  // A reproduction still outranks an UNGROUNDED reachability refutation, for
+  // the reason the obligation rule gives: an analysis still weak after its one
+  // permitted rerun has settled nothing, and letting it block the override
+  // would leave a controlled reproduction unresolved on the strength of an
+  // attempt the contract already discounts.
+  const reachabilityFalsified = groundedRefutation
+    && citedAs(verifierRecord, 'reachability', 'falsifies_candidate')
+    && unsettledNamesValid && !unsettledNames.includes('reachability')
+  const controlOutranked = obligationFalsified || reachabilityFalsified
+  if (terminal && controlOutranked && state !== 'unresolved') {
     ledger.forced_unresolved.push({
       candidate_id: c.id, anchor: `${c.file}:${c.line}`,
-      why: 'a controlled reproduction shows this patch changed the behaviour, and a grounded refutation cites code showing no obligation was violated — a reproduction settles causality, not whether the old behaviour was owed',
+      why: obligationFalsified
+        ? 'a controlled reproduction shows this patch changed the behaviour, and a grounded refutation cites code showing no obligation was violated — a reproduction settles causality, not whether the old behaviour was owed'
+        : 'a controlled reproduction shows this patch changed the behaviour, and a grounded refutation cites code showing the state cannot arise — a test that calls the changed code directly does not make it reachable',
     })
     state = 'unresolved'
   }
@@ -2667,7 +2688,7 @@ const results = candidates.map((c) => {
   const obligationEstablished = groundedRefutation
     && citedAs(verifierRecord, 'contract_violation', 'supports_candidate')
     && unsettledNamesValid && !unsettledNames.includes('contract_violation')
-  if (terminal && !obligationFalsified && obligationEstablished && state !== 'substantiated') {
+  if (terminal && !controlOutranked && obligationEstablished && state !== 'substantiated') {
     ledger.terminal_evidence_overrides.push({
       candidate_id: c.id, anchor: `${c.file}:${c.line}`, adjudicated_state: state, forced_state: 'substantiated',
       severity_unassigned: !v,
@@ -2675,7 +2696,7 @@ const results = candidates.map((c) => {
         + (v ? '' : '; no verdict was returned, so its severity is unassigned'),
     })
     state = 'substantiated'
-  } else if (terminal && !obligationFalsified && !obligationEstablished) {
+  } else if (terminal && !controlOutranked && !obligationEstablished) {
     // The control still settles the two predicates it can, so a refutation
     // resting on those does not survive it — but the result is `unresolved`,
     // not a finding. Reported with the reproduction attached, because "this
