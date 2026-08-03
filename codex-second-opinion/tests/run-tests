@@ -177,6 +177,9 @@ for a in "$@"; do
   # it: another agent, a rebuild, an editor save. The wrapper cannot prevent
   # that; it can notice.
   [ -n "${FAKE_TOUCH_REPO:-}" ] && printf 'drifted\n' >> "${FAKE_TOUCH_REPO}"
+  # Repoint a symlink at an equal-contents sibling: nothing a content hash
+  # taken THROUGH the link can see.
+  [ -n "${FAKE_RELINK:-}" ] && ln -sf link-b.txt "${FAKE_RELINK}"
   # A commit, not a file write: status and `diff HEAD` are unchanged by it.
   if [ -n "${FAKE_COMMIT_REPO:-}" ]; then
     printf 'mid\n' >> "${FAKE_COMMIT_REPO}/f.txt"
@@ -2603,6 +2606,57 @@ else
 fi
 rm -f "${dirty}/untracked-drift.txt"
 
+# An untracked file whose NAME looks like an option. Measured before the fix:
+# `-` hashed empty stdin and `--help` made shasum print usage, so editing
+# either was invisible to the fingerprint while the file sat in the scope the
+# review promises to cover.
+for optname in - --help; do
+  printf 'first\n' > "${dirty}/${optname}"
+  optdrift_out="${workdir}/optdrift.err"
+  FAKE_TOUCH_REPO="${dirty}/${optname}" "$wrapper" review --repo "$dirty" --uncommitted \
+    --timeout 30 >/dev/null 2> "$optdrift_out"
+  optdrift_status=$?
+  if [ "$optdrift_status" = 0 ] && grep -q 'does not describe the tree that passed the scope check' "$optdrift_out"; then
+    ok "review: an untracked file named '${optname}' is fingerprinted by content"
+  else
+    bad "review: an untracked file named '${optname}' is fingerprinted by content" "exit $optdrift_status"
+  fi
+  rm -f "${dirty}/${optname}"
+done
+
+# A symlink repointed between two files with EQUAL contents. Hashing through
+# the link reports no change; the tree holds the target text, and that is what
+# a review sees.
+printf 'same\n' > "${dirty}/link-a.txt"
+printf 'same\n' > "${dirty}/link-b.txt"
+ln -sf link-a.txt "${dirty}/moving-link"
+linkdrift_out="${workdir}/linkdrift.err"
+FAKE_RELINK="${dirty}/moving-link" "$wrapper" review --repo "$dirty" --uncommitted \
+  --timeout 30 >/dev/null 2> "$linkdrift_out"
+linkdrift_status=$?
+if [ "$linkdrift_status" = 0 ] && grep -q 'does not describe the tree that passed the scope check' "$linkdrift_out"; then
+  ok "review: a repointed untracked symlink counts as drift"
+else
+  bad "review: a repointed untracked symlink counts as drift" "exit $linkdrift_status"
+fi
+rm -f "${dirty}/moving-link" "${dirty}/link-a.txt" "${dirty}/link-b.txt"
+
+# An untracked file that cannot be read is not one that did not change. The
+# fingerprint is abandoned and the run says so, rather than reporting a digest
+# with one entry quietly missing.
+printf 'secret\n' > "${dirty}/unreadable.txt"
+chmod 000 "${dirty}/unreadable.txt"
+unread_out="${workdir}/unreadable.err"
+"$wrapper" review --repo "$dirty" --uncommitted --timeout 30 >/dev/null 2> "$unread_out"
+unread_status=$?
+if [ "$unread_status" = 0 ] && grep -q 'could not fingerprint the working tree' "$unread_out"; then
+  ok "review: an unreadable untracked file is reported as unmeasurable, not unchanged"
+else
+  bad "review: an unreadable untracked file is reported as unmeasurable, not unchanged" \
+    "exit $unread_status"
+fi
+chmod 644 "${dirty}/unreadable.txt"; rm -f "${dirty}/unreadable.txt"
+
 # A COMMIT landing mid-run, which is the --base case: status and `diff HEAD`
 # are both empty before and after, while merge-base..worktree — the whole of
 # that scope — has changed underneath.
@@ -2619,13 +2673,25 @@ printf 'b\n' >> "${basedrift}/f.txt"
 git -C "$basedrift" add -A
 git -C "$basedrift" -c user.email=t@t -c user.name=t commit -q -m ahead
 bdrift_out="${workdir}/basedrift.err"
+# HEAD before and after, and the tree state after. If the injected commit
+# fails it leaves a STAGED change, and the warning then comes from the status
+# component — the old mechanism this case exists to distinguish itself from.
+# The case passed that way when a commit-msg hook rejected the commit, so the
+# mechanism is asserted rather than assumed: HEAD moved, and the tree it left
+# behind is clean, which is exactly the state status and `diff HEAD` cannot
+# tell apart from the state before.
+bdrift_head_before="$(git -C "$basedrift" rev-parse HEAD)"
 FAKE_COMMIT_REPO="$basedrift" "$wrapper" review --repo "$basedrift" --base main \
   --timeout 30 >/dev/null 2> "$bdrift_out"
 bdrift_status=$?
-if [ "$bdrift_status" = 0 ] && grep -q 'does not describe the tree that passed the scope check' "$bdrift_out"; then
+bdrift_head_after="$(git -C "$basedrift" rev-parse HEAD)"
+bdrift_dirty="$(git -C "$basedrift" status --porcelain)"
+if [ "$bdrift_status" = 0 ] && grep -q 'does not describe the tree that passed the scope check' "$bdrift_out" \
+   && [ "$bdrift_head_before" != "$bdrift_head_after" ] && [ -z "$bdrift_dirty" ]; then
   ok "review: a commit landing mid-run counts as drift under --base"
 else
-  bad "review: a commit landing mid-run counts as drift under --base" "exit $bdrift_status"
+  bad "review: a commit landing mid-run counts as drift under --base" \
+    "exit $bdrift_status, head moved: $([ "$bdrift_head_before" != "$bdrift_head_after" ] && echo yes || echo no), leftover: $(printf '%s' "$bdrift_dirty" | tr '\n' ' ')"
 fi
 
 # And a QUIET tree must not be accused of drifting, or the warning is noise

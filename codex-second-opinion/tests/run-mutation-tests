@@ -261,6 +261,18 @@ mutate "a mismatched session's answer is not relayed" lib/consult.bash \
 # The live-tree scopes are read twice, minutes apart. Without the second read
 # the report describes a state nobody approved while the scope line still
 # names the same flag.
+# Names are never arguments: an untracked file called `-` hashes empty stdin
+# and one called `--help` prints usage, both measured.
+mutate "untracked files are hashed by redirect, not by name" lib/review.bash \
+  'shasum -a 256 < "$f"' \
+  'shasum -a 256 "$f"'
+# A symlink by its target TEXT: hashing through it misses a repoint between
+# two files with equal contents.
+mutate "a symlink is fingerprinted by its target text" lib/review.bash \
+  '        if [ -L "$f" ]; then' '        if false; then'
+# Unreadable is not unchanged.
+mutate "an unreadable untracked file abandons the fingerprint" lib/review.bash \
+  '      if [ -z "$head" ] || [ "$un_ok" != 1 ]; then' '      if [ -z "$head" ]; then'
 mutate "the fingerprint covers HEAD" lib/review.bash \
   '      fp="${head}${st}${df}${un}"' '      fp="${st}${df}${un}"'
 mutate "the fingerprint covers untracked content" lib/review.bash \
@@ -376,7 +388,7 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. Pin the count:
 # any mutant that silently fails to launch is a failure in itself.
-EXPECTED_TOTAL=62
+EXPECTED_TOTAL=65
 if [ -n "${CSO_MUT_ONLY:-}${CSO_MUT_FROM:-}${CSO_MUT_TO:-}" ]; then
   echo "PARTIAL RUN — ${filtered} of ${seen} mutant(s) filtered out."
   echo "${survived}/${total} of the selected mutants survived. This is NOT a full sweep."

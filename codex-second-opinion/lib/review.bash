@@ -118,15 +118,40 @@ scope_fingerprint() {
       head="$(git --no-optional-locks rev-parse HEAD 2>/dev/null)" || head=""
       st="$(git --no-optional-locks -c core.fsmonitor=false status --porcelain --untracked-files=normal 2>/dev/null)" || st=""
       df="$(git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff HEAD 2>/dev/null)" || df=""
-      # Hashed per file and NUL-read, so a newline in a path cannot forge an
-      # entry and a file that vanishes mid-run changes the list rather than
-      # being skipped silently.
-      un="$(git --no-optional-locks -c core.fsmonitor=false ls-files --others --exclude-standard -z 2>/dev/null \
-        | xargs -0 shasum -a 256 2>/dev/null | sort)" || un=""
+      # Each file REDIRECTED into shasum, never passed as an argument. Passing
+      # names is what the first version did, and measured: an untracked file
+      # named `-` hashes empty stdin (so editing it is invisible), one named
+      # `--help` makes shasum print usage and hash nothing, and `--` does not
+      # rescue either. A redirect cannot be mistaken for an option.
+      #
+      # Symlinks by their TARGET TEXT, because that is what the tree holds and
+      # what a review would see; hashing through the link reports no change
+      # when a link is repointed between two files with equal contents.
+      #
+      # And a file that cannot be read is not a file that is unchanged. Any
+      # failure here abandons the whole fingerprint, so the run reports
+      # "could not tell" rather than a digest missing one entry — which would
+      # compare equal next time and read as no drift.
+      local un_ok=1 f="" d=""
+      while IFS= read -r -d '' f; do
+        if [ -L "$f" ]; then
+          d="$(readlink "$f" 2>/dev/null)" || { un_ok=0; break; }
+          un="${un}${f}L${d}"
+        elif [ -r "$f" ] && [ -f "$f" ]; then
+          d="$(shasum -a 256 < "$f" 2>/dev/null | cut -d' ' -f1)" || { un_ok=0; break; }
+          [ -n "$d" ] || { un_ok=0; break; }
+          un="${un}${f}F${d}"
+        else
+          # Unreadable, a directory git listed, or gone between the listing
+          # and this line. None of them is "unchanged".
+          un_ok=0; break
+        fi
+      done < <(git --no-optional-locks -c core.fsmonitor=false ls-files --others --exclude-standard -z 2>/dev/null)
       fp="${head}${st}${df}${un}"
       # An empty tree is a legitimate state, so emptiness is not failure. What
-      # IS failure is having no HEAD to name and no digest to take.
-      if [ -z "$head" ]; then
+      # IS failure is having no HEAD to name, or an untracked listing this
+      # could not read to the end.
+      if [ -z "$head" ] || [ "$un_ok" != 1 ]; then
         fp=""
       else
         fp="$(printf '%s' "$fp" | shasum -a 256 2>/dev/null | cut -d' ' -f1)" || fp=""
