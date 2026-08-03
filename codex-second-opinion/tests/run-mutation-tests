@@ -44,7 +44,7 @@ total=0
 # banner and exit non-zero whatever the result, and the count pin below is
 # skipped because it no longer means anything.
 # CSO_MUT_FROM/CSO_MUT_TO select an index RANGE, which CSO_MUT_ONLY's
-# substring match cannot do: partitioning 56 mutants into survivable chunks
+# substring match cannot do: partitioning 57 mutants into survivable chunks
 # needs disjoint groups, and the names do not share prefixes. Indexes are
 # assigned in file order, so `FROM=1 TO=8` then `FROM=9 TO=16` covers
 # everything exactly once with no overlap and nothing skipped.
