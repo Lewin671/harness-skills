@@ -189,8 +189,8 @@ verdict. The exception, under contract.md §5: a controlled `reproduced`
 result forces `substantiated` even when adjudication refutes it, leaves
 it unresolved, or never completes — but only where the obligation AND reachability are each
 cited. A control settles causality, not whether the behaviour was owed
-nor the entry path. Reachability is cited by the verifier or by a
-reproduction driving the program's real entrypoint. Disclose the override, never imply the adjudicator agreed, and report
+nor the entry path. Reachability is cited by the verifier or by an attack's
+`entry_path` — a self-report held to a citation, not proof the route ran. Disclose the override, never imply the adjudicator agreed, and report
 severity as unassigned when no verdict supplied one. `verified_findings`
 splits into `adjudicator_substantiated_findings` plus
 `substantiated_by_terminal_evidence_only`.

@@ -565,9 +565,18 @@ mutate "an unestablished reachability is disclosed" \
 mutate "a cited public entrypoint establishes reachability" \
   "  const reachabilityEstablished = verifierReachability || attackReachability" \
   "  const reachabilityEstablished = verifierReachability"
-mutate "an entry_path claim must cite code" \
+mutate "an entry_path must name its entrypoint" \
   "    && nonblank(ev.entrypoint) && nonblank(ev.cited_code) && nonblank(ev.cited_path)" \
-  "    && nonblank(ev.entrypoint)"
+  "    && nonblank(ev.cited_code) && nonblank(ev.cited_path)"
+mutate "an entry_path must cite the code" \
+  "    && nonblank(ev.entrypoint) && nonblank(ev.cited_code) && nonblank(ev.cited_path)" \
+  "    && nonblank(ev.entrypoint) && nonblank(ev.cited_path)"
+mutate "an entry_path must cite the file" \
+  "    && nonblank(ev.entrypoint) && nonblank(ev.cited_code) && nonblank(ev.cited_path)" \
+  "    && nonblank(ev.entrypoint) && nonblank(ev.cited_code)"
+mutate "an entry_path line number starts at one" \
+  "    && Number.isInteger(ev.cited_line) && ev.cited_line >= 1)" \
+  "    && Number.isInteger(ev.cited_line))"
 mutate "only a public entrypoint counts" \
   "  const attackReachability = Boolean(terminal && ev && ev.kind === 'public_entrypoint'" \
   "  const attackReachability = Boolean(terminal && ev"
@@ -629,7 +638,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=238
+EXPECTED_TOTAL=241
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

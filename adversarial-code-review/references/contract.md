@@ -301,7 +301,22 @@ establishes: that **this patch** is why the test now fails. It substantiates
 the candidate over a refutation of **semantics** — the one thing a control
 settles.
 
-It does not settle **reachability**. The control shows the changed code
+Reachability can also be carried by the attack itself, and the limit of that
+has to be stated rather than implied. An attack may record an `entry_path`:
+the kind (`public_entrypoint` or `direct_internal_call`), the entrypoint, and
+code cited at a path and line. A cited `public_entrypoint` on a controlled
+reproduction establishes reachability.
+
+**That record is a self-report, and so is its citation.** Nothing here
+executes the cited route or checks that the reproducer went through it; an
+attacker can name a genuine route, cite the real line that registers it, and
+still have called the handler directly. The citation raises the cost of the
+claim and makes it checkable BY A READER — it is not proof, and no wording in
+this contract should be read as saying the script verified the path. Where
+that distinction matters to a finding, say in the report that reachability
+rests on the attacker's stated entry path.
+
+It does not settle **reachability** on its own. The control shows the changed code
 misbehaves when the TEST calls it, and an attacker can call an internal
 function directly with a state a caller's invariant excludes: base passes,
 patched fails, every reproduction requirement met, and the state still cannot

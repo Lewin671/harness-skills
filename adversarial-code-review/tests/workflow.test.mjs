@@ -705,6 +705,15 @@ function makeAgent(state, s) {
         return { ...fullReproduced, target_id: id,
           entry_path: { kind: 'public_entrypoint', entrypoint: 'POST /checkout', cited_line: 42 } }
       }
+      // One part missing at a time. The line-only fixture drops three checks
+      // at once, so deleting any single one of them stayed invisible.
+      if (s.attackEntryPart) {
+        const full = { kind: 'public_entrypoint', entrypoint: 'POST /checkout',
+          cited_path: 'routes.js', cited_line: 42, cited_code: "router.post('/checkout', handler)" }
+        if (s.attackEntryPart === 'zero_line') full.cited_line = 0
+        else delete full[s.attackEntryPart]
+        return { ...fullReproduced, target_id: id, entry_path: full }
+      }
       // Fully cited, and a DIRECT call. This is the honest attacker: it says
       // what it did, and what it did does not establish reachability.
       if (s.attackDirectCall) {
@@ -1494,7 +1503,14 @@ R.push(await run('cap keeps the more confident candidate', { ...BASE, budget_wu:
 // the route settles it. Refusing this would send dynamic routes, CLI dispatch
 // and framework callbacks to unresolved with a disclosure saying the test
 // called the code directly, which nobody checked.
-R.push(await run('a reproduction through a real entrypoint establishes reachability', { ...BASE },
+//
+// What this case proves is exactly the gate: a well-shaped, fully cited
+// record is promoted. It does NOT prove an HTTP route was exercised — no
+// fixture here runs one, and the script could not check it if it did. The
+// record is a self-report held to a citation, which is a bar, not a proof;
+// contract.md section 5 now says so rather than letting the test title imply
+// otherwise.
+R.push(await run('a cited public-entrypoint record establishes reachability', { ...BASE },
   { verifierReachabilityUnsettled: true, attackPublicEntry: true, adjAlwaysRefute: true,
     expect: (res) => {
       const terminal = res.candidate_results.filter((r) => r.attack_grade === 'reproduced'
@@ -1547,6 +1563,19 @@ R.push(await run('a fully cited direct call does not establish reachability', { 
       return res.ledger.reproduced_without_reachability.length
         ? true : 'the direct call was not disclosed as an unestablished reachability'
     } }))
+
+for (const part of ['cited_code', 'cited_path', 'entrypoint', 'zero_line']) {
+  R.push(await run(`an entry_path missing ${part} establishes nothing`, { ...BASE },
+    { verifierReachabilityUnsettled: true, attackEntryPart: part, adjAlwaysRefute: true,
+      expect: (res) => {
+        const t2 = res.candidate_results.filter((r) => r.attack_grade === 'reproduced' && r.execution_status === 'executed')
+        if (!t2.length) return 'no controlled reproduction ran, so the carve-out is untested'
+        const promoted = t2.filter((r) => r.state === 'substantiated')
+        return promoted.length
+          ? `${promoted[0].candidate_id} was substantiated on an entry_path missing ${part}`
+          : true
+      } }))
+}
 
 R.push(await run('reproduction where reachability was left unsettled', { ...BASE },
   { verifierReachabilityUnsettled: true, adjAlwaysRefute: true,
@@ -3038,7 +3067,10 @@ for (const r of R) {
       && String(x.verifier.contract_violation.finding || '').trim()
       && String(x.verifier.contract_violation.cited_code || '').trim()
       && String(x.verifier.contract_violation.cited_path || '').trim()
+      // `>= 1` like the rule: a line number of 0 is not a citation, and
+      // the mirror was weaker than the code it mirrors.
       && Number.isInteger(x.verifier.contract_violation.cited_line)
+      && x.verifier.contract_violation.cited_line >= 1
       && !(x.verifier.unsettled_predicates || []).includes('contract_violation')
       // Reachability on the same terms. A control settles that THIS PATCH
       // caused the failure, not that a production caller can reach the state
@@ -3062,12 +3094,13 @@ for (const r of R) {
         && String(x.verifier.reachability.cited_code || '').trim()
         && String(x.verifier.reachability.cited_path || '').trim()
         && Number.isInteger(x.verifier.reachability.cited_line)
+        && x.verifier.reachability.cited_line >= 1
         && !(x.verifier.unsettled_predicates || []).includes('reachability'))
       || (controlled(x.attack) && ep && ep.kind === 'public_entrypoint'
         && String(ep.entrypoint || '').trim()
         && String(ep.cited_code || '').trim()
         && String(ep.cited_path || '').trim()
-        && Number.isInteger(ep.cited_line)))
+        && Number.isInteger(ep.cited_line) && ep.cited_line >= 1))
     // Both directions. Without the second, deleting the whole rule leaves the
     // suite green: everything simply lands in the wider allowance.
     if (controlled(x.attack) && !(predicatesEstablished && reachabilityShown) && x.state === 'substantiated') {
