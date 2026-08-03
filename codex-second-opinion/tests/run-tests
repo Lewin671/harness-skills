@@ -177,6 +177,12 @@ for a in "$@"; do
   # it: another agent, a rebuild, an editor save. The wrapper cannot prevent
   # that; it can notice.
   [ -n "${FAKE_TOUCH_REPO:-}" ] && printf 'drifted\n' >> "${FAKE_TOUCH_REPO}"
+  # A commit, not a file write: status and `diff HEAD` are unchanged by it.
+  if [ -n "${FAKE_COMMIT_REPO:-}" ]; then
+    printf 'mid\n' >> "${FAKE_COMMIT_REPO}/f.txt"
+    git -C "$FAKE_COMMIT_REPO" add -A >/dev/null 2>&1
+    git -C "$FAKE_COMMIT_REPO" -c user.email=t@t -c user.name=t commit -q -m mid >/dev/null 2>&1
+  fi
   prev="$a"
 done
 # A thread id that is not a session UUID — schema drift, or a wrapper in the
@@ -2579,6 +2585,47 @@ if [ "$drift_status" = 0 ] && grep -q 'does not describe the tree that passed th
 else
   bad "review: a working tree that changed under the run is reported as non-reproducible" \
     "exit $drift_status"
+fi
+
+# The CONTENT of an untracked file. Porcelain prints `?? path` whatever the
+# file now says, and --uncommitted promises to review untracked files, so the
+# obvious status+diff fingerprint is blind to a change in the very thing under
+# review. Measured before the fix: both samples identical.
+printf 'first\n' > "${dirty}/untracked-drift.txt"
+undrift_out="${workdir}/undrift.err"
+FAKE_TOUCH_REPO="${dirty}/untracked-drift.txt" "$wrapper" review --repo "$dirty" --uncommitted \
+  --timeout 30 >/dev/null 2> "$undrift_out"
+undrift_status=$?
+if [ "$undrift_status" = 0 ] && grep -q 'does not describe the tree that passed the scope check' "$undrift_out"; then
+  ok "review: a changed untracked file counts as drift"
+else
+  bad "review: a changed untracked file counts as drift" "exit $undrift_status"
+fi
+rm -f "${dirty}/untracked-drift.txt"
+
+# A COMMIT landing mid-run, which is the --base case: status and `diff HEAD`
+# are both empty before and after, while merge-base..worktree — the whole of
+# that scope — has changed underneath.
+basedrift="${workdir}/basedrift"
+git init -q "$basedrift"
+printf 'a\n' > "${basedrift}/f.txt"
+git -C "$basedrift" add -A
+git -C "$basedrift" -c user.email=t@t -c user.name=t commit -q -m base
+git -C "$basedrift" branch -M main 2>/dev/null
+# The ahead commit goes on its OWN branch, or it moves `main` with it and the
+# merge-base is HEAD — an empty scope, which exits 2 before any fingerprint.
+git -C "$basedrift" checkout -q -b work 2>/dev/null
+printf 'b\n' >> "${basedrift}/f.txt"
+git -C "$basedrift" add -A
+git -C "$basedrift" -c user.email=t@t -c user.name=t commit -q -m ahead
+bdrift_out="${workdir}/basedrift.err"
+FAKE_COMMIT_REPO="$basedrift" "$wrapper" review --repo "$basedrift" --base main \
+  --timeout 30 >/dev/null 2> "$bdrift_out"
+bdrift_status=$?
+if [ "$bdrift_status" = 0 ] && grep -q 'does not describe the tree that passed the scope check' "$bdrift_out"; then
+  ok "review: a commit landing mid-run counts as drift under --base"
+else
+  bad "review: a commit landing mid-run counts as drift under --base" "exit $bdrift_status"
 fi
 
 # And a QUIET tree must not be accused of drifting, or the warning is noise

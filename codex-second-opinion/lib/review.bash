@@ -90,9 +90,11 @@ set_scope() {
 # same flag. Cheap to fingerprint, and the alternative is a reproducibility
 # claim the wrapper cannot support.
 #
-# Failure to fingerprint is not silence: an empty value would compare equal to
-# the next empty value and read as "no drift", which is the reassuring answer.
-# It records a sentinel instead, and the sentinel never matches.
+# Failure to fingerprint is not silence, and it is not a sentinel either. The
+# first version of this recorded `__unfingerprintable__` and hashed it, so two
+# failures produced the SAME digest and compared equal — reported as "no
+# drift", the reassuring answer, by the very code whose comment claimed the
+# sentinel never matches. An unmeasurable tree is reported as unmeasurable.
 scope_fingerprint() {
   local __var="$1" fp=""
   case "$scope_flag" in
@@ -103,11 +105,32 @@ scope_fingerprint() {
       # writes the repo under review, and the diff inside a throwaway index
       # because git refreshes the real one otherwise (measured). Adding a git
       # call without them is how a read-only promise stops being true.
-      fp="$(git --no-optional-locks -c core.fsmonitor=false status --porcelain --untracked-files=normal 2>/dev/null)" || fp=""
-      fp="${fp}$(git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff HEAD 2>/dev/null)" || fp=""
-      [ -n "$fp" ] || fp="__unfingerprintable__"
-      fp="$(printf '%s' "$fp" | shasum -a 256 2>/dev/null | cut -d' ' -f1)" || fp="__unfingerprintable__"
-      [ -n "$fp" ] || fp="__unfingerprintable__"
+      #
+      # Four parts, because the obvious two miss changes to the very thing
+      # being reviewed. Measured, both invisible to status+diff alone:
+      #   - HEAD, or a commit landing mid-run leaves status and `diff HEAD`
+      #     both empty while `merge-base..worktree` — the whole of --base —
+      #     has changed underneath.
+      #   - the CONTENT of untracked files, since porcelain prints `?? path`
+      #     whatever the file now says, and --uncommitted promises to review
+      #     untracked files.
+      local head="" st="" df="" un=""
+      head="$(git --no-optional-locks rev-parse HEAD 2>/dev/null)" || head=""
+      st="$(git --no-optional-locks -c core.fsmonitor=false status --porcelain --untracked-files=normal 2>/dev/null)" || st=""
+      df="$(git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff HEAD 2>/dev/null)" || df=""
+      # Hashed per file and NUL-read, so a newline in a path cannot forge an
+      # entry and a file that vanishes mid-run changes the list rather than
+      # being skipped silently.
+      un="$(git --no-optional-locks -c core.fsmonitor=false ls-files --others --exclude-standard -z 2>/dev/null \
+        | xargs -0 shasum -a 256 2>/dev/null | sort)" || un=""
+      fp="${head}${st}${df}${un}"
+      # An empty tree is a legitimate state, so emptiness is not failure. What
+      # IS failure is having no HEAD to name and no digest to take.
+      if [ -z "$head" ]; then
+        fp=""
+      else
+        fp="$(printf '%s' "$fp" | shasum -a 256 2>/dev/null | cut -d' ' -f1)" || fp=""
+      fi
       ;;
     *) fp="__not_applicable__" ;;
   esac
@@ -120,6 +143,13 @@ check_scope_drift() {
   case "$scope_flag" in --uncommitted|--base) : ;; *) return 0 ;; esac
   local after=""
   scope_fingerprint after
+  # Three outcomes, not two. "Could not tell" is its own answer and must not
+  # borrow the wording of "did not change".
+  if [ -z "$after" ] || [ -z "${scope_fp_before:-}" ]; then
+    echo "warning: could not fingerprint the working tree, so whether it changed while codex read it is unknown." >&2
+    echo "warning: treat the result as non-reproducible; use --commit, which names an immutable object." >&2
+    return 0
+  fi
   [ "$after" != "$scope_fp_before" ] || return 0
   echo "warning: the working tree changed while codex was reading it, so this review does not describe the tree that passed the scope check." >&2
   echo "warning: treat the result as non-reproducible; rerun on a quiet tree, or use --commit, which names an immutable object." >&2
