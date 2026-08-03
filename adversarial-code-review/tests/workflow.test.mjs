@@ -684,6 +684,34 @@ function makeAgent(state, s) {
       // script stops checking that field, this scenario starts passing it as
       // terminal evidence and the suite notices. `bareReproduced` alone cannot
       // detect the loss of any single check.
+      // A reproduction driven through the program's real entrypoint. Every
+      // other field is identical to a direct internal call, which is the
+      // whole reason the claim has to be stated and cited.
+      if (s.attackPublicEntry) {
+        return { ...fullReproduced, target_id: id,
+          entry_path: { kind: 'public_entrypoint', entrypoint: 'POST /checkout',
+            cited_path: 'routes.js', cited_line: 42, cited_code: "router.post('/checkout', handler)" } }
+      }
+      // The same claim with nothing behind it: no citation, so it establishes
+      // nothing. A bare `kind` is the self-report this skill refuses.
+      if (s.attackBareEntryClaim) {
+        return { ...fullReproduced, target_id: id,
+          entry_path: { kind: 'public_entrypoint', entrypoint: 'POST /checkout' } }
+      }
+      // A line number without the code or the file it came from. Each part of
+      // the citation needs its own case, or dropping two of the three checks
+      // leaves the third carrying the whole rule.
+      if (s.attackEntryLineOnly) {
+        return { ...fullReproduced, target_id: id,
+          entry_path: { kind: 'public_entrypoint', entrypoint: 'POST /checkout', cited_line: 42 } }
+      }
+      // Fully cited, and a DIRECT call. This is the honest attacker: it says
+      // what it did, and what it did does not establish reachability.
+      if (s.attackDirectCall) {
+        return { ...fullReproduced, target_id: id,
+          entry_path: { kind: 'direct_internal_call', entrypoint: 'applyDiscount()',
+            cited_path: 'cart.js', cited_line: 88, cited_code: 'function applyDiscount(state)' } }
+      }
       if (s.attackOmit) {
         const m = { ...fullReproduced }
         if (s.attackOmit === 'control') { delete m.control_passed; delete m.control_result; delete m.specification_citation }
@@ -1460,6 +1488,66 @@ R.push(await run('cap keeps the more confident candidate', { ...BASE, budget_wu:
 // established reachability and section 4 is not satisfied. Blocking only an
 // explicit falsification left this open: the denial was handled and the
 // admission of ignorance was not.
+// The other direction, which is the one I asked to be attacked. A
+// reproduction driven through the program's real entrypoint DOES establish
+// reachability — the verifier could not settle it statically, and exercising
+// the route settles it. Refusing this would send dynamic routes, CLI dispatch
+// and framework callbacks to unresolved with a disclosure saying the test
+// called the code directly, which nobody checked.
+R.push(await run('a reproduction through a real entrypoint establishes reachability', { ...BASE },
+  { verifierReachabilityUnsettled: true, attackPublicEntry: true, adjAlwaysRefute: true,
+    expect: (res) => {
+      const terminal = res.candidate_results.filter((r) => r.attack_grade === 'reproduced'
+        && r.execution_status === 'executed')
+      if (!terminal.length) return 'no controlled reproduction ran, so the carve-out is untested'
+      const blocked = terminal.filter((r) => r.state !== 'substantiated')
+      if (blocked.length) return `${blocked[0].candidate_id} stayed ${blocked[0].state} despite a cited public entrypoint`
+      return res.ledger.reproduced_without_reachability.length === 0
+        || 'a cited entrypoint was disclosed as an unestablished reachability'
+    } }))
+
+// And the claim has to be BACKED. A bare kind with no citation is the
+// self-report the skill refuses everywhere else; without this the field is a
+// single word an attacker can type to promote anything.
+R.push(await run('a bare public-entrypoint claim establishes nothing', { ...BASE },
+  { verifierReachabilityUnsettled: true, attackBareEntryClaim: true, adjAlwaysRefute: true,
+    expect: (res) => {
+      const terminal = res.candidate_results.filter((r) => r.attack_grade === 'reproduced'
+        && r.execution_status === 'executed')
+      if (!terminal.length) return 'no controlled reproduction ran, so the carve-out is untested'
+      const promoted = terminal.filter((r) => r.state === 'substantiated')
+      if (promoted.length) return `${promoted[0].candidate_id} was substantiated on an uncited entry_path claim`
+      return res.ledger.reproduced_without_reachability.length
+        ? true : 'the uncited claim was not disclosed as an unestablished reachability'
+    } }))
+
+// Each part of the citation, separately. A cited_line alone left the other
+// two checks free to be deleted together.
+R.push(await run('an entry_path citation needs the code and the file', { ...BASE },
+  { verifierReachabilityUnsettled: true, attackEntryLineOnly: true, adjAlwaysRefute: true,
+    expect: (res) => {
+      const t2 = res.candidate_results.filter((r) => r.attack_grade === 'reproduced' && r.execution_status === 'executed')
+      if (!t2.length) return 'no controlled reproduction ran, so the carve-out is untested'
+      const promoted = t2.filter((r) => r.state === 'substantiated')
+      return promoted.length
+        ? `${promoted[0].candidate_id} was substantiated on a line number with no code or path`
+        : true
+    } }))
+
+// The honest attacker that says it called the function directly. Nothing is
+// missing from its record — only the KIND differs — so this is the one case
+// that asks whether the kind is read at all.
+R.push(await run('a fully cited direct call does not establish reachability', { ...BASE },
+  { verifierReachabilityUnsettled: true, attackDirectCall: true, adjAlwaysRefute: true,
+    expect: (res) => {
+      const t2 = res.candidate_results.filter((r) => r.attack_grade === 'reproduced' && r.execution_status === 'executed')
+      if (!t2.length) return 'no controlled reproduction ran, so the carve-out is untested'
+      const promoted = t2.filter((r) => r.state === 'substantiated')
+      if (promoted.length) return `${promoted[0].candidate_id} was substantiated on a self-declared direct internal call`
+      return res.ledger.reproduced_without_reachability.length
+        ? true : 'the direct call was not disclosed as an unestablished reachability'
+    } }))
+
 R.push(await run('reproduction where reachability was left unsettled', { ...BASE },
   { verifierReachabilityUnsettled: true, adjAlwaysRefute: true,
     expect: (res) => {
@@ -2958,21 +3046,36 @@ for (const r of R) {
       // like the others. Without this term the invariant demanded the very
       // promotion the rule exists to prevent — it required `substantiated`
       // for a record that said outright it could not tell.
-      && x.verifier.reachability
-      && x.verifier.reachability.holds === 'supports_candidate'
-      && String(x.verifier.reachability.finding || '').trim()
-      && String(x.verifier.reachability.cited_code || '').trim()
-      && String(x.verifier.reachability.cited_path || '').trim()
-      && Number.isInteger(x.verifier.reachability.cited_line)
-      && !(x.verifier.unsettled_predicates || []).includes('reachability'))
+      && !(x.verifier.unsettled_predicates || []).includes('contract_violation'))
+    // Reachability, from EITHER side. The verifier can cite it statically, or
+    // a controlled reproduction driven through the program's real entrypoint
+    // can demonstrate it — held to the same evidence bar, because a bare
+    // `kind` with no citation is the self-report this skill refuses. Written
+    // as its own term rather than folded into the obligation one: the two are
+    // established by different records and a single conjunction hid that.
+    const ep = x.attack && x.attack.entry_path
+    const reachabilityShown = Boolean(
+      (x.verifier && x.verifier.grounding === 'strong'
+        && x.verifier.reachability
+        && x.verifier.reachability.holds === 'supports_candidate'
+        && String(x.verifier.reachability.finding || '').trim()
+        && String(x.verifier.reachability.cited_code || '').trim()
+        && String(x.verifier.reachability.cited_path || '').trim()
+        && Number.isInteger(x.verifier.reachability.cited_line)
+        && !(x.verifier.unsettled_predicates || []).includes('reachability'))
+      || (controlled(x.attack) && ep && ep.kind === 'public_entrypoint'
+        && String(ep.entrypoint || '').trim()
+        && String(ep.cited_code || '').trim()
+        && String(ep.cited_path || '').trim()
+        && Number.isInteger(ep.cited_line)))
     // Both directions. Without the second, deleting the whole rule leaves the
     // suite green: everything simply lands in the wider allowance.
-    if (controlled(x.attack) && !predicatesEstablished && x.state === 'substantiated') {
+    if (controlled(x.attack) && !(predicatesEstablished && reachabilityShown) && x.state === 'substantiated') {
       fail++
       problems.push(`${r.name}: ${x.candidate_id} was substantiated on a reproduction with no cited `
         + 'evidence that the obligation was violated and the state is reachable — a control settles causality, not whether the behaviour was owed nor whether a real caller gets there')
     }
-    if (controlled(x.attack) && predicatesEstablished && !obligationKilled && !reachabilityKilled && x.state !== 'substantiated') {
+    if (controlled(x.attack) && predicatesEstablished && reachabilityShown && !obligationKilled && !reachabilityKilled && x.state !== 'substantiated') {
       fail++
       problems.push(`${r.name}: ${x.candidate_id} has a controlled reproduction and a cited obligation `
         + `but is ${x.state}`)

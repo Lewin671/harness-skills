@@ -568,6 +568,25 @@ const ATTACK_SCHEMA = {
     patched_result: { type: 'string' },
     predicted_signature: { type: 'string' },
     signature_matched: { type: 'boolean' },
+    // How the test got there. A control settles that THIS PATCH caused the
+    // failure; it says nothing about the entry path, and the two look
+    // identical in every other field. A reproduction driven through the
+    // program's real entrypoint DOES establish reachability — dynamically
+    // registered routes, CLI dispatch, framework callbacks and generated
+    // wiring are all hard to settle statically and straightforward to settle
+    // by exercising them — so the attacker states which it did and cites the
+    // entrypoint. Unstated means direct: the claim has to be made, not
+    // assumed, and a missing field is the case where nobody said.
+    entry_path: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['public_entrypoint', 'direct_internal_call'] },
+        entrypoint: { type: 'string' },
+        cited_path: { type: 'string' },
+        cited_line: { type: 'integer' },
+        cited_code: { type: 'string' },
+      },
+    },
     // The attacker's OWN counterexample, for the case the prompt asks for:
     // an unproven critical goes straight to execution, and if the environment
     // cannot run anything the reasoning it did is the only evidence there is.
@@ -950,6 +969,16 @@ ${(triage.probe_candidates || []).length
    A reproduction without patch_applied and patched_failed both true is
    downgraded automatically — it is indistinguishable from a test that never
    ran against the change.
+   - entry_path — HOW your test reached the changed code. A control shows this
+     patch caused the failure; it cannot show whether a real caller gets
+     there, and a test that constructs the state by calling an internal
+     function directly looks identical in every other field. Set
+     kind: "public_entrypoint" ONLY if you drove the program's real entry —
+     an HTTP route, a CLI command, a registered callback — and then name the
+     entrypoint and cite the code that dispatches to it (cited_path,
+     cited_line, cited_code). Otherwise set kind: "direct_internal_call".
+     A public_entrypoint claim with no citation establishes nothing, and an
+     absent entry_path is read as a direct call: the claim has to be made.
 
 5. GRADE, honestly:
    - reproduced: the test failed, the failure matched predicted_signature,
@@ -1011,11 +1040,15 @@ Decisive rules:
 - A plausible alternative reading is NOT a refutation.
 - Grade "reproduced" is terminal evidence for what it settles: that THIS
   patch is why the test fails. Substantiate the candidate over a refutation
-  of semantics or reachability. It does NOT settle whether the old behaviour
-  was owed — a test written for the previous behaviour of an intentional
-  change reproduces perfectly — so where the verifier grounds a cited
-  falsification of contract_violation and a controlled reproduction exists,
-  the evidence conflicts and the state is unresolved.
+  of semantics. It does NOT settle whether the old behaviour was owed — a
+  test written for the previous behaviour of an intentional change reproduces
+  perfectly — and it does NOT settle reachability: the test may have called
+  an internal function directly with a state a real caller cannot produce.
+  So where the verifier grounds a cited falsification of contract_violation
+  or of reachability and a controlled reproduction exists, the evidence
+  conflicts and the state is unresolved. Reachability counts as shown when a
+  verifier cites it, or when the attack drove the program's own entrypoint
+  and cited the dispatch.
 - Grade "held" is real evidence against, but only for the vectors actually
   attempted.
 - Grades "blocked" and "inconclusive" carry NO information about the code.
@@ -2604,9 +2637,12 @@ const results = candidates.map((c) => {
   // pass at base and fail after, and satisfy every reproduction check without
   // any obligation having been violated.
   //
-  // Terminal evidence therefore overrides a refutation of semantics or
-  // reachability — the two things it does settle — and not a grounded, cited
-  // falsification of the obligation. Where both exist the evidence conflicts,
+  // Terminal evidence therefore overrides a refutation of SEMANTICS — the one
+  // thing it does settle — and not a grounded, cited falsification of the
+  // obligation or of reachability. It shows the code misbehaves when the TEST
+  // calls it; whether a real caller gets there is established by a citation,
+  // from the verifier or from an attack that drove the program's own
+  // entrypoint and said so. Where both exist the evidence conflicts,
   // which is what `unresolved` is for.
   // `groundedRefutation` explicitly: citedAs checks the citation, not whether
   // the analysis behind it could ground itself. A refutation still weak after
@@ -2644,7 +2680,7 @@ const results = candidates.map((c) => {
     })
     state = 'unresolved'
   }
-  // What a control settles is semantics and reachability. The OBLIGATION is
+  // What a control settles is semantics. Reachability and the OBLIGATION are
   // the third predicate and a reproduction supplies nothing about it, so
   // substantiation — which contract.md section 4 defines as all three
   // affirmatively supported — needs it established some other way.
@@ -2698,15 +2734,32 @@ const results = candidates.map((c) => {
   // that said outright it could not tell, which is the weaker evidence of the
   // two. A reproduction promoted on that says a defect is real while the only
   // record on the question is an admission of ignorance.
-  const reachabilityEstablished = groundedRefutation
+  const verifierReachability = groundedRefutation
     && citedAs(verifierRecord, 'reachability', 'supports_candidate')
     && unsettledNamesValid && !unsettledNames.includes('reachability')
+  // Or the attack established it. A reproduction driven through the program's
+  // real entrypoint demonstrates the path a static reviewer could not settle,
+  // and refusing it would send a whole class of genuine defects — dynamic
+  // routes, CLI dispatch, framework callbacks — to unresolved with a
+  // disclosure claiming the test called the code directly, which nobody
+  // checked and which would often be false.
+  //
+  // Held to the same evidence bar as a verifier citation: the kind stated
+  // explicitly, the entrypoint named, and code cited at a path and line. A
+  // bare `kind` with nothing behind it is the self-report this skill refuses
+  // everywhere else. And only for an attack that actually RAN under control —
+  // an unexecuted attack's claim about its own entry path is a prediction.
+  const ev = s.attack && s.attack.entry_path
+  const attackReachability = Boolean(terminal && ev && ev.kind === 'public_entrypoint'
+    && nonblank(ev.entrypoint) && nonblank(ev.cited_code) && nonblank(ev.cited_path)
+    && Number.isInteger(ev.cited_line) && ev.cited_line >= 1)
+  const reachabilityEstablished = verifierReachability || attackReachability
   const predicatesEstablished = obligationEstablished && reachabilityEstablished
   if (terminal && !controlOutranked && predicatesEstablished && state !== 'substantiated') {
     ledger.terminal_evidence_overrides.push({
       candidate_id: c.id, anchor: `${c.file}:${c.line}`, adjudicated_state: state, forced_state: 'substantiated',
       severity_unassigned: !v,
-      why: 'a controlled reproduction outranks a refutation of semantics or reachability, and a verifier cites evidence for the violated obligation (contract.md section 5)'
+      why: 'a controlled reproduction outranks a refutation of semantics, and the violated obligation and the reachability of the state are each supported by cited evidence (contract.md section 5)'
         + (v ? '' : '; no verdict was returned, so its severity is unassigned'),
     })
     state = 'substantiated'
@@ -2719,7 +2772,7 @@ const results = candidates.map((c) => {
     if (state !== 'unresolved') {
       ledger.forced_unresolved.push({
         candidate_id: c.id, anchor: `${c.file}:${c.line}`,
-        why: 'a controlled reproduction shows this patch changed the behaviour, which settles semantics and reachability but not the obligation — and no verifier cited evidence that the old behaviour was owed, so this is not a finding',
+        why: 'a controlled reproduction shows this patch changed the behaviour, which settles semantics but neither reachability nor the obligation — and the cited evidence needed for those is missing, so this is not a finding',
       })
       state = 'unresolved'
     }
@@ -2734,7 +2787,7 @@ const results = candidates.map((c) => {
     if (!reachabilityEstablished) {
       ledger.reproduced_without_reachability.push({
         candidate_id: c.id, anchor: `${c.file}:${c.line}`,
-        why: 'reproduced under control, but no cited evidence establishes that a production caller can reach this state — the test called the changed code directly',
+        why: 'reproduced under control, but no cited evidence establishes that a production caller can reach this state — a control settles which patch caused the failure, not the entry path the test took',
       })
     }
   }

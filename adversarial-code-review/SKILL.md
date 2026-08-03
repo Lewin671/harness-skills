@@ -184,16 +184,15 @@ short patch hash, profile and model roles.
 Never report a defect-coverage percentage: the denominator is unknown.
 
 Never call a candidate verified unless the script's normalised final
-state is `substantiated`. Normally that requires a grounded adjudicator
-verdict. The sole exception is a normalised controlled `reproduced`
-result under contract.md §5: terminal evidence forces `substantiated`
-even when adjudication refutes it, leaves it unresolved, or never
-completes — but only where a verifier cited the violated obligation. A
-control settles causality, never whether the behaviour was owed, so
-without that citation the state is `unresolved`. Disclose the override, never imply the adjudicator agreed, and report
-severity as unassigned when no verdict supplied one. The
-result splits this for you — `verified_findings` equals
-`adjudicator_substantiated_findings` plus
+state is `substantiated`. That normally needs a grounded adjudicator
+verdict. The exception, under contract.md §5: a controlled `reproduced`
+result forces `substantiated` even when adjudication refutes it, leaves
+it unresolved, or never completes — but only where the obligation AND reachability are each
+cited. A control settles causality, not whether the behaviour was owed
+nor the entry path. Reachability is cited by the verifier or by a
+reproduction driving the program's real entrypoint. Disclose the override, never imply the adjudicator agreed, and report
+severity as unassigned when no verdict supplied one. `verified_findings`
+splits into `adjudicator_substantiated_findings` plus
 `substantiated_by_terminal_evidence_only`.
 
 Tag every finding whose `scope_binding.level` is `file_level_only`: its

@@ -558,6 +558,20 @@ mutate "an unestablished reachability is disclosed" \
   "      ledger.reproduced_without_reachability.push({" \
   "      ledger.reproduced_without_obligation.push({"
 
+# Attack-side reachability. A reproduction driven through the program's real
+# entrypoint establishes the path a static reviewer could not settle — and the
+# claim has to be BACKED, or `kind` is one word an attacker types to promote
+# anything.
+mutate "a cited public entrypoint establishes reachability" \
+  "  const reachabilityEstablished = verifierReachability || attackReachability" \
+  "  const reachabilityEstablished = verifierReachability"
+mutate "an entry_path claim must cite code" \
+  "    && nonblank(ev.entrypoint) && nonblank(ev.cited_code) && nonblank(ev.cited_path)" \
+  "    && nonblank(ev.entrypoint)"
+mutate "only a public entrypoint counts" \
+  "  const attackReachability = Boolean(terminal && ev && ev.kind === 'public_entrypoint'" \
+  "  const attackReachability = Boolean(terminal && ev"
+
 # The disclosure counts themselves. A checklist entry that exists and reports
 # zero beside a non-empty ledger array is the false-disclosure defect class in
 # its purest form — the report has a number to print, and the number is wrong.
@@ -615,7 +629,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=235
+EXPECTED_TOTAL=238
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

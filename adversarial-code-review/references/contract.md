@@ -347,8 +347,10 @@ nothing. Every section may be empty; none may be absent.
    patch. `reproduced` entries sort first, then by severity.
 
    One entry may lack a severity: a controlled reproduction substantiates
-   on its own evidence, so if adjudication did not complete for it, the
-   defect is real but nobody graded it. Report it as **severity
+   without an adjudicator verdict — on its own evidence for semantics, and
+   on the citations that carry reachability and the obligation — so if
+   adjudication did not complete for it, the defect is real but nobody
+   graded it. Report it as **severity
    unassigned** and say why. Inventing a severity, or demoting a
    reproduced defect out of the findings because a grader failed, would
    both be worse than the honest gap.

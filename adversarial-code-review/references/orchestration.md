@@ -1326,7 +1326,9 @@ Total budget: 600 seconds per executed target.
 
 Executable attacks on critical candidates are **not** gated on the
 verifier's refutation. Gating execution on a model's refutation vote is
-what made the old "reproduced overrides the skeptic" rule unreachable:
+what made the old "reproduced overrides the skeptic" rule — which overrides a
+refutation of SEMANTICS, reachability and the obligation still needing cited
+evidence — unreachable:
 a candidate the verifier killed was never attacked, so the override had
 nothing to override. Verification and attack run in different waves but
 neither vetoes the other; the adjudicator sees both.
