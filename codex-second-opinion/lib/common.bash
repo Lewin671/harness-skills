@@ -206,6 +206,28 @@ resolved_path() {
 # that walk so the nested one can test both too.
 # `printf` is the last command, so a caller reads the path from stdout and the
 # empty string when nothing along the way exists.
+# Follow a symlink CHAIN to its end, not one hop. `readlink` returns the next
+# link's TEXT, and that text can name another link: `sessions -> /outside/next`
+# with `next -> repo/x` resolves in one hop to `/outside/next`, whose nearest
+# existing ancestor is `/outside` — outside the repository — while `mkdir -p`
+# follows both hops and lands inside it. Bounded, because a chain can be a
+# cycle and this must terminate rather than detect. The last path reached is
+# what the caller checks, so a cycle is judged on a real path instead of
+# silently approving.
+resolve_link_chain() {
+  local path="$1" target hops=0
+  while [ -L "$path" ] && [ "$hops" -lt 40 ]; do
+    target="$(readlink "$path" 2>/dev/null)" || break
+    case "$target" in
+      /*) path="$target" ;;
+      *)  path="${path%/*}/${target}" ;;
+    esac
+    path="$(resolved_path "$path")"
+    hops=$((hops + 1))
+  done
+  printf '%s' "$path"
+}
+
 resolved_existing_ancestor() {
   local probe="$1" parent
   while [ -n "$probe" ] && [ ! -d "$probe" ]; do
@@ -1035,12 +1057,8 @@ common_resolve_scratch() {
       # error, a link to something that is not a directory — leaves the
       # placement unmeasurable, and unmeasurable is refused.
       if [ -L "$sessions_path" ] && [ ! -e "$sessions_path" ]; then
-        sessions_target="$(readlink "$sessions_path" 2>/dev/null || true)"
-        case "$sessions_target" in
-          '') resolved_sessions="" ;;
-          /*) resolved_sessions="$(resolved_path "$sessions_target")" ;;
-          *)  resolved_sessions="$(resolved_path "${sessions_path%/*}/${sessions_target}")" ;;
-        esac
+        sessions_target="$(resolve_link_chain "$sessions_path")"
+        [ "$sessions_target" = "$sessions_path" ] || resolved_sessions="$sessions_target"
         sessions_dangling=1
       else
         echo "error: $(flat "${sessions_path}") exists but could not be entered, so where codex would write cannot be established" >&2
@@ -1071,15 +1089,23 @@ common_resolve_scratch() {
   # traversal, and its target was outside, so the check passed while codex's
   # logical path `sessions/2026/08/...` landed in the repository. Under `-L` a
   # link to a directory is `-type d` and is followed; a BROKEN one is still
-  # `-type l`, which is why both are matched. A symlink cycle makes find exit
-  # non-zero and the run refuses rather than looping.
+  # `-type l`, which is why both are matched.
+  #
+  # What stops a symlink CYCLE is the depth bound, not find's loop detection —
+  # which is implementation-defined and was nearly asserted here on the
+  # strength of the wrong binary. Measured: `/usr/bin/find` on macOS walks
+  # `self/self/self`, hits `-maxdepth 3` and exits 0, while GNU find and bfs
+  # report "filesystem loop" and exit non-zero. Both terminate. Under the
+  # first the cycle's entries resolve to a directory already checked, so
+  # nothing new is approved; under the second the run refuses and says why.
+  # Neither proceeds blind, and neither hangs.
   #
   # The exit status rides the stream as a final NUL record, because a process
   # substitution's own status is unreachable — a `find` that failed on an
   # unreadable directory would otherwise read as a tree with no symlinks in
   # it, which is the same fail-open as not looking. Unforgeable here: `find`
   # is given an ABSOLUTE root, so every real record starts with `/`.
-  local nested="" nested_real="" nested_target="" nested_anc="" nested_inside="" nested_status=missing
+  local nested="" nested_real="" nested_anc="" nested_inside="" nested_status=missing
   if [ -n "$resolved_sessions" ] && [ "$sessions_dangling" -eq 0 ]; then
     while IFS= read -r -d '' nested; do
       case "$nested" in
@@ -1101,12 +1127,7 @@ common_resolve_scratch() {
           # location — which is under CODEX_HOME, outside the repository, and
           # passes. The target text is resolved instead, relative to the link's
           # directory when it is not absolute.
-          nested_target="$(readlink "$nested_real" 2>/dev/null || true)"
-          case "$nested_target" in
-            '') nested="$nested_real" ;;
-            /*) nested="$(resolved_path "$nested_target")" ;;
-            *)  nested="$(resolved_path "${nested_real%/*}/${nested_target}")" ;;
-          esac
+          nested="$(resolve_link_chain "$nested_real")"
         fi
         # BOTH forms, exactly as the CODEX_HOME check does it: the path as
         # written, and its nearest existing ancestor resolved through symlinks.

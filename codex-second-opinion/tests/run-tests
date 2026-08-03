@@ -81,7 +81,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # This is a coverage guard, not merely a pretty total: a misplaced group
   # boundary must fail instead of making a faster suite by silently skipping
   # assertions.
-  expected=278
+  expected=281
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -2367,6 +2367,36 @@ else
 fi
 rm -rf "$droot_home"
 
+# A dangling CHAIN, both at the root and one level down: the first link points
+# at a second link, which points at a path inside the repository that does not
+# exist yet. Resolving one hop stops at the middle link, whose own nearest
+# existing ancestor is outside, so every containment check passed while
+# `mkdir -p` followed both hops and landed in the tree.
+for chainkind in root nested; do
+  dchain_home="${workdir}/dangling-chain-${chainkind}"
+  dchain_mid="${workdir}/dangling-chain-mid-${chainkind}"
+  mkdir -p "$dchain_home"
+  ln -s "${dirty}/not-created-yet" "$dchain_mid"
+  case "$chainkind" in
+    root)   ln -s "$dchain_mid" "${dchain_home}/sessions" ;;
+    nested) mkdir -p "${dchain_home}/sessions"
+            ln -s "$dchain_mid" "${dchain_home}/sessions/2026" ;;
+  esac
+  stderr="${workdir}/codex-home-dchain-${chainkind}.err"
+  argv_log="${workdir}/argv-dchain-${chainkind}.log"
+  CODEX_HOME="$dchain_home" FAKE_ARGV_LOG="$argv_log" \
+    "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+  status=$?
+  if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr" &&
+     ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+    ok "review: a dangling sessions CHAIN (${chainkind}) into the repo fails closed"
+  else
+    bad "review: a dangling sessions CHAIN (${chainkind}) into the repo fails closed" \
+      "exit $status: $(tr '\n' '|' < "$stderr")"
+  fi
+  rm -rf "$dchain_home" "$dchain_mid"
+done
+
 # A CHAIN: sessions/2026 points at an outside directory, and that directory's
 # own `08` points into the repository. A physical traversal reports only the
 # first link, whose target is outside, so the check passed while codex's
@@ -2460,6 +2490,32 @@ else
     "exit $status: $(tr '\n' '|' < "$stderr")"
 fi
 rm -rf "$unread_home"
+
+# A symlink CYCLE is the cost of following links at all, and what must hold is
+# that the walk TERMINATES and never proceeds blind. Which of the two legal
+# outcomes appears depends on the `find` in PATH, and asserting one of them was
+# a mistake this case was written to make: measured, `/usr/bin/find` on macOS
+# walks `self/self/self`, hits the depth bound and exits 0, while GNU find and
+# bfs report a filesystem loop and exit non-zero. So the assertion is the
+# property both share — it finishes, and if it refused it said why — rather
+# than whichever answer the local binary happens to give.
+loop_home="${workdir}/loop-home"
+mkdir -p "${loop_home}/sessions"
+ln -s "${loop_home}/sessions" "${loop_home}/sessions/self"
+stderr="${workdir}/codex-home-loop.err"
+argv_log="${workdir}/argv-loop.log"
+CODEX_HOME="$loop_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a symlink cycle under sessions terminates (enumerated, nothing new approved)"
+elif [ "$status" = 3 ] && grep -q 'could not enumerate the session directories' "$stderr"; then
+  ok "review: a symlink cycle under sessions terminates (refused, and said why)"
+else
+  bad "review: a symlink cycle under sessions terminates" \
+    "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+rm -rf "$loop_home"
 
 # The walk must not refuse an ordinary sessions tree. Real ones hold date
 # directories and rollout files, and a check that tripped on those would make

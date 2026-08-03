@@ -226,7 +226,7 @@ The exit code is the verdict on *the run*, never on the code:
 |------|---------|------------|
 | `0` | A result was produced | Read stdout and relay it. |
 | `2` | (review only) Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
-| `3` | Environment problem | No `codex`, not a git tree (bare repos included), bad flags or mode (including a half-specified model), unsafe features kept enabled, or standalone MCP servers that could not be enumerated or switched off. Report it; do not silently substitute a Claude answer. |
+| `3` | Environment problem | No `codex`, not a git tree (bare repos included), bad flags or mode (including a half-specified model or a half-set `CODEX_SECOND_OPINION_MODEL`/`_EFFORT` pair), unsafe features kept enabled, standalone MCP servers that could not be enumerated or switched off, or a `CODEX_HOME` whose session directories could not be enumerated — an unreadable one, or a symlink cycle. Report it; do not silently substitute a Claude answer. |
 | `4` | Codex ran and failed | Read stderr. Also covers a consult follow-up whose session could not be resumed (the un-continued answer is discarded), and a rejected configuration key — which means either the codex CLI drifted away from this script's safety keys or the user's own config has an unknown field. |
 | `5` | Hung and was killed | Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
 

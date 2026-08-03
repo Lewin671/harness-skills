@@ -2547,7 +2547,7 @@ if (adjInput.length && !adjudicationTokenBlocked) {
   for (const o of out) {
     if (!o) { adjBatchesFailed += 1; continue }
     if (!o.r) { adjBatchesFailed += 1; for (const e of o.b) failed('adjudicator', e.candidate.id, 'adjudicator batch did not return') ; continue }
-    // A batch that RETURNED and graded nothing has failed too. The schema
+    // A batch that RETURNED and reconciled nothing has failed too. The schema
     // admits an empty `verdicts` array, and reconcile discards ids that name
     // no candidate in the batch and repeats of one that does — so a
     // schema-valid `{verdicts: []}` used to end the run `adjudication_failed`
@@ -2555,6 +2555,15 @@ if (adjInput.length && !adjudicationTokenBlocked) {
     // still carried the evidence, but the count a reader takes at face value
     // contradicted the status beside it, which is the one thing a disclosure
     // number must not do.
+    //
+    // What this counts, exactly: a batch that attached NO verdict to any
+    // candidate it was given. It is not a count of batches whose verdicts were
+    // later found unusable — a record with blank `decisive_evidence` is
+    // attached here and rejected downstream, and that rejection is disclosed
+    // per candidate in `ledger.malformed`, by name, which says more than a
+    // batch tally could. Two different failures, counted where each is
+    // actually known; folding the second into this number would make it mean
+    // neither thing precisely.
     const before = verdictById.size
     reconcile(o.r.verdicts, o.b.map((e) => e.candidate.id), 'adjudicator', verdictById)
     if (verdictById.size === before) adjBatchesFailed += 1
