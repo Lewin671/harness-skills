@@ -17,7 +17,7 @@ Options:
   --inherit            use model and effort from the codex config
   --allow-mcp          keep standalone MCP servers reachable
   --repo <DIR>         repository for context (default: current directory)
-  --timeout <SECONDS>  abort a hung run (default: 3000; max 86400)`
+  --timeout <SECONDS>  abort a hung run (default: 3000; 1-86400)`
 
 function usage() { process.stderr.write(`${USAGE}\n`) }
 

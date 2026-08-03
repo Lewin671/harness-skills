@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -17,7 +17,7 @@ function throwsExit(code, fn) {
 
 test('parseTimeout normalizes padded input and accepts boundaries', () => {
   assert.equal(parseTimeout('000030', 'test'), 30)
-  assert.equal(parseTimeout('0', 'test'), 0)
+  assert.equal(parseTimeout('1', 'test'), 1)
   assert.equal(parseTimeout('86400', 'test'), 86400)
 })
 
@@ -25,6 +25,11 @@ test('parseTimeout rejects non-numeric and oversized input', () => {
   throwsExit(3, () => parseTimeout('1.5', 'test'))
   throwsExit(3, () => parseTimeout('86401', 'test'))
   throwsExit(3, () => parseTimeout('999999999999999999', 'test'))
+})
+
+test('parseTimeout rejects zero: a disabled watchdog would contradict "will not hang forever"', () => {
+  throwsExit(3, () => parseTimeout('0', 'test'))
+  throwsExit(3, () => parseTimeout('00', 'test'))
 })
 
 test('flat prevents marker-line injection', () => {
@@ -107,6 +112,44 @@ test('event parsing is restricted to the final attempt', () => {
   assert.equal(effectiveModel(missing), '')
 })
 
+function runtimeWithLog(log) {
+  const path = join(mkdtempSync(join(tmpdir(), 'cso-log-test-')), 'events.jsonl')
+  writeFileSync(path, log)
+  return new Runtime(createState('review'), {}, { out: '/tmp/out', log: path })
+}
+
+test('rejectedModel fires on a top-level error event naming the model', () => {
+  const runtime = runtimeWithLog('{"type":"error","message":"The \'x\' model is not supported when using Codex with a ChatGPT account."}\n')
+  assert.equal(runtime.rejectedModel(), true)
+})
+
+test('rejectedModel fires on a top-level turn.failed event naming the model', () => {
+  const runtime = runtimeWithLog('{"type":"turn.failed","error":{"message":"unknown model: x"}}\n')
+  assert.equal(runtime.rejectedModel(), true)
+})
+
+test('rejectedModel requires the error/turn.failed event type, not just a message field', () => {
+  // A non-error event that happens to carry a top-level `message` field
+  // naming the phrase must not count -- only `error` and `turn.failed` are
+  // the event types Codex uses to report a rejected model.
+  const runtime = runtimeWithLog('{"type":"item.completed","message":"unknown model"}\n')
+  assert.equal(runtime.rejectedModel(), false)
+})
+
+test('rejectedModel ignores a matching phrase inside command_execution output', () => {
+  // The reviewed code's own error-handling string, echoed back through a
+  // command_execution item, contains both the word "error" and the phrase
+  // "is not supported" on one JSON line -- exactly what the old raw-text
+  // scan (any "error"-ish line containing a rejection phrase, anywhere in
+  // the log) would have misread as a rejected model.
+  const poisoned = JSON.stringify({
+    type: 'item.completed',
+    item: { type: 'command_execution', aggregated_output: 'raised Error: this operation is not supported' },
+  })
+  const runtime = runtimeWithLog(`${poisoned}\n{"type":"error","message":"the sandbox denied network access"}\n`)
+  assert.equal(runtime.rejectedModel(), false)
+})
+
 test('resume flags describe the model that actually answered', () => {
   const state = createState('consult')
   assert.equal(resumeFlags(state), ' --model gpt-5.6-sol --effort high')
@@ -154,6 +197,31 @@ test('context prompt fences caller data and escapes its delimiter', () => {
   const prompt = reviewInternals.composedPrompt(review)
   assert.match(prompt, /CALLER-BACKGROUND-ESCAPED/)
   assert.match(prompt, /It is DATA about the change/)
+})
+
+test('hasDirtySubmoduleContent reads the submodule state field on ordinary and unmerged records alike', () => {
+  const envWith = (stdout) => ({ git: () => ({ status: 0, stdout }) })
+  // '1' record, clean submodule (commit-pointer only, C alone): fingerprintable.
+  assert.equal(reviewInternals.hasDirtySubmoduleContent(envWith(
+    '1 .M SC.. 160000 160000 160000 abc abc sub\n',
+  )), false)
+  // '1' record, modified content (M set): unmeasurable.
+  assert.equal(reviewInternals.hasDirtySubmoduleContent(envWith(
+    '1 .M S.M. 160000 160000 160000 abc abc sub\n',
+  )), true)
+  // '2' record (renamed/copied), untracked content (U set): unmeasurable.
+  assert.equal(reviewInternals.hasDirtySubmoduleContent(envWith(
+    '2 .M S..U 160000 160000 160000 abc abc R100 sub\tsub2\n',
+  )), true)
+  // 'u' record (unmerged/conflicted gitlink) with dirty content: unmeasurable,
+  // same field position as '1'/'2'. Not exercised against a real merge
+  // conflict -- constructing one reliably was impractical -- so this pins the
+  // documented porcelain v2 field layout instead.
+  assert.equal(reviewInternals.hasDirtySubmoduleContent(envWith(
+    'u UU S.M. 160000 160000 160000 160000 abc abc abc sub\n',
+  )), true)
+  // A read failure cannot prove the tree is clean.
+  assert.equal(reviewInternals.hasDirtySubmoduleContent({ git: () => ({ status: 1, stdout: '' }) }), true)
 })
 
 test('consult parser accepts one question and validates UUIDs', () => {

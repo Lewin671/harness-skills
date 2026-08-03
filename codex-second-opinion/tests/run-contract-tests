@@ -16,7 +16,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
     utility review_args review_models review_safety_head review_safety_tail
     review_fallback review_behavior review_context review_paths_mcp_a
     review_paths_mcp_b review_paths_scopes_a review_paths_scopes_b review_git_a
-    review_git_b review_storage_a review_storage_b review_watchdog_a
+    review_git_b review_git_filters review_storage_a review_storage_b review_watchdog_a
     review_watchdog_b review_watchdog_c consult_basic consult_sessions_a
     consult_sessions_b review_drift_files review_drift_scope
     review_diagnostics consult_markers_a consult_markers_b
@@ -86,7 +86,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # Five former Bash-internal path helper assertions now live in the fast
   # node:test suite. This contract suite stays black-box and counts only
   # behavior observable through the executable entry point.
-  expected=278
+  expected=290
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -281,6 +281,14 @@ for a in "$@"; do
     printf 'mid\n' >> "${FAKE_COMMIT_REPO}/f.txt"
     git -C "$FAKE_COMMIT_REPO" add -A >/dev/null 2>&1
     git -C "$FAKE_COMMIT_REPO" -c user.email=t@t -c user.name=t commit -q -m mid >/dev/null 2>&1
+  fi
+  # A filter binding that did not exist when the initial guard ran, appearing
+  # only while codex is "running" -- the window the post-run re-check exists
+  # to cover, not the one the initial refusal already covers.
+  if [ -n "${FAKE_ADD_FILTER_REPO:-}" ]; then
+    git -C "$FAKE_ADD_FILTER_REPO" config filter.midfilter.clean 'cat' >/dev/null 2>&1
+    printf '*.mid filter=midfilter\n' >> "${FAKE_ADD_FILTER_REPO}/.gitattributes"
+    printf 'x\n' > "${FAKE_ADD_FILTER_REPO}/newfile.mid"
   fi
   prev="$a"
 done
@@ -2095,6 +2103,262 @@ fi
 
 }
 
+group_review_git_filters() {
+# --- a configured clean/process filter must not run during a precheck --
+#
+# git status/diff apply .gitattributes-selected clean/process filters to
+# compute worktree content, independent of --no-ext-diff/--no-textconv
+# (those only affect the *display* driver). guardWorktreeFilters has to
+# refuse before scopeNonempty's first status/diff call ever reaches such a
+# path, and it has to do so WITHOUT itself running the filter -- the marker
+# file below is the only proof of that: a refusal that quietly ran the
+# filter to decide would look identical from the exit code and message
+# alone.
+marker="${workdir}/filter-ran-marker"
+
+filterrepo="${workdir}/filterrepo"
+git init -q "$filterrepo"
+git -C "$filterrepo" "${commit_env[@]}" commit -q --allow-empty -m init
+git -C "$filterrepo" config filter.marker.clean "sh -c 'touch ${marker}; cat'"
+printf '*.mk filter=marker\n' > "$filterrepo/.gitattributes"
+git -C "$filterrepo" add .gitattributes
+git -C "$filterrepo" "${commit_env[@]}" commit -q -m attrs
+printf 'one\n' > "$filterrepo/tracked.mk"
+git -C "$filterrepo" add tracked.mk
+git -C "$filterrepo" "${commit_env[@]}" commit -q -m "add tracked.mk"
+printf 'two\n' >> "$filterrepo/tracked.mk"
+
+rm -f "$marker"
+stderr="${workdir}/gf-tracked.err"
+"$wrapper" review --repo "$filterrepo" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && [ ! -e "$marker" ] && grep -q 'clean/process filter configured for: marker' "$stderr"; then
+  ok "review: a configured filter applicable to a dirty TRACKED file refuses without running it"
+else
+  bad "review: a configured filter applicable to a dirty TRACKED file refuses without running it" \
+    "exit $status, marker ran: $([ -e "$marker" ] && echo yes || echo no)"
+fi
+
+# The same repo, but the in-scope path is untracked rather than modified --
+# ls-files --others has to be part of what this guard enumerates, not just
+# the tracked tree.
+untrackedrepo="${workdir}/filterrepo-untracked"
+git init -q "$untrackedrepo"
+git -C "$untrackedrepo" "${commit_env[@]}" commit -q --allow-empty -m init
+git -C "$untrackedrepo" config filter.marker.clean "sh -c 'touch ${marker}; cat'"
+printf '*.mk filter=marker\n' > "$untrackedrepo/.gitattributes"
+git -C "$untrackedrepo" add .gitattributes
+git -C "$untrackedrepo" "${commit_env[@]}" commit -q -m attrs
+printf 'new\n' > "$untrackedrepo/new.mk"
+
+rm -f "$marker"
+stderr="${workdir}/gf-untracked.err"
+"$wrapper" review --repo "$untrackedrepo" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && [ ! -e "$marker" ] && grep -q 'clean/process filter configured for: marker' "$stderr"; then
+  ok "review: a configured filter applicable to a new UNTRACKED file refuses without running it"
+else
+  bad "review: a configured filter applicable to a new UNTRACKED file refuses without running it" \
+    "exit $status, marker ran: $([ -e "$marker" ] && echo yes || echo no)"
+fi
+
+# --allow-git-filters is the explicit opt-in this guard exists to require --
+# it must actually let the run through and say why, mirroring --allow-mcp.
+rm -f "$marker"
+stderr="${workdir}/gf-allowed.err"
+"$wrapper" review --repo "$filterrepo" --allow-git-filters --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && grep -q -- '--allow-git-filters was set' "$stderr"; then
+  ok "review: --allow-git-filters lets a configured, applicable filter through"
+else
+  bad "review: --allow-git-filters lets a configured, applicable filter through" "exit $status"
+fi
+
+# A filter driver can be configured (globally, say, by `git lfs install`)
+# without a single file in THIS repo ever binding to it. Refusing on
+# configuration alone -- rather than on an applicable path -- would make
+# --allow-git-filters routine on any Git-LFS-enabled machine instead of a
+# deliberate, rare opt-in. No .gitattributes rule names the driver at all.
+noattr="${workdir}/filterrepo-noattr"
+git init -q "$noattr"
+git -C "$noattr" config filter.marker.clean "sh -c 'touch ${marker}; cat'"
+printf 'one\n' > "$noattr/f.txt"
+git -C "$noattr" add f.txt
+git -C "$noattr" "${commit_env[@]}" commit -q -m init
+printf 'two\n' >> "$noattr/f.txt"
+
+rm -f "$marker"
+stderr="${workdir}/gf-noattr.err"
+"$wrapper" review --repo "$noattr" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && ! grep -q 'clean/process filter' "$stderr"; then
+  ok "review: a configured but inapplicable filter does not block the review"
+else
+  bad "review: a configured but inapplicable filter does not block the review" "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+
+# --commit diffs two historical blobs and never touches the working tree, so
+# the same repository and the same applicable filter must not be blocked --
+# proving the scope gate, not just the config/attribute checks above.
+commitsha="$(git -C "$filterrepo" rev-parse HEAD)"
+rm -f "$marker"
+stderr="${workdir}/gf-commit.err"
+"$wrapper" review --repo "$filterrepo" --commit "$commitsha" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && [ ! -e "$marker" ]; then
+  ok "review: --commit scope is exempt from the worktree filter guard"
+else
+  bad "review: --commit scope is exempt from the worktree filter guard" "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+
+# A git-config read that genuinely fails (not "no matches") must refuse
+# rather than being read as "nothing configured".
+cfgfail="${workdir}/cfgfail-bin"
+mkdir -p "$cfgfail"
+real_git="$(command -v git)"
+cat > "${cfgfail}/git" <<GITSHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = config ] && [ "\${2:-}" = --name-only ]; then
+  echo "fatal: fixture forced config read to fail" >&2
+  exit 128
+fi
+exec "${real_git}" "\$@"
+GITSHIM
+chmod +x "${cfgfail}/git"
+stderr="${workdir}/gf-cfgfail.err"
+PATH="${cfgfail}:$PATH" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'could not read git config' "$stderr"; then
+  ok "review: a failing filter-config read refuses rather than assuming none are configured"
+else
+  bad "review: a failing filter-config read refuses rather than assuming none are configured" "exit $status"
+fi
+# And the shim itself must not be what makes it fail.
+cat > "${cfgfail}/git" <<GITSHIM2
+#!/usr/bin/env bash
+exec "${real_git}" "\$@"
+GITSHIM2
+PATH="${cfgfail}:$PATH" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ]; then
+  ok "review: a pass-through git shim still runs (the config-read refusal was the failure, not the shim)"
+else
+  bad "review: a pass-through git shim still runs (the config-read refusal was the failure, not the shim)" "exit $status"
+fi
+
+# probeFilterRisk() never dies itself -- it is called once before Codex runs
+# (where guardWorktreeFilters dying on a read failure is correct) and again
+# from scopeFingerprint after Codex already has a result (where dying would
+# discard it). A config read that succeeds on the first call and starts
+# failing only on the second exercises that distinction directly.
+midcfgfail="${workdir}/midcfgfail-bin"
+mkdir -p "$midcfgfail"
+midcfgfail_count="${workdir}/midcfgfail.count"
+cat > "${midcfgfail}/git" <<GITSHIM3
+#!/usr/bin/env bash
+if [ "\${1:-}" = config ] && [ "\${2:-}" = --name-only ]; then
+  n=0
+  [ -f "${midcfgfail_count}" ] && n="\$(cat "${midcfgfail_count}")"
+  n=\$((n + 1))
+  printf '%s' "\$n" > "${midcfgfail_count}"
+  if [ "\$n" -gt 1 ]; then
+    echo "fatal: fixture forced config to fail" >&2
+    exit 128
+  fi
+fi
+exec "${real_git}" "\$@"
+GITSHIM3
+chmod +x "${midcfgfail}/git"
+rm -f "$midcfgfail_count"
+stderr="${workdir}/gf-midcfgfail.err"
+PATH="${midcfgfail}:$PATH" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && grep -q 'could not fingerprint the working tree' "$stderr"; then
+  ok "review: a config read failing only after the pre-run guard degrades to unmeasurable, not a discarded result"
+else
+  bad "review: a config read failing only after the pre-run guard degrades to unmeasurable, not a discarded result" \
+    "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+
+# --- a dirty submodule makes the fingerprint unmeasurable, not silently ----
+# wrong. Two different dirty states inside the same submodule can render as
+# the identical top-level "-dirty"/"M sub" text, so hashing that text cannot
+# tell them apart -- hasDirtySubmoduleContent has to say "unmeasurable"
+# instead of hashing something that cannot distinguish the two.
+subouter="${workdir}/subouter"
+subinner="${workdir}/subinner"
+git init -q "$subinner"
+printf 'one\n' > "$subinner/file.txt"
+git -C "$subinner" add -A
+git -C "$subinner" "${commit_env[@]}" commit -q -m init
+git init -q "$subouter"
+git -C "$subouter" "${commit_env[@]}" commit -q --allow-empty -m init
+git -C "$subouter" -c protocol.file.allow=always submodule add -q "$subinner" sub
+git -C "$subouter" "${commit_env[@]}" commit -q -m "add submodule"
+printf 'changed\n' >> "$subouter/sub/file.txt"
+
+stderr="${workdir}/gf-submodule-dirty.err"
+"$wrapper" review --repo "$subouter" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && grep -q 'could not fingerprint the working tree' "$stderr"; then
+  ok "review: a submodule with dirty content makes the fingerprint unmeasurable"
+else
+  bad "review: a submodule with dirty content makes the fingerprint unmeasurable" "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+
+# diff.submodule=diff makes `git diff` render a submodule's tracked content
+# inline instead of the boolean "-dirty" marker. Measured not to invoke the
+# submodule's own filter to do that, but --submodule=short is forced on
+# every worktree diff regardless (config-independent fingerprint shape) --
+# this proves the marker stays absent even with that config present, so a
+# future Git that DOES need the filter for this format would still be safe.
+subdiffouter="${workdir}/subdiffouter"
+subdiffinner="${workdir}/subdiffinner"
+git init -q "$subdiffinner"
+printf 'one\n' > "$subdiffinner/file.txt"
+git -C "$subdiffinner" config filter.subdiffmarker.clean "sh -c 'touch ${marker}; cat'"
+printf '*.txt filter=subdiffmarker\n' > "$subdiffinner/.gitattributes"
+git -C "$subdiffinner" add -A
+git -C "$subdiffinner" "${commit_env[@]}" commit -q -m init
+git init -q "$subdiffouter"
+git -C "$subdiffouter" "${commit_env[@]}" commit -q --allow-empty -m init
+git -C "$subdiffouter" -c protocol.file.allow=always submodule add -q "$subdiffinner" sub
+git -C "$subdiffouter" "${commit_env[@]}" commit -q -m "add submodule"
+git -C "$subdiffouter" config diff.submodule diff
+printf 'changed\n' >> "$subdiffouter/sub/file.txt"
+
+rm -f "$marker"
+stderr="${workdir}/gf-submodule-diffcfg.err"
+"$wrapper" review --repo "$subdiffouter" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && [ ! -e "$marker" ] && grep -q 'could not fingerprint the working tree' "$stderr"; then
+  ok "review: diff.submodule=diff does not let a submodule's own filter run during the worktree diff"
+else
+  bad "review: diff.submodule=diff does not let a submodule's own filter run during the worktree diff" \
+    "exit $status, marker ran: $([ -e "$marker" ] && echo yes || echo no): $(tr '\n' '|' < "$stderr")"
+fi
+
+# A submodule whose ONLY change is its recorded commit -- no dirty content --
+# must still fingerprint normally: that much is already captured faithfully
+# by the ordinary diff/status text, so treating it as unmeasurable too would
+# be needless noise on every commit bump. Discard the previous case's dirty
+# content first -- reusing that working tree without resetting it would
+# leave the checkout below fighting the same uncommitted change, which is
+# not what this case means to test.
+git -C "$subouter/sub" checkout -q -- file.txt
+(cd "$subinner" && printf 'two\n' >> file.txt && git add -A && git "${commit_env[@]}" commit -q -m bump)
+(cd "$subouter/sub" && git -c protocol.file.allow=always fetch -q && git checkout -q "$(git -C "$subinner" rev-parse HEAD)")
+stderr="${workdir}/gf-submodule-clean.err"
+"$wrapper" review --repo "$subouter" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && ! grep -q 'could not fingerprint' "$stderr"; then
+  ok "review: a submodule with only its commit pointer changed still fingerprints normally"
+else
+  bad "review: a submodule with only its commit pointer changed still fingerprints normally" "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+
+}
+
 group_review_storage_a() {
 # --- session writes land outside the repository, or are disclosed ------
 
@@ -3269,6 +3533,27 @@ else
     "exit $bdrift_status, head moved: $([ "$bdrift_head_before" != "$bdrift_head_after" ] && echo yes || echo no), leftover: $(printf '%s' "$bdrift_dirty" | tr '\n' ' ')"
 fi
 
+# A filter binding that appears WHILE codex is "running" -- after the
+# initial guard already passed clean, before the post-run fingerprint reads
+# the tree again. The initial refusal covers the window before Codex has a
+# result; this covers the window after, where refusing would discard a
+# result that already exists. It must not: the run still succeeds, and the
+# post-run fingerprint degrades to "could not fingerprint" instead.
+filtermidrun="${workdir}/filtermidrun"
+git init -q "$filtermidrun"
+git -C "$filtermidrun" "${commit_env[@]}" commit -q --allow-empty -m init
+printf 'one\n' > "$filtermidrun/f.txt"
+fmr_out="${workdir}/filtermidrun.err"
+FAKE_ADD_FILTER_REPO="$filtermidrun" "$wrapper" review --repo "$filtermidrun" --uncommitted \
+  --timeout 30 >/dev/null 2> "$fmr_out"
+fmr_status=$?
+if [ "$fmr_status" = 0 ] && grep -q 'could not fingerprint the working tree' "$fmr_out"; then
+  ok "review: a filter binding appearing mid-run makes the post-run fingerprint unmeasurable, not a discarded result"
+else
+  bad "review: a filter binding appearing mid-run makes the post-run fingerprint unmeasurable, not a discarded result" \
+    "exit $fmr_status: $(tr '\n' '|' < "$fmr_out")"
+fi
+
 # A git read that FAILS while fingerprinting is not a tree that did not
 # change. Only `rev-parse HEAD` was ever checked: status, the diff and the
 # untracked enumeration each fell back to an empty string — which is exactly
@@ -3655,6 +3940,7 @@ case "${CSO_TEST_GROUP:-all}" in
   review_paths_scopes_b) group_review_paths_scopes_b ;;
   review_git_a) group_review_git_a ;;
   review_git_b) group_review_git_b ;;
+  review_git_filters) group_review_git_filters ;;
   review_storage_a) group_review_storage_a ;;
   review_storage_b) group_review_storage_b ;;
   review_watchdog_a) group_review_watchdog_a ;;
@@ -3684,6 +3970,7 @@ case "${CSO_TEST_GROUP:-all}" in
     group_review_paths_scopes_b
     group_review_git_a
     group_review_git_b
+    group_review_git_filters
     group_review_storage_a
     group_review_storage_b
     group_review_watchdog_a

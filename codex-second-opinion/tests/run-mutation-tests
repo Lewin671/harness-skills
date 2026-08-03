@@ -32,6 +32,7 @@ const mutants = [
   ['context fence cannot close early', 'lib/review.mjs', `review.context.replaceAll(CONTEXT_FENCE, \`${'${CONTEXT_FENCE}'}-ESCAPED\`)`, `review.context`],
   ['UUID continuation remains strict', 'lib/consult.mjs', `if (!UUID.test(value)) {`, `if (false) {`],
   ['symlink components resolve before dot-dot', 'lib/environment.mjs', `if (part === '..') { current = dirname(current); continue }`, `if (part === '..') { continue }`],
+  ['rejected-model detection stays scoped to structured events', 'lib/runtime.mjs', `if (event?.type !== 'error' && event?.type !== 'turn.failed') continue`, `if (false) continue`],
 ]
 
 function run(command, args, cwd) {

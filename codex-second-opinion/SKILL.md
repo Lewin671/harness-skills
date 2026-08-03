@@ -53,23 +53,44 @@ external systems. A request for a second opinion does not grant that
 approval: report and ask rather than adding it silently. Never use this
 skill to apply fixes.
 
+Read-only and a disabled MCP boundary stop the run from *mutating*
+anything; they do not stop *disclosure*, and scope is a request for what
+to focus on, not an access boundary: Codex runs with the whole
+repository as its working directory, and a read-only sandbox permits
+arbitrary *reads* there, so a `--commit` or `--base` review does not
+keep Codex from reading an unrelated file — untracked secrets included —
+if it chooses to. Do not point this skill at a repository that holds
+material that must never reach the model provider; narrowing scope does
+not create that boundary.
+
 Read-only means the user's repository and the world outside it, not the
-local disk. Three things are written every run and *kept*: the result
-file and the event log under `TMPDIR` — or `/tmp`, if `TMPDIR` is inside
-the repo; both paths are printed and neither is cleaned up — and the
-session, which Codex persists under `CODEX_HOME/sessions`. That count is
-what is KEPT; transient scratch sits outside it (internals.md). The
-session applies to
-**both modes**: a review's prompt, the diff it read, and its findings stay
-on disk. For consult it is also load-bearing — it makes `--continue` work.
+local disk. Once a run reaches Codex — after argument, environment, and
+scope prechecks pass — three things get written under `TMPDIR` — or
+`/tmp`, if `TMPDIR` is inside the repo — and `CODEX_HOME/sessions`: the
+event log, the result file, and, if Codex reports one, a session. An
+exit before Codex runs (`2`, or most causes of `3`) leaves none of these
+behind. Once the run reaches Codex, the event log is always kept and its
+path always printed; the result file is kept and its path printed the
+same way on a `0` exit, and removed on `4` or `5`, since those mean no
+usable result exists — the log still holds the raw attempt. The session
+is Codex's own choice, not this script's: it may not report one, and
+when it does, only its id is printed, not a filesystem path. When one
+exists it applies to **both modes** — a review's prompt, the diff it
+read, and its findings stay on disk — and for consult it is also
+load-bearing: it makes `--continue` work. Transient scratch sits outside
+all of this (internals.md).
 
 Two placements are refused rather than worked around: a `CODEX_HOME`
 inside the repository (it cannot be relocated without orphaning earlier
 sessions, so exit `3`), and a repo-local `TMPDIR`, which is moved. The
-script's own git prechecks run no program its config names and write
-nothing in the repository — except on git below 2.42, where a partial
-clone can still fetch a promised object. `references/internals.md` says
-how, and how narrow that is.
+script's own git prechecks write nothing in the repository — except on
+git below 2.42, where a partial clone can still fetch a promised object —
+and refuse (exit `3`) rather than run a repo-configured clean/process
+filter: `--uncommitted`/`--base` first check, without invoking one,
+whether any in-scope path would trigger a configured filter driver, and
+stop before the real status/diff call if so. `--allow-git-filters`
+overrides that the same way `--allow-mcp` overrides the MCP boundary.
+`references/internals.md` says how, and how narrow both of these are.
 
 ## Independence Contract
 
@@ -158,7 +179,8 @@ real time and stays small:
 - New `item.started` / `item.completed` lines → working; Codex is
   reading files and running commands.
 - Nothing new for several minutes → likely stalled on the model side.
-  It will not hang forever: `--timeout` (default 3000s, max 86400)
+  It will not hang forever: `--timeout` (default 3000s, 1-86400; 0 is
+  rejected rather than disabling the watchdog)
   kills the whole process group and exits `5`.
 - `report:` (review) or `answer:` (consult) line → finished; the
   result is on stdout.
@@ -213,9 +235,10 @@ The exit code is the verdict on *the run*, never on the code:
 |------|---------|------------|
 | `0` | A result was produced | Read stdout and relay it. |
 | `2` | (review only) Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
-| `3` | Environment problem | Report the unsafe or invalid environment; do not substitute a Claude answer. |
-| `4` | Codex ran and failed | Read stderr. Also covers an unresumable follow-up or rejected configuration key. |
+| `3` | Bad arguments, model policy, or environment problem | Read stderr; report the unsafe or invalid setup — this covers usage errors (`--model` without `--effort`, a malformed `--continue` id) as much as an unsafe environment. Do not substitute a Claude answer. |
+| `4` | The invocation did not produce a usable result | Read stderr. Usually Codex ran and failed, but also covers `codex` never starting at all (spawn failure), an unresumable follow-up, or a rejected configuration key. |
 | `5` | Hung and was killed | Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
+| `129` / `130` / `143` | The wrapper itself was signalled (`HUP`/`INT`/`TERM`) | Not a Codex or environment verdict — something outside the run interrupted it; Codex may still have been mid-invocation. |
 
 Codex's own exit code is `0` for both a P1 finding and a clean review,
 so never gate on it directly. That is why this script exists.

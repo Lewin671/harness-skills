@@ -62,6 +62,20 @@ Codex is ever invoked. Codex itself reports "there are no changes" as
 an ordinary successful review, which reads like a pass — that is the
 misreport the precheck exists to prevent.
 
+## Worktree Filter Guard
+
+`--uncommitted` and `--base` read the live working tree before Codex's
+sandbox exists, and a repo-configured `.gitattributes` clean/process filter
+can run as part of that read. If this repository has one configured and
+applicable to a path in scope, the script refuses (exit `3`) rather than run
+it. `--allow-git-filters` overrides that, the same way `--allow-mcp`
+overrides the MCP boundary: only after the user has explicitly accepted that
+a local filter command may run. `--commit` never triggers this — it diffs
+two historical commits, not the working tree. See
+[references/internals.md](./internals.md) for the applicability check that
+keeps this from refusing every repository on a machine with, say, a global
+Git LFS install.
+
 ## Reading The Report
 
 Findings come back as Markdown on stdout:

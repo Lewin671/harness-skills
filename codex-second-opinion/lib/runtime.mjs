@@ -4,6 +4,8 @@ import { die, flat, hasLineBreak, shellQuote } from './util.mjs'
 
 export const ATTEMPT_MARKER = '=== codex-second-opinion attempt boundary ==='
 
+const REJECTED_MODEL_PATTERN = /reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found/i
+
 export function createState(mode) {
   const envModel = process.env.CODEX_SECOND_OPINION_MODEL || ''
   const envEffort = process.env.CODEX_SECOND_OPINION_EFFORT || ''
@@ -225,8 +227,16 @@ export class Runtime {
   }
 
   rejectedModel() {
-    const errorLines = this.readLog().split(/\r?\n/).filter((line) => /"type"\s*:\s*"error"|^ERROR|\berror\b/i.test(line))
-    return errorLines.some((line) => /reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found/i.test(line))
+    // Only top-level `error`/`turn.failed` events count: a command_execution
+    // item can legitimately echo a reviewed file's own error-handling text
+    // (a raised "X is not supported" message, say), and that text must not
+    // be mistaken for Codex rejecting the model.
+    for (const event of jsonEvents(this.readLog())) {
+      if (event?.type !== 'error' && event?.type !== 'turn.failed') continue
+      const messages = [event.message, event.error?.message].filter((value) => typeof value === 'string')
+      if (messages.some((message) => REJECTED_MODEL_PATTERN.test(message))) return true
+    }
+    return false
   }
 
   strictConfigHint() {
@@ -291,6 +301,7 @@ export class Runtime {
     if (!output.trim()) {
       process.stderr.write(`error: codex produced no ${this.state.resultNoun}; raw output at ${this.log}\n`)
       this.tailLog()
+      rmSync(this.out, { force: true })
       die(4)
     }
     try {

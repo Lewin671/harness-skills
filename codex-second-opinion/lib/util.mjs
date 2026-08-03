@@ -32,8 +32,8 @@ export function parseTimeout(value, source) {
     die(3, `error: ${source} must be a whole number of seconds, got '${flat(raw)}'`)
   }
   const normalized = raw.replace(/^0+(?=\d)/, '')
-  if (normalized.length > 5 || Number(normalized) > 86400) {
-    die(3, `error: ${source} must be between 0 and 86400 seconds, got '${flat(raw)}'`)
+  if (normalized.length > 5 || Number(normalized) > 86400 || Number(normalized) < 1) {
+    die(3, `error: ${source} must be between 1 and 86400 seconds, got '${flat(raw)}'`)
   }
   return Number(normalized)
 }

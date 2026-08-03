@@ -148,6 +148,52 @@ Review accepts exactly one of `--uncommitted`, `--base`, `--commit`, or
 `--custom`; the default is `--uncommitted`. Empty-scope prechecks preserve exit
 `2` as “nothing in scope,” not a clean review.
 
+`--uncommitted` and `--base` read the live working tree before any sandbox
+exists, and `git status`/`git diff` apply a `.gitattributes`-selected
+`filter.<name>.clean` or `filter.<name>.process` driver to do it, independent
+of `--no-ext-diff`/`--no-textconv` (those gate the *display* driver only).
+`probeFilterRisk` (`lib/review.mjs`) checks for that before either command
+runs: `git config --name-only --get-regexp` names configured `clean`/
+`process` drivers (a `1` exit with empty output is “none configured,” not a
+failure), and — only if some driver is configured — `git ls-files` plus
+`git ls-files --others --exclude-standard` enumerate this repo's tracked and
+untracked paths and `git check-attr -z --stdin filter` resolves which of
+them carry a configured driver's name. Enumerating and resolving attributes
+this way never invokes a filter itself, which is what lets the probe run
+strictly before the commands it is guarding. Refusing on configuration
+alone, without this applicability check, would make `--allow-git-filters`
+routine on any machine with a global Git LFS install rather than the
+deliberate, rare override `--allow-mcp` is for the MCP boundary — most such
+machines have `filter.lfs.*` configured globally whether or not any given
+repository binds a path to it. The probe is scoped to the superproject:
+`ls-files` never descends into a submodule on its own
+(`--recurse-submodules` is never passed), so it does not need its own check
+for that. A submodule's own dirty-detection was verified empirically (git
+2.39.5) not to invoke that submodule's configured filter either — it is a
+lightweight comparison, not a content read, with or without
+`--ignore-submodules=none`, and even `diff.submodule=diff` (a repo config
+that makes `git diff` render a submodule's content inline) did not invoke it
+in that same test. `--submodule=short` is forced on every worktree diff
+regardless — not because that config was found to be risky, but because it
+keeps the fingerprint's shape independent of a setting this script does not
+control, matching what the fingerprint paragraph below already assumes.
+`--commit` diffs two historical blobs — no working tree is read, so the
+probe does not apply.
+
+`probeFilterRisk` never dies itself — it returns `{ error, applicable }` —
+because it is called from two places with different correct responses to
+the same failure. `guardWorktreeFilters` calls it before Codex runs, where
+refusing outright on `error` or a non-empty `applicable` is safe.
+`scopeFingerprint` (below) calls it again itself, every time it runs —
+including from `checkScopeDrift`, minutes after Codex has already produced
+a valid result — and a probe failure there must not discard that result, so
+it returns `""` instead of dying, exactly like a read failure already does;
+every caller already reports `""` as "could not fingerprint" rather than
+"unchanged." A filter binding introduced during a long review — another
+agent, a build step — or a config read that starts failing partway through
+are both caught by this same re-check, not left unguarded because the
+initial refusal already happened once and passed.
+
 `--base` resolves the merge base once and passes that object id to Codex.
 `--commit` resolves the commit and first parent once; merge commits use a normal
 first-parent diff rather than combined-diff emptiness. `--context` keeps the
@@ -155,14 +201,42 @@ real scope precheck but restates the scope with immutable object ids because
 Codex rejects a review scope flag combined with a positional prompt.
 
 Caller context is fenced as data. Occurrences of the fence token inside the
-body are escaped, so the body cannot close its own fence or replace the
-validated scope.
+body are escaped, so the body cannot mechanically close its own fence and
+masquerade as the end of the caller-background block. That escaping is a
+structural guarantee; the scope statement wrapped around the fence is not —
+it is a natural-language instruction to Codex, same as any other prompt
+content, and carries the same prompt-injection limitation as the rest of the
+composed prompt. Escaping closes the one concrete forgery this script can
+prevent; it is not a claim that adversarial text inside the fence cannot
+influence the model.
 
 Live `--uncommitted` and `--base` scopes are fingerprinted before and after the
 run. The fingerprint includes HEAD, status, the tracked diff, and contents or
 targets of untracked entries. Read failure produces “unknown,” never the same
 digest as another failure. Drifted or unmeasurable results are labelled
 non-reproducible.
+
+Status and diff both pass `--ignore-submodules=none` so a repo-configured
+`submodule.<name>.ignore` of `dirty`, `untracked`, or `all` cannot hide
+uncommitted content inside a submodule from either the emptiness check or the
+fingerprint. `ls-files` carries no such flag and needs none — it only lists
+paths.
+
+Making a submodule's dirtiness visible is not the same as fingerprinting it.
+Status and diff report only a boolean — `M`/`-dirty` — for a submodule, never
+what changed inside it, so two different dirty states (file A modified, then
+file B modified instead) can render identically at the superproject level;
+hashing that output cannot tell them apart. `hasDirtySubmoduleContent`
+(`lib/review.mjs`) closes that gap ahead of the hash rather than inside it:
+`git status --porcelain=v2 --ignore-submodules=none` reports a submodule's
+state as four characters, `S<C><M><U>` — commit-pointer, modified-content,
+untracked-content — at the same field position on porcelain v2's ordinary
+(`1`/`2`) and unmerged (`u`) record types alike, so a submodule left with a
+conflicted gitlink is covered the same way. Any submodule with `M` or `U`
+set makes the whole fingerprint `""` (unmeasurable) rather than being
+hashed. A submodule whose only change is its recorded commit (`C` alone)
+still fingerprints normally, since that much *is* captured faithfully by
+the ordinary diff/status text.
 
 ## Consult mode
 
