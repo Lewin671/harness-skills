@@ -232,8 +232,8 @@ Both modes end the same way:
 3. Flag disagreements between the two models explicitly rather than
    averaging them away — a genuine split is the most useful output
    this skill produces.
-4. State the scope or question and the model used, so it is
-   reproducible.
+4. State the scope or question and the model used, and relay any drift
+   warning — see review.md.
 5. For consult, label the first answer **independent first pass** and all
    resumed-session answers **deliberation**.
 6. Stop there. The decision belongs to the user, and applying fixes is

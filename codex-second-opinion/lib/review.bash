@@ -81,6 +81,50 @@ set_scope() {
 # Every check here must match what Codex actually reviews. A precheck
 # that is narrower than the real scope silently skips a valid review,
 # which is the worst failure this script can have.
+# What the reviewed artifact WAS, for the scopes that can change under us.
+# `--commit` names an immutable object; `--uncommitted` and `--base` diff the
+# live working tree, and the tree is read twice — once by the precheck here,
+# and again by codex minutes later. Anything that writes the repository in
+# between (another agent, a rebuild, an editor save) means the report
+# describes a state nobody approved, while the scope line still names the
+# same flag. Cheap to fingerprint, and the alternative is a reproducibility
+# claim the wrapper cannot support.
+#
+# Failure to fingerprint is not silence: an empty value would compare equal to
+# the next empty value and read as "no drift", which is the reassuring answer.
+# It records a sentinel instead, and the sentinel never matches.
+scope_fingerprint() {
+  local __var="$1" fp=""
+  case "$scope_flag" in
+    --uncommitted|--base)
+      # The same protections the precheck two functions down already carries,
+      # because this reads the same repository the same way: fsmonitor off so
+      # no configured hook program runs, --no-optional-locks so nothing here
+      # writes the repo under review, and the diff inside a throwaway index
+      # because git refreshes the real one otherwise (measured). Adding a git
+      # call without them is how a read-only promise stops being true.
+      fp="$(git --no-optional-locks -c core.fsmonitor=false status --porcelain --untracked-files=normal 2>/dev/null)" || fp=""
+      fp="${fp}$(git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff HEAD 2>/dev/null)" || fp=""
+      [ -n "$fp" ] || fp="__unfingerprintable__"
+      fp="$(printf '%s' "$fp" | shasum -a 256 2>/dev/null | cut -d' ' -f1)" || fp="__unfingerprintable__"
+      [ -n "$fp" ] || fp="__unfingerprintable__"
+      ;;
+    *) fp="__not_applicable__" ;;
+  esac
+  printf -v "$__var" '%s' "$fp"
+}
+
+# Said plainly rather than folded into the report: a caller that reruns this
+# expecting the same answer is the one who needs to know.
+check_scope_drift() {
+  case "$scope_flag" in --uncommitted|--base) : ;; *) return 0 ;; esac
+  local after=""
+  scope_fingerprint after
+  [ "$after" != "$scope_fp_before" ] || return 0
+  echo "warning: the working tree changed while codex was reading it, so this review does not describe the tree that passed the scope check." >&2
+  echo "warning: treat the result as non-reproducible; rerun on a quiet tree, or use --commit, which names an immutable object." >&2
+}
+
 check_scope_nonempty() {
   case "$scope_flag" in
     --uncommitted)
@@ -319,6 +363,11 @@ mode_main() {
   common_env_checks
   check_scope_nonempty
   common_setup_scratch
+  # After the scratch directory exists: the throwaway index this needs lives
+  # there. The window that matters is the one codex reads across, and this is
+  # still before anything is launched.
+  scope_fingerprint scope_fp_before
   run_with_fallback
+  check_scope_drift
   emit_result
 }

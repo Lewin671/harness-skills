@@ -173,6 +173,10 @@ fi
 prev=""
 for a in "$@"; do
   [ "$prev" = "-o" ] && printf '%s' "${FAKE_OUTPUT:-Looks fine overall.}" > "$a"
+  # Stand in for whatever else writes the repository while codex is reading
+  # it: another agent, a rebuild, an editor save. The wrapper cannot prevent
+  # that; it can notice.
+  [ -n "${FAKE_TOUCH_REPO:-}" ] && printf 'drifted\n' >> "${FAKE_TOUCH_REPO}"
   prev="$a"
 done
 # A thread id that is not a session UUID — schema drift, or a wrapper in the
@@ -2491,9 +2495,15 @@ check_exit "consult: --continue without a value is exit 3" 3 "$?"
 # A resume that silently lands on a different thread is a fresh answer
 # without the prior discussion — it must be discarded, not relayed.
 combined3="${workdir}/mismatch.out"
-"$wrapper" consult --repo "$repo" --timeout 30 \
+# The answer THIS invocation produces, not one an earlier case supplied. The
+# assertion used to grep for `Option A, on balance.`, which was FAKE_OUTPUT in
+# a different test — this invocation's fake writes its default, so the string
+# searched for could never appear and the check passed no matter what the
+# wrapper relayed. A negative assertion is only worth the value it names.
+FAKE_OUTPUT='MISMATCHED-ANSWER-MUST-NOT-BE-RELAYED' \
+  "$wrapper" consult --repo "$repo" --timeout 30 \
   --continue 99999999-9999-9999-9999-999999999999 "follow-up?" > "$combined3" 2>&1
-if [ "$?" = 4 ] && ! grep -q 'Option A, on balance.' "$combined3"; then
+if [ "$?" = 4 ] && ! grep -q 'MISMATCHED-ANSWER-MUST-NOT-BE-RELAYED' "$combined3"; then
   ok "consult: un-resumed session is discarded with exit 4"
 else
   bad "consult: un-resumed session is discarded with exit 4"
@@ -2554,6 +2564,33 @@ for badthread in "abc; touch ${forged_sentinel}" 'not-a-uuid' '0198aaaa-bbbb-ccc
       "exit $bt_status, resume line: $(grep -m1 '^resume:' "$resume_out")"
   fi
 done
+
+# `--uncommitted` and `--base` diff the LIVE working tree, and it is read
+# twice: once by the precheck, and again by codex minutes later. Anything that
+# writes the repo in between means the report describes a state nobody
+# approved while the scope line still names the same flag. `--commit` names an
+# immutable object and cannot drift; these two can, so the wrapper says so.
+drift_out="${workdir}/drift.err"
+FAKE_TOUCH_REPO="${dirty}/drifted.txt" "$wrapper" review --repo "$dirty" --uncommitted \
+  --timeout 30 >/dev/null 2> "$drift_out"
+drift_status=$?
+if [ "$drift_status" = 0 ] && grep -q 'does not describe the tree that passed the scope check' "$drift_out"; then
+  ok "review: a working tree that changed under the run is reported as non-reproducible"
+else
+  bad "review: a working tree that changed under the run is reported as non-reproducible" \
+    "exit $drift_status"
+fi
+
+# And a QUIET tree must not be accused of drifting, or the warning is noise
+# every caller learns to ignore.
+quiet_out="${workdir}/quiet.err"
+"$wrapper" review --repo "$dirty" --uncommitted --timeout 30 >/dev/null 2> "$quiet_out"
+quiet_status=$?
+if [ "$quiet_status" = 0 ] && ! grep -q 'does not describe the tree' "$quiet_out"; then
+  ok "review: a quiet working tree is not reported as drifted"
+else
+  bad "review: a quiet working tree is not reported as drifted" "exit $quiet_status"
+fi
 
 # The caller's background must reach Codex as fenced DATA, not as another
 # same-authority paragraph that could redirect the scope the precheck just

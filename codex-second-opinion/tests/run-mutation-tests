@@ -247,6 +247,25 @@ mutate "consult emits no report marker" lib/common.bash \
 mutate "rejection detection is not a pipeline" lib/common.bash \
   '  errlines="$(grep -E "$err_pat" "$log" 2>/dev/null || true)"' \
   '  errlines=x; grep -E "$err_pat" "$log" 2>/dev/null | grep -qE "$rej_pat"; return $?'
+# A resumed session that landed on a different thread must be discarded, not
+# relayed. The assertion guarding this used to grep for a string the run never
+# produced, so it passed no matter what the wrapper printed.
+mutate "a mismatched session's answer is not relayed" lib/consult.bash \
+  '    tail_log
+    rm -f "$out"
+    exit 4' \
+  '    tail_log
+    cat "$out" 2>/dev/null
+    rm -f "$out"
+    exit 4'
+# The live-tree scopes are read twice, minutes apart. Without the second read
+# the report describes a state nobody approved while the scope line still
+# names the same flag.
+mutate "working-tree drift is reported" lib/review.bash \
+  '  check_scope_drift' '  :'
+mutate "the drift check compares against the earlier fingerprint" lib/review.bash \
+  '  [ "$after" != "$scope_fp_before" ] || return 0' \
+  '  [ "$after" != "$after" ] || return 0'
 mutate "a bare repo is not a work tree" lib/common.bash \
   '[ "$work_tree" = "true" ] ||' '[ "$work_tree" != "zzz" ] ||'
 # The whole check, both halves. The whitespace half has its own mutant above;
@@ -353,7 +372,7 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. Pin the count:
 # any mutant that silently fails to launch is a failure in itself.
-EXPECTED_TOTAL=57
+EXPECTED_TOTAL=60
 if [ -n "${CSO_MUT_ONLY:-}${CSO_MUT_FROM:-}${CSO_MUT_TO:-}" ]; then
   echo "PARTIAL RUN — ${filtered} of ${seen} mutant(s) filtered out."
   echo "${survived}/${total} of the selected mutants survived. This is NOT a full sweep."

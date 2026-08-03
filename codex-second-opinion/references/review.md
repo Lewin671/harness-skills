@@ -91,7 +91,11 @@ as a plain sentence with no bullets at all, not an empty list.
    Codex has no stake in defending code Claude wrote.
 3. Flag disagreements explicitly rather than averaging them away. A
    contested finding is the most useful output review mode produces.
-4. State the scope reviewed and the model used, so it is reproducible.
+4. State the scope reviewed and the model used. Only `--commit` names an
+   immutable object: `--uncommitted` and `--base` diff the live working
+   tree, which is read once by the precheck and again by Codex minutes
+   later. The wrapper fingerprints it across that window and warns when it
+   changed; relay that warning rather than calling the result reproducible.
 5. Stop there. Applying fixes is a separate, user-authorized step.
 
 For open questions rather than code changes, use consult mode instead:
