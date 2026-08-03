@@ -495,17 +495,6 @@ common_env_checks() {
   export GIT_NO_LAZY_FETCH=1
 
   codex_bin="${CODEX_BIN:-codex}"
-  if ! "$codex_bin" --version >/dev/null 2>&1; then
-    cat >&2 <<EOF
-error: '${codex_bin}' is not runnable.
-
-A codex on PATH that fails --version usually means a broken install
-(a shell-function wrapper, or an npm shim whose vendored binary is
-missing) rather than a missing one. Try 'codex update', or set
-CODEX_BIN to a working binary.
-EOF
-    exit 3
-  fi
 
   # Command hooks run outside the shell sandbox once trusted — codex's
   # own trust prompt says "Hooks can run outside the sandbox after you
@@ -517,12 +506,43 @@ EOF
   # *effective* states, because managed policy can force a feature
   # back on. Fail closed: an unparseable or missing answer is treated
   # the same as "enabled".
-  local features_out feature state
+  local features_out features_status=0 feature state states
+  local hooks_state="" apps_state="" plugins_state=""
   features_out="$("$codex_bin" features list \
-    --disable hooks --disable apps --disable plugins 2>/dev/null)" || features_out=""
+    --disable hooks --disable apps --disable plugins 2>/dev/null)" || features_status=$?
+  # A successful capability query already proves the binary is runnable. Pay
+  # for the separate diagnostic probe only on failure; ordinary runs used to
+  # start Codex twice before doing any work.
+  if [ "$features_status" -ne 0 ]; then
+    features_out=""
+    if ! "$codex_bin" --version >/dev/null 2>&1; then
+      cat >&2 <<EOF
+error: '${codex_bin}' is not runnable.
+
+A codex on PATH that fails --version usually means a broken install
+(a shell-function wrapper, or an npm shim whose vendored binary is
+missing) rather than a missing one. Try 'codex update', or set
+CODEX_BIN to a working binary.
+EOF
+      exit 3
+    fi
+  fi
+  # Parse all three effective states once. Three separate awk invocations
+  # dominated short, fail-closed checks and could disagree if a state appeared
+  # more than once; the last occurrence for each feature remains authoritative.
+  states="$(awk '
+    $1 == "hooks"   { hooks = $NF }
+    $1 == "apps"    { apps = $NF }
+    $1 == "plugins" { plugins = $NF }
+    END { printf "%s %s %s", hooks, apps, plugins }
+  ' <<< "$features_out")" || states=""
+  read hooks_state apps_state plugins_state <<< "$states"
   for feature in hooks apps plugins; do
-    state="$(printf '%s\n' "$features_out" |
-      awk -v f="$feature" '$1 == f { state = $NF } END { print state }')" || state=""
+    case "$feature" in
+      hooks) state="${hooks_state:-}" ;;
+      apps) state="${apps_state:-}" ;;
+      plugins) state="${plugins_state:-}" ;;
+    esac
     if [ "$state" != "false" ]; then
       echo "error: codex ${feature} stay enabled (effective state: '${state:-unknown}')." >&2
       echo "error: ${feature} act outside the read-only sandbox, so this ${run_noun} could write; refusing to start." >&2
@@ -553,6 +573,11 @@ EOF
   # turn a found entry into a false pipeline status.
   if [ "$mcp_status" -ne 0 ]; then
     mcp_problem="could not verify standalone MCP exposure ('codex mcp list' failed)"
+  # Codex 0.146.0's exact, authoritative empty-config representation. Handle
+  # it before the general JSON guards: most runs have no standalone servers,
+  # and starting two parsers for these three bytes dominated short checks.
+  elif [ "$mcp_out" = '[]' ]; then
+    :
   elif ! mcp_enabled_values_boolean "$mcp_out"; then
     mcp_problem="could not verify standalone MCP exposure (an 'enabled' field is not a bare true or false)"
   elif grep -qE '"enabled"[[:space:]]*:[[:space:]]*true' <<< "$mcp_out"; then
@@ -700,7 +725,6 @@ EOF
       # it holds no `"enabled"` for the parser arm to catch — so listing it
       # here was the one path by which an unrecognised root still started a
       # run. It falls through to the refusal now.
-      '[]') : ;;                  # empty config: nothing to disclose
       *'"enabled"'*)
         # Recognized shape, nothing enabled *in the part that arrived*. That
         # last clause is the whole point: a listing cut off after a complete
@@ -1148,6 +1172,10 @@ execute_codex() {
   # codex's status travels through a file because PIPESTATUS is not
   # available for a backgrounded pipeline.
   {
+    # Emit the attempt boundary from the pipeline stage that already owns the
+    # Codex process. A separate `{ printf; cat; }` stage added one shell and
+    # one cat process to every attempt without changing ordering or buffering.
+    printf '%s\n' "$attempt_marker"
     # `set -m` puts codex in its own process group (pgid == pid), which
     # is what makes the group-wide kill above possible without setsid.
     set -m
@@ -1157,7 +1185,7 @@ execute_codex() {
     codex_status=0
     wait $! || codex_status=$?
     echo "$codex_status" > "${statedir}/status"
-  } | { printf '%s\n' "$attempt_marker"; cat; } | tee -a "$log" | truncate_stream >&2 &
+  } | archive_stream &
   local pipeline_pid=$!
   wait "$pipeline_pid" 2>/dev/null || true
   status="$(cat "${statedir}/status" 2>/dev/null || echo 1)"
@@ -1246,6 +1274,33 @@ truncate_stream() {
       printf '%s\n' "$line"
     fi
   done
+}
+
+# Archive the raw stream and emit its bounded live view in the same reader.
+# Using `tee | truncate_stream` started an extra process for every attempt;
+# one loop preserves the exact two outputs and their line order.
+archive_stream() {
+  local line
+  exec 3>> "$log"
+  while IFS= read -r line; do
+    printf '%s\n' "$line" >&3
+    if [ "${#line}" -gt 180 ]; then
+      printf '%s...\n' "${line:0:180}" >&2
+    else
+      printf '%s\n' "$line" >&2
+    fi
+  done
+  # `tee` preserved a final unterminated line byte-for-byte. Keep that log
+  # property even though the live, line-oriented display still terminates it.
+  if [ -n "$line" ]; then
+    printf '%s' "$line" >&3
+    if [ "${#line}" -gt 180 ]; then
+      printf '%s...\n' "${line:0:180}" >&2
+    else
+      printf '%s\n' "$line" >&2
+    fi
+  fi
+  exec 3>&-
 }
 
 # Show the tail of the log without dumping raw event JSON, whose single

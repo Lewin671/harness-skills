@@ -13,11 +13,65 @@
 # test supplied `true`, so rewriting it to `= "true"` kept the suite green.
 # Shipping the result of a sweep is not the same as shipping the sweep.
 #
-# Exit 0 when every mutant is killed. Slow by construction: run-tests takes
-# about 40 seconds, so a full sweep is minutes, not seconds.
+# Exit 0 when every mutant is killed. Full sweeps partition isolated mutant
+# ranges across workers; focused CSO_MUT_ONLY/FROM/TO runs stay single-process.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SKILL="$(cd "${HERE}/.." && pwd -P)"
+
+if [ "${CSO_MUT_WORKER:-0}" != 1 ] &&
+   [ -z "${CSO_MUT_ONLY:-}${CSO_MUT_FROM:-}${CSO_MUT_TO:-}" ]; then
+  # A red baseline would score every mutant as killed for free. Run it once
+  # before partitioning; workers must not each repeat this eight-second gate.
+  if ! "${HERE}/run-tests" >/dev/null 2>&1; then
+    echo "baseline run-tests is already failing — fix that first; mutation results would be meaningless"
+    exit 1
+  fi
+
+  mut_results="$(mktemp -d "${TMPDIR:-/tmp}/cso-mut-results-XXXXXX")" &&
+    [ -n "$mut_results" ] || {
+      echo "cannot create the mutation result workspace" >&2; exit 1; }
+  trap 'rm -rf "$mut_results"' EXIT
+  pids=()
+  starts=()
+  start=1
+  while [ "$start" -le 65 ]; do
+    end=$((start + 3))
+    [ "$end" -le 65 ] || end=65
+    starts+=("$start")
+    CSO_MUT_WORKER=1 CSO_MUT_FROM="$start" CSO_MUT_TO="$end" \
+      CSO_MUT_RESULT_DIR="$mut_results" "${HERE}/run-mutation-tests" \
+      > "${mut_results}/${start}.out" 2>&1 &
+    pids+=("$!")
+    start=$((end + 1))
+  done
+
+  worker_failed=0
+  for pid in "${pids[@]}"; do
+    wait "$pid" || worker_failed=1
+  done
+
+  total=0 survived=0
+  for start in "${starts[@]}"; do
+    cat "${mut_results}/${start}.out"
+    if [ -f "${mut_results}/${start}.result" ]; then
+      read chunk_total chunk_survived < "${mut_results}/${start}.result"
+      total=$((total + chunk_total))
+      survived=$((survived + chunk_survived))
+    else
+      echo "mutation worker starting at ${start} did not publish a result"
+      worker_failed=1
+    fi
+  done
+  echo
+  if [ "$worker_failed" -eq 0 ] && [ "$total" -eq 65 ] && [ "$survived" -eq 0 ]; then
+    echo "all ${total} mutants killed — the suite has teeth"
+    exit 0
+  fi
+  echo "mutation sweep failed: total=${total}/65 survived=${survived} worker_failed=${worker_failed}"
+  exit 1
+fi
+
 # Guarded, and not only for tidiness. This script does not set -e, and
 # `mutate` derives `work="${TMP}/work"` and then `rm -rf "$work"` — so an
 # empty TMP from a failed mktemp makes that `rm -rf /work`, before a single
@@ -29,7 +83,7 @@ trap 'rm -rf "${TMP}"' EXIT
 
 # A red baseline would score every mutant as killed for free — the same
 # can't-fail-meaningfully defect this script exists to catch, one level up.
-if ! "${HERE}/run-tests" >/dev/null 2>&1; then
+if [ "${CSO_MUT_WORKER:-0}" != 1 ] && ! "${HERE}/run-tests" >/dev/null 2>&1; then
   echo "baseline run-tests is already failing — fix that first; mutation results would be meaningless"
   exit 1
 fi
@@ -135,8 +189,8 @@ mutate "escaped quotes inside a name are consumed" lib/common.bash \
 mutate "mcp values must be bare booleans" lib/common.bash \
   'elif ! mcp_enabled_values_boolean "$mcp_out"; then' 'elif false; then'
 mutate "an empty mcp listing is not an empty config" lib/common.bash \
-  "'[]') : ;;                  # empty config: nothing to disclose" \
-  "'[]'|'') : ;;"
+  "elif [ \"\$mcp_out\" = '[]' ]; then" \
+  "elif [ -z \"\$mcp_out\" ] || [ \"\$mcp_out\" = '[]' ]; then"
 mutate "an entry with no enabled field is refused" lib/common.bash \
   '      if (closing && !seen_enabled) print "%"' ''
 # The no-true branch is the one where the sentinel carries the REFUSAL itself:
@@ -394,6 +448,12 @@ echo
 # so neither counter moves and the run still prints success. Pin the count:
 # any mutant that silently fails to launch is a failure in itself.
 EXPECTED_TOTAL=65
+if [ "${CSO_MUT_WORKER:-0}" = 1 ]; then
+  printf '%s %s\n' "$total" "$survived" > "${CSO_MUT_RESULT_DIR}/${CSO_MUT_FROM}.result"
+  echo "chunk ${CSO_MUT_FROM}-${CSO_MUT_TO}: ${total} mutants, ${survived} survived"
+  [ "$survived" -eq 0 ]
+  exit $?
+fi
 if [ -n "${CSO_MUT_ONLY:-}${CSO_MUT_FROM:-}${CSO_MUT_TO:-}" ]; then
   echo "PARTIAL RUN — ${filtered} of ${seen} mutant(s) filtered out."
   echo "${survived}/${total} of the selected mutants survived. This is NOT a full sweep."

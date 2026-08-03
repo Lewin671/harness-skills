@@ -5,6 +5,93 @@
 # for the mode dispatcher and for both modes.
 set -u
 
+# The contract groups below are independent once their common fixtures exist.
+# Run an ordinary full suite in isolated workers so process-heavy git/Codex
+# boundary cases do not serialize. Mutation testing keeps the single-process,
+# source-order path: it needs bad() to stop at the first discriminating case.
+if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
+  script_dir="$(cd "$(dirname "$0")" && pwd -P)"
+  script="${script_dir}/$(basename "$0")"
+  groups=(
+    utility review_args review_models review_safety_head review_safety_tail
+    review_fallback review_behavior review_context review_paths_mcp_a
+    review_paths_mcp_b review_paths_scopes_a review_paths_scopes_b review_git_a
+    review_git_b review_storage_a review_storage_b review_watchdog_a
+    review_watchdog_b review_watchdog_c consult_basic consult_sessions_a
+    consult_sessions_b review_drift_files review_drift_scope
+    review_diagnostics consult_markers_a consult_markers_b
+  )
+  result_dir="$(mktemp -d "${TMPDIR:-/tmp}/cso-tests-XXXXXX")" &&
+    [ -n "$result_dir" ] || {
+      echo "error: cannot create parallel test workspace" >&2; exit 1; }
+  trap 'rm -rf "$result_dir"' EXIT
+
+  # Build the common repository once. Each worker receives a byte-for-byte
+  # copy, preserving isolation for drift tests without paying for dozens of
+  # identical git init/commit sequences under contention.
+  fixture_template="${result_dir}/fixture-template"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    git init -q "$fixture_template"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    git -C "$fixture_template" -c user.email=test@test -c user.name=test \
+      commit -q --allow-empty -m init
+  echo dirty > "${fixture_template}/f.txt"
+
+  max_jobs="${CSO_TEST_JOBS:-32}"
+  pids=()
+  active=0
+  for group in "${groups[@]}"; do
+    CSO_TEST_WORKER=1 CSO_TEST_GROUP="$group" \
+      CSO_TEST_RESULT_DIR="$result_dir" \
+      CSO_TEST_FIXTURE_TEMPLATE="$fixture_template" "$script" \
+      > "${result_dir}/${group}.out" 2>&1 &
+    pids+=("$!")
+    active=$((active + 1))
+    if [ "$active" -eq "$max_jobs" ]; then
+      for pid in "${pids[@]}"; do
+        wait "$pid" || worker_failed=1
+      done
+      pids=()
+      active=0
+    fi
+  done
+
+  worker_failed="${worker_failed:-0}"
+  if [ "$active" -gt 0 ]; then
+    for pid in "${pids[@]}"; do
+      wait "$pid" || worker_failed=1
+    done
+  fi
+
+  pass=0 fail=0
+  for group in "${groups[@]}"; do
+    [ -f "${result_dir}/${group}.out" ] &&
+      cat "${result_dir}/${group}.out"
+    if [ -f "${result_dir}/${group}.result" ]; then
+      read group_pass group_fail < "${result_dir}/${group}.result"
+      pass=$((pass + group_pass))
+      fail=$((fail + group_fail))
+    else
+      echo "FAIL - test worker ${group} did not publish a result"
+      fail=$((fail + 1))
+      worker_failed=1
+    fi
+  done
+
+  # This is a coverage guard, not merely a pretty total: a misplaced group
+  # boundary must fail instead of making a faster suite by silently skipping
+  # assertions.
+  expected=249
+  if [ "$pass" -ne "$expected" ]; then
+    echo "FAIL - expected ${expected} passing assertions, got ${pass}"
+    fail=$((fail + 1))
+  fi
+  echo
+  echo "${pass} passed, ${fail} failed"
+  [ "$worker_failed" -eq 0 ] && [ "$fail" -eq 0 ]
+  exit $?
+fi
+
 here="$(cd "$(dirname "$0")" && pwd)"
 wrapper="${here}/../run-codex-second-opinion"
 # Without this check an empty workdir would root every fixture path at
@@ -36,7 +123,7 @@ mkdir -p "$HOME"
 
 fake="${workdir}/fake-codex"
 cat > "$fake" <<'FAKE'
-#!/usr/bin/env bash
+#!/bin/bash
 # Behavior knobs, all via environment:
 #   FAKE_HOOKS_STATE    effective hooks state `features list` reports (default
 #                       false). `-`, not `:-`: an explicitly empty value must
@@ -202,7 +289,40 @@ echo '{"type":"item.completed"}'
 exit "${FAKE_EXIT:-0}"
 FAKE
 chmod +x "$fake"
-export CODEX_BIN="$fake"
+# Most contract groups care about wrapper semantics, not an exec boundary.
+# Exporting the fake as a Bash function avoids starting another interpreter
+# for every features/MCP/run probe. Process-group and stream groups keep the
+# executable fake because their contract is precisely about real descendants.
+fake_codex() ( . "$CSO_FAKE_CODE"; )
+export -f fake_codex
+export CSO_FAKE_CODE="$fake"
+case "${CSO_TEST_GROUP:-all}" in
+  review_watchdog_*|consult_markers_*|all) export CODEX_BIN="$fake" ;;
+  *) export CODEX_BIN=fake_codex ;;
+esac
+
+# Production waits deliberately use whole seconds. Unit tests only need to
+# prove deadline, grace-loop and signal behavior, not spend those seconds in
+# real time. Keep long fake-Codex stalls long so a broken watchdog still
+# fails; compress only the wrapper's short polling/grace intervals.
+case "${CSO_TEST_GROUP:-all}" in
+review_watchdog_*|consult_markers_*|all)
+  test_bin="${workdir}/bin"
+  mkdir -p "$test_bin"
+  cat > "${test_bin}/sleep" <<'SLEEP'
+#!/bin/bash
+case "${1:-}" in
+  0.2) exec /bin/sleep 0.01 ;;
+  0.4) exec /bin/sleep 0.05 ;;
+  1)   exec /bin/sleep 0.10 ;;
+  2)   exec /bin/sleep 0.02 ;;
+  *)   exec /bin/sleep "$@" ;;
+esac
+SLEEP
+  chmod +x "${test_bin}/sleep"
+  export PATH="${test_bin}:${PATH}"
+  ;;
+esac
 
 pass=0 fail=0
 ok()   { pass=$((pass + 1)); echo "ok   - $1"; }
@@ -218,6 +338,7 @@ check_exit() { # name expected actual
   if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected exit $2, got $3"; fi
 }
 
+group_utility() {
 # The mutation runner depends on fail-fast for runtime, while an ordinary run
 # depends on collect-all diagnostics. Pin both sides of that test-harness
 # contract before any expensive fixtures start.
@@ -236,6 +357,8 @@ check_exit "test harness: mutation mode stops at the first failure" 1 "$?"
 )
 check_exit "test harness: ordinary mode keeps collecting failures" 0 "$?"
 
+}
+
 commit_env=(-c user.email=test@test -c user.name=test)
 
 make_repo() { # dir → repo with one commit and one dirty file
@@ -244,13 +367,41 @@ make_repo() { # dir → repo with one commit and one dirty file
   echo dirty > "$1/f.txt"
 }
 
-dirty="${workdir}/dirty";  make_repo "$dirty"
-clean="${workdir}/clean"
-git init -q "$clean"
-git -C "$clean" "${commit_env[@]}" commit -q --allow-empty -m init
-bare="${workdir}/bare.git"; git init -q --bare "$bare"
-plain="${workdir}/plain";   mkdir -p "$plain"
+dirty="${workdir}/dirty"
+case "${CSO_TEST_GROUP:-all}" in
+  consult_*) : ;;
+  *)
+    if [ -n "${CSO_TEST_FIXTURE_TEMPLATE:-}" ]; then
+      cp -R "$CSO_TEST_FIXTURE_TEMPLATE" "$dirty"
+    else
+      make_repo "$dirty"
+    fi
+    ;;
+esac
 
+# Only the argument/empty-scope groups use a pristine tree; only argument
+# validation needs bare and non-repository operands. Avoid constructing those
+# fixtures in every isolated worker.
+case "${CSO_TEST_GROUP:-all}" in
+  review_args|review_behavior|review_context|all)
+    clean="${workdir}/clean"
+    if [ -n "${CSO_TEST_FIXTURE_TEMPLATE:-}" ]; then
+      cp -R "$CSO_TEST_FIXTURE_TEMPLATE" "$clean"
+      rm -f "${clean}/f.txt"
+    else
+      git init -q "$clean"
+      git -C "$clean" "${commit_env[@]}" commit -q --allow-empty -m init
+    fi
+    ;;
+esac
+case "${CSO_TEST_GROUP:-all}" in
+  review_args|consult_basic|all)
+    bare="${workdir}/bare.git"; git init -q --bare "$bare"
+    plain="${workdir}/plain"; mkdir -p "$plain"
+    ;;
+esac
+
+group_utility_boundaries() {
 # --- inside_repo, at a boundary no fixture can build --------------------
 #
 # A worktree at `/` cannot be created in a test, and it is the case where a
@@ -343,11 +494,13 @@ check_exit "oversized CODEX_SECOND_OPINION_TIMEOUT is exit 3 (review)" 3 "$?"
 CODEX_SECOND_OPINION_TIMEOUT=999999999999999999999999999999 \
   "$wrapper" consult --repo "$dirty" "question" >/dev/null 2>&1
 check_exit "oversized CODEX_SECOND_OPINION_TIMEOUT is exit 3 (consult)" 3 "$?"
+}
 
 # =======================================================================
 # review mode
 # =======================================================================
 
+group_review_args() {
 # --- environment and argument validation ------------------------------
 
 "$wrapper" review --repo "$bare" >/dev/null 2>&1
@@ -472,6 +625,9 @@ check_exit "review: empty --model is exit 3, not silent inheritance" 3 "$?"
 "$wrapper" consult --repo "$dirty" --effort "" "question" >/dev/null 2>&1
 check_exit "consult: empty --effort is exit 3, not silent inheritance" 3 "$?"
 
+}
+
+group_review_models() {
 # --- model settings are a closed three-way choice ----------------------
 #
 # Each rejection here replaces a failure that used to cost a full run:
@@ -550,6 +706,9 @@ chmod 755 "$ro_tmp"
 FAKE_EXIT=124 "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
 check_exit "review: codex's own exit 124 is exit 4, not 5" 4 "$?"
 
+}
+
+group_review_safety_head() {
 # --- hooks/apps/plugins fail closed -----------------------------------
 
 argv_log="${workdir}/argv-hooks.log"
@@ -715,6 +874,9 @@ else
   bad "review: a truncated re-check fails closed" "exit $status"
 fi
 
+}
+
+group_review_safety_tail() {
 # The same incompleteness in the first listing.
 stderr="${workdir}/mcp-truncated.err"
 FAKE_MCP_LIST='[{"name":"github","enabled":true' \
@@ -793,6 +955,9 @@ else
   bad "review: a failed re-check fails closed" "exit $status"
 fi
 
+}
+
+group_review_fallback() {
 # --allow-mcp now means the opposite opt-in: keep them reachable. No
 # override may be emitted, and the warning must stay loud.
 stderr="${workdir}/mcp-allowed.err"
@@ -880,7 +1045,7 @@ fi
 tail_once="${workdir}/tail-fail-once"
 tail_err="${workdir}/tail-fallback.err"
 rm -f "$tail_once"
-FAKE_FAIL_ONCE="$tail_once" FAKE_ERROR_TAIL=20000 \
+FAKE_FAIL_ONCE="$tail_once" FAKE_ERROR_TAIL=4096 \
   "$wrapper" review --repo "$dirty" --timeout 60 >/dev/null 2> "$tail_err"
 tail_status=$?
 if [ "$tail_status" = 0 ] && grep -q 'came from your configured model' "$tail_err"; then
@@ -908,6 +1073,9 @@ else
     "attempts=$(grep -c '^exec ' "$fb_argv"), second=$(printf '%s' "$fb_second_line" | cut -c1-80)"
 fi
 
+}
+
+group_review_behavior() {
 # --- empty scopes -----------------------------------------------------
 
 "$wrapper" review --repo "$clean" >/dev/null 2>&1
@@ -996,6 +1164,9 @@ else
   bad "review: running line redacts the custom prompt body"
 fi
 
+}
+
+group_review_context() {
 # --- --context ---------------------------------------------------------
 
 # The scope flag cannot travel with a prompt, so --context restates the
@@ -1131,6 +1302,9 @@ else
   bad "review: a rejected config key exits 4 with both causes named" "exit $status"
 fi
 
+}
+
+group_review_paths_mcp_a() {
 # --- CDPATH hygiene ----------------------------------------------------
 
 # An exported CDPATH must neither redirect a slashless --repo to a
@@ -1225,6 +1399,9 @@ else
   bad "review: a listing truncated after a disabled entry fails closed" "exit $status"
 fi
 
+}
+
+group_review_paths_mcp_b() {
 # Balanced, boolean-correct, and still not JSON. No shape here can be trusted
 # to be the whole listing. The `other` payloads carry the bad literal on a
 # field the boolean guard never inspects, so they reach the id parser: only
@@ -1358,6 +1535,9 @@ for prim in \
   fi
 done
 
+}
+
+group_review_paths_scopes_a() {
 # A name carrying an ESCAPED QUOTE. The string consumer honours backslash
 # escapes so that a quote inside a name cannot end the token early; without
 # that, `[{"name":"a\"b","enabled":false}]` unbalances and the listing is
@@ -1439,6 +1619,9 @@ else
   bad "review: an empty first MCP listing fails closed" "exit $status"
 fi
 
+}
+
+group_review_paths_scopes_b() {
 # A branch can move between the precheck and the run — this repository expects
 # concurrent agents — so what reaches Codex must be the object name the
 # precheck verified, not the ref the caller typed.
@@ -1605,6 +1788,9 @@ else
   bad "review: a --repo named like an option is entered, not parsed" "exit $status"
 fi
 
+}
+
+group_review_git_a() {
 # --- the wrapper's own git prechecks must not write the repository -----
 #
 # They run before any sandbox exists, so they are the one place this script
@@ -1717,6 +1903,9 @@ else
   bad "review: a pass-through git shim still runs (the refusal was the failure, not the shim)" "exit $status"
 fi
 
+}
+
+group_review_git_b() {
 # NOT TESTED HERE: GIT_NO_LAZY_FETCH in the prechecks.
 #
 # Removing the export leaves this suite green, and no fixture can change that
@@ -1850,6 +2039,9 @@ else
     "exit $noidx_status, index changed: $([ "$noidx_before" = "$noidx_after" ] && echo no || echo yes)"
 fi
 
+}
+
+group_review_storage_a() {
 # --- session writes land outside the repository, or are disclosed ------
 
 # Codex writes every session under CODEX_HOME/sessions, so a CODEX_HOME
@@ -2024,6 +2216,9 @@ else
   bad "review: an ordinary CODEX_HOME says nothing" "warned anyway"
 fi
 
+}
+
+group_review_storage_b() {
 # A linked worktree's administrative git directory sits under the MAIN
 # repository, outside `--show-toplevel` — so a containment check against the
 # worktree root alone lets CODEX_HOME sit in the repository's own storage.
@@ -2059,6 +2254,9 @@ else
   bad "review: a CODEX_HOME in a sibling worktree fails closed" "exit $status"
 fi
 
+}
+
+group_review_watchdog_a() {
 # --- the reporting duty must be dischargeable from what is printed -----
 #
 # Both modes owe the reader the model that answered. With --inherit and no
@@ -2108,6 +2306,9 @@ else
   bad "review: the timeout returns on its own deadline, not the stall's" "${elapsed_s}s for a 1s timeout against a 30s stall"
 fi
 
+}
+
+group_review_watchdog_b() {
 # --- the bounded progress feed, and what the log keeps ------------------
 #
 # The feed exists so a background run's output file stays small while still
@@ -2190,6 +2391,9 @@ else
     "exit $leak_status, sleepers that appeared during this run (not killed): ${leak_new:-none}"
 fi
 
+}
+
+group_review_watchdog_c() {
 # --- the KILL backstop, for a codex that ignores TERM -------------------
 #
 # The grace loop is followed by an UNCONDITIONAL kill -KILL precisely because
@@ -2260,10 +2464,16 @@ fi
 # consult mode
 # =======================================================================
 
-repo="${workdir}/repo"
-git init -q "$repo"
-git -C "$repo" "${commit_env[@]}" commit -q --allow-empty -m init
+}
 
+setup_consult_repo() {
+  repo="${workdir}/repo-$1"
+  git init -q "$repo"
+  git -C "$repo" "${commit_env[@]}" commit -q --allow-empty -m init
+}
+
+group_consult_basic() {
+setup_consult_repo basic
 # --- environment and argument validation ------------------------------
 
 "$wrapper" consult --repo "$bare" "question" >/dev/null 2>&1
@@ -2367,7 +2577,18 @@ fi
 "$wrapper" consult --repo "$repo" --timeout 30 -- "- bullet-style question?" >/dev/null 2>&1
 check_exit "consult: dash-leading question works after --" 0 "$?"
 
+}
+
+group_consult_sessions_a() {
+setup_consult_repo sessions
 # --- multi-turn sessions ----------------------------------------------
+
+# Recreate the successful first turn this group inspects. Workers are
+# deliberately isolated, so no assertion can accidentally pass on another
+# group's output file or mutable fixture.
+combined="${workdir}/consult-session-first.out"
+FAKE_OUTPUT='Option A, on balance.' \
+  "$wrapper" consult --repo "$repo" --timeout 30 "which option?" > "$combined" 2>&1
 
 if grep -qE '^session: 0198aaaa-bbbb-cccc-dddd-eeeeffff0000$' "$combined"; then
   ok "consult: session marker carries the thread id from the stream"
@@ -2526,6 +2747,10 @@ check_exit "consult: a valid UUID with a trailing line is exit 3" 3 "$?"
 "$wrapper" consult --repo "$repo" --continue >/dev/null 2>&1
 check_exit "consult: --continue without a value is exit 3" 3 "$?"
 
+}
+
+group_consult_sessions_b() {
+setup_consult_repo sessions-b
 # A resume that silently lands on a different thread is a fresh answer
 # without the prior discussion — it must be discarded, not relayed.
 combined3="${workdir}/mismatch.out"
@@ -2599,6 +2824,10 @@ for badthread in "abc; touch ${forged_sentinel}" 'not-a-uuid' '0198aaaa-bbbb-ccc
   fi
 done
 
+}
+
+group_review_drift_files() {
+setup_consult_repo drift
 # `--uncommitted` and `--base` diff the LIVE working tree, and it is read
 # twice: once by the precheck, and again by codex minutes later. Anything that
 # writes the repo in between means the report describes a state nobody
@@ -2682,6 +2911,10 @@ else
 fi
 chmod 644 "${dirty}/unreadable.txt"; rm -f "${dirty}/unreadable.txt"
 
+}
+
+group_review_drift_scope() {
+setup_consult_repo drift-scope
 # A COMMIT landing mid-run, which is the --base case: status and `diff HEAD`
 # are both empty before and after, while merge-base..worktree — the whole of
 # that scope — has changed underneath.
@@ -2763,6 +2996,10 @@ else
   bad "review: a fence marker inside --context is escaped" "$(grep -o 'CALLER-BACKGROUND[A-Z-]*' "$ctx_argv" | tr '\n' ' ')"
 fi
 
+}
+
+group_review_diagnostics() {
+setup_consult_repo diagnostics
 # `-s` passes for a file holding a single newline, and emit_result would then
 # print nothing while the run exited 0 — a blank answer reported as success.
 ws_err="${workdir}/whitespace.err"
@@ -2826,6 +3063,10 @@ else
   bad "review: a line break in the timeout diagnostic cannot forge a marker" "exit $dstatus"
 fi
 
+}
+
+group_consult_markers_a() {
+setup_consult_repo markers
 # The marker contract is MODE-SPECIFIC, and the docs used to list all four
 # kinds together. Consult never writes `report:`, so a `report:` line in a
 # consult run can only have come out of the model-controlled answer — and a
@@ -2863,6 +3104,10 @@ else
   bad "consult: the default timeout is not repeated in the descriptor" "$(grep -m1 '^resume:' "$resume_out")"
 fi
 
+}
+
+group_consult_markers_b() {
+setup_consult_repo markers-b
 # No thread.started event → the answer stands, and both markers say so in
 # prose rather than falling silent. An id is never invented.
 combined2="${workdir}/no-thread.out"
@@ -2993,9 +3238,10 @@ fi
 # --- CDPATH hygiene ----------------------------------------------------
 
 mkdir -p "$workdir/decoy"
-git init -q "$workdir/decoy/repo"
+repo_name="$(basename "$repo")"
+git init -q "$workdir/decoy/$repo_name"
 out_cdpath="${workdir}/cdpath-consult.out"
-( cd "$workdir" && CDPATH="$workdir/decoy" "$wrapper" consult --repo repo --timeout 30 "q" ) > "$out_cdpath" 2>&1
+( cd "$workdir" && CDPATH="$workdir/decoy" "$wrapper" consult --repo "$repo_name" --timeout 30 "q" ) > "$out_cdpath" 2>&1
 if [ "$?" = 0 ] && ! grep -q decoy "$out_cdpath"; then
   ok "consult: CDPATH cannot redirect --repo or pollute stdout"
 else
@@ -3006,8 +3252,76 @@ fi
 
 FAKE_SLEEP=30 "$wrapper" consult --repo "$repo" --timeout 1 "question" >/dev/null 2>&1
 check_exit "consult: hung run is killed with exit 5" 5 "$?"
+}
 
 # --- summary -----------------------------------------------------------
+
+case "${CSO_TEST_GROUP:-all}" in
+  utility) group_utility; group_utility_boundaries ;;
+  review_args) group_review_args ;;
+  review_models) group_review_models ;;
+  review_safety_head) group_review_safety_head ;;
+  review_safety_tail) group_review_safety_tail ;;
+  review_fallback) group_review_fallback ;;
+  review_behavior) group_review_behavior ;;
+  review_context) group_review_context ;;
+  review_paths_mcp_a) group_review_paths_mcp_a ;;
+  review_paths_mcp_b) group_review_paths_mcp_b ;;
+  review_paths_scopes_a) group_review_paths_scopes_a ;;
+  review_paths_scopes_b) group_review_paths_scopes_b ;;
+  review_git_a) group_review_git_a ;;
+  review_git_b) group_review_git_b ;;
+  review_storage_a) group_review_storage_a ;;
+  review_storage_b) group_review_storage_b ;;
+  review_watchdog_a) group_review_watchdog_a ;;
+  review_watchdog_b) group_review_watchdog_b ;;
+  review_watchdog_c) group_review_watchdog_c ;;
+  consult_basic) group_consult_basic ;;
+  consult_sessions_a) group_consult_sessions_a ;;
+  consult_sessions_b) group_consult_sessions_b ;;
+  review_drift_files) group_review_drift_files ;;
+  review_drift_scope) group_review_drift_scope ;;
+  review_diagnostics) group_review_diagnostics ;;
+  consult_markers_a) group_consult_markers_a ;;
+  consult_markers_b) group_consult_markers_b ;;
+  all)
+    group_utility
+    group_utility_boundaries
+    group_review_args
+    group_review_models
+    group_review_safety_head
+    group_review_safety_tail
+    group_review_fallback
+    group_review_behavior
+    group_review_context
+    group_review_paths_mcp_a
+    group_review_paths_mcp_b
+    group_review_paths_scopes_a
+    group_review_paths_scopes_b
+    group_review_git_a
+    group_review_git_b
+    group_review_storage_a
+    group_review_storage_b
+    group_review_watchdog_a
+    group_review_watchdog_b
+    group_review_watchdog_c
+    group_consult_basic
+    group_consult_sessions_a
+    group_consult_sessions_b
+    group_review_drift_files
+    group_review_drift_scope
+    group_review_diagnostics
+    group_consult_markers_a
+    group_consult_markers_b
+    ;;
+  *) bad "unknown test group" "${CSO_TEST_GROUP}" ;;
+esac
+
+if [ -n "${CSO_TEST_RESULT_DIR:-}" ] && [ -n "${CSO_TEST_GROUP:-}" ]; then
+  printf '%s %s\n' "$pass" "$fail" > "${CSO_TEST_RESULT_DIR}/${CSO_TEST_GROUP}.result"
+  [ "$fail" -eq 0 ]
+  exit $?
+fi
 
 echo
 echo "${pass} passed, ${fail} failed"
