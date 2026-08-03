@@ -104,16 +104,6 @@ if [ -n "${FAKE_CONFIG_ERR:-}" ]; then
 fi
 if [ -n "${FAKE_FAIL:-}" ]; then
   echo '{"type":"error","message":"unknown model"}'
-  # FAKE_ERROR_TAIL: N more error-like lines AFTER the rejection, which is
-  # the order that matters. If the detector reads the log through a pipeline,
-  # `grep -q` exits at this match and the producer takes SIGPIPE on the
-  # remaining output; pipefail turns that into 141, read as "no rejection",
-  # and the fallback never fires. Emitting the tail BEFORE the match instead
-  # lets the consumer read to the end and the case proves nothing — measured,
-  # the mutant survived that ordering.
-  if [ -n "${FAKE_ERROR_TAIL:-}" ]; then
-    awk -v n="$FAKE_ERROR_TAIL" 'BEGIN{for(i=0;i<n;i++) print "{\"type\":\"error\",\"message\":\"padding line\"}"}'
-  fi
   exit 1
 fi
 if [ -n "${FAKE_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_FAIL_ONCE" ]; then
@@ -136,6 +126,16 @@ if [ -n "${FAKE_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_FAIL_ONCE" ]; then
     done
   fi
   echo '{"type":"error","message":"unknown model"}'
+  # FAKE_ERROR_TAIL: N more error-like lines AFTER the rejection, which is
+  # the order that matters. If the detector reads the log through a pipeline,
+  # `grep -q` exits at this match and the producer takes SIGPIPE on the
+  # remaining output; pipefail turns that into 141, read as "no rejection",
+  # and the fallback never fires. Emitting the tail BEFORE the match instead
+  # lets the consumer read to the end and the case proves nothing — measured,
+  # the mutant survived that ordering.
+  if [ -n "${FAKE_ERROR_TAIL:-}" ]; then
+    awk -v n="$FAKE_ERROR_TAIL" 'BEGIN{for(i=0;i<n;i++) print "{\"type\":\"error\",\"message\":\"padding line\"}"}'
+  fi
   exit 1
 fi
 # Two kinds of descendant, because a parent-only kill is invisible to either
