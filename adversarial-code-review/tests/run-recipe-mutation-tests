@@ -185,6 +185,22 @@ mutate "named paths narrow the manifest" \
   'included="$(acr_manifest -- "${acr_pathspec[@]}")" || { echo "manifest capture failed" >&2; exit 1; }' \
   'included="$(acr_manifest)" || { echo "manifest capture failed" >&2; exit 1; }'
 
+# One submodule policy for every diff that describes the artifact. The patch
+# drops a dirty submodule; a manifest or range map that does not names a path
+# the bound patch has no source for.
+mutate "the manifest ignores a dirty submodule" \
+  '  { git diff --name-only --ignore-submodules=dirty "${diff_args[@]}" ${1+"$@"} || exit 1' \
+  '  { git diff --name-only "${diff_args[@]}" ${1+"$@"} || exit 1'
+mutate "the range map ignores a dirty submodule" \
+  'git -c core.quotePath=false diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0' \
+  'git -c core.quotePath=false diff --no-ext-diff --no-textconv --unified=0'
+# And `everything` differs from `included` only by the exclusions, or a
+# narrowed scope reports every other changed file as though an exclusion
+# removed it.
+mutate "the exclusion baseline carries the same pathspec" \
+  'everything="$(acr_manifest -- "${acr_pathspec[@]}")" || { echo "manifest capture failed" >&2; exit 1; }' \
+  'everything="$(acr_manifest)" || { echo "manifest capture failed" >&2; exit 1; }'
+
 # --- the snapshot does not borrow its caller's shell options ---------------
 # Four of its digests are pipelines ending in `shasum`, which exits 0 on the
 # empty stream a failed `git ls-files` leaves — so without pipefail the `||
@@ -231,8 +247,8 @@ mutate "the snapshot runs from the repository top level" \
   '    cd -- "$(git rev-parse --show-toplevel)" || exit 1' \
   '    :'
 mutate "non-ASCII paths are not C-quoted in the diff headers" \
-  'git -c core.quotePath=false diff --no-ext-diff --no-textconv --unified=0' \
-  'git -c core.quotePath=true diff --no-ext-diff --no-textconv --unified=0'
+  'git -c core.quotePath=false diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0' \
+  'git -c core.quotePath=true diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0'
 
 echo
 # EXCLUDED, with the measurement, rather than left to survive silently:
@@ -266,7 +282,7 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success — the manufactured
 # confidence this script exists to catch, one level up again.
-EXPECTED_TOTAL=16
+EXPECTED_TOTAL=19
 if [ -n "${ACR_RECIPEMUT_ONLY:-}" ]; then
   echo "PARTIAL RUN: ${total} of $((total + filtered)) mutants selected. This is NOT a sweep."
   echo "${survived}/${total} of the selected mutants survived."

@@ -1623,8 +1623,15 @@ const normCandidatePaths = (c) => {
   return out
 }
 
+// Applied by the two PRODUCERS — absorb() for finder output, the region-probe
+// promotion for emergent candidates — rather than once inside addCandidate.
+// Both need the canonical record before they call it: absorb ranks and caps on
+// it, and the probe's duplicate-recovery has to look up the same fingerprint
+// dedup stored. A third copy inside addCandidate would be the load-bearing one
+// while both of those masked it, so no mutant could reach it and nothing would
+// have measured it. Two call sites, each measured, beats three of which one is
+// untestable.
 function addCandidate(c, lens, origin) {
-  c = normCandidatePaths(c)
   // Identical records are noise, and a hostile artifact can manufacture them
   // in bulk: every duplicate raises the mandatory accuracy floor, so enough of
   // them abort the review and suppress the real findings with it. Collapse
@@ -1988,7 +1995,14 @@ if (acceptedRegionProbes.length) {
     probeByTarget.set(o.t.target_id, { ...norm, target: o.t })
     if (constructed) {
       if (o.r.emergent_candidate) {
-        const rec = addCandidate(o.r.emergent_candidate, `region probe (${o.t.label})`, 'region_probe')
+        // Canonicalised ONCE, here, and used for both the insertion and the
+        // duplicate lookup below. addCandidate normalises what it stores, so a
+        // probe spelling a path `./x.js` against a finder's `x.js` was refused
+        // as the duplicate it is — and the recovery branch then fingerprinted
+        // the RAW record, matched nothing, and silently dropped the only
+        // executable evidence anyone had built for that claim.
+        const em = normCandidatePaths(o.r.emergent_candidate)
+        const rec = addCandidate(em, `region probe (${o.t.label})`, 'region_probe')
         if (rec) {
           // The recall channel's claim is that probing THIS region produced
           // this candidate, and the region record and the emergent count both
@@ -2010,7 +2024,7 @@ if (acceptedRegionProbes.length) {
           // dropping it here loses the attack that evidence would have earned.
           // Attached to the existing candidate, not claimed as emergent: a
           // finder found it first, and the breadth count should say so.
-          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))
+          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(em))
           if (existing && !probeByTarget.has(existing.id)) {
             probeByTarget.set(existing.id, { ...norm, target_id: existing.id, constructed, target: { kind: 'candidate', target_id: existing.id } })
           } else if (existing) {
@@ -2533,7 +2547,17 @@ if (adjInput.length && !adjudicationTokenBlocked) {
   for (const o of out) {
     if (!o) { adjBatchesFailed += 1; continue }
     if (!o.r) { adjBatchesFailed += 1; for (const e of o.b) failed('adjudicator', e.candidate.id, 'adjudicator batch did not return') ; continue }
+    // A batch that RETURNED and graded nothing has failed too. The schema
+    // admits an empty `verdicts` array, and reconcile discards ids that name
+    // no candidate in the batch and repeats of one that does — so a
+    // schema-valid `{verdicts: []}` used to end the run `adjudication_failed`
+    // while `adjudicator_batches` published `failed: 0`. The detail arrays
+    // still carried the evidence, but the count a reader takes at face value
+    // contradicted the status beside it, which is the one thing a disclosure
+    // number must not do.
+    const before = verdictById.size
     reconcile(o.r.verdicts, o.b.map((e) => e.candidate.id), 'adjudicator', verdictById)
+    if (verdictById.size === before) adjBatchesFailed += 1
   }
   endWave()
 

@@ -152,6 +152,18 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   accumulated, and a `find` that fails refuses the run rather than
   reading as a tree with no links in it.
 
+  Four shapes it has to handle, and each was a hole once. The walk uses
+  `find -L`, so it descends THROUGH a link rather than stopping at it —
+  a chain whose first level points outside and whose second points back
+  in reported only the first. A DANGLING link is resolved by its target
+  text, because `mkdir -p` follows one and creates what it names. Every
+  target is tested in two spellings, as written and through its nearest
+  existing ancestor, since a lexical path under a symlinked prefix —
+  `/var` on macOS — compares unequal to a repository root that came from
+  `pwd -P`. And a `sessions` that exists but cannot be entered is refused
+  rather than treated as absent: both used to leave the walk with nothing
+  to do, and only one of them is safe to proceed on.
+
   Two bounds remain, stated rather than closed. A link planted *deeper*
   than the date levels is not inspected — the day directories hold
   rollout files, and walking them would make the check's cost scale with
@@ -251,13 +263,16 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
     2.42 and does nothing below that — the residual is narrow, since the
     common `--filter=blob:none` clone keeps every commit and merge-base
     needs no blobs, but it is a residual and not a guarantee.
-  - `diff.external` and textconv drivers name programs too, and the review
-    prechecks do NOT pass `--no-ext-diff`/`--no-textconv`. Measured on git
-    2.39: neither runs for `diff --quiet` or `diff --name-only`, which is
-    all this script uses — only a diff that actually produces output invokes
-    them. The flags are on the *adversarial-code-review* capture, which does
-    produce output. Recorded here so the absence reads as a measurement
-    rather than an oversight.
+  - `diff.external` and textconv drivers name programs too, so every `git
+    diff` this script runs now passes `--no-ext-diff --no-textconv`. The
+    claim that used to stand here — that neither runs for `diff --quiet` or
+    `diff --name-only`, "which is all this script uses" — was measured on git
+    2.39 and was true when it was written. It stopped being true the moment
+    the scope fingerprint added a diff that PRODUCES OUTPUT, which is exactly
+    the shape that invokes them, and it did so twice per run before codex's
+    sandbox exists. A measurement that licenses an omission has to be re-taken
+    when the code it describes changes; this one was not, and the flags are
+    cheaper than the reasoning that justified leaving them off.
   - `core.fsmonitor` names a program git executes while refreshing —
     outside every sandbox codex could impose, and before its hooks, apps
     and plugins are disabled. `--no-optional-locks` does not stop it;

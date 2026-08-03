@@ -537,6 +537,59 @@ else
   fi
 fi
 
+# --- a dirty submodule reaches neither manifest nor range map --------------
+#
+# `--ignore-submodules=dirty` was on the patch capture alone. A submodule whose
+# gitlink has not moved but whose worktree is dirty is reported as changed by a
+# default `git diff`, so the manifest named a path the bound patch did not
+# contain and the range map could give it a synthetic line-1 hunk — enough for
+# a candidate to be accepted, hunk-bound and reported against source nobody
+# captured.
+
+dirtysub_host="${WORK}/dirtysub-host"
+dirtysub_inner="${WORK}/dirtysub-inner"
+git init -q "$dirtysub_inner"
+printf 'inner\n' > "${dirtysub_inner}/i.txt"
+git -C "$dirtysub_inner" add -A
+git -C "$dirtysub_inner" "${commit_env[@]}" commit -q -m inner
+git init -q "$dirtysub_host"
+printf 'outer\n' > "${dirtysub_host}/o.txt"
+git -C "$dirtysub_host" add -A
+git -C "$dirtysub_host" "${commit_env[@]}" commit -q -m outer
+if git -C "$dirtysub_host" -c protocol.file.allow=always "${commit_env[@]}" \
+     submodule add -q "$dirtysub_inner" libs/dep >/dev/null 2>&1 &&
+   git -C "$dirtysub_host" "${commit_env[@]}" commit -q -m add-sub; then
+  # Dirty INSIDE the submodule only: its gitlink does not move, so this is the
+  # case a default diff reports and the capture drops.
+  printf 'changed inside\n' >> "${dirtysub_host}/libs/dep/i.txt"
+  printf 'changed outside\n' >> "${dirtysub_host}/o.txt"
+  ds_status="$(run_capture "$dirtysub_host" 'acr_scope=uncommitted; paths=()')"
+  # shellcheck source=/dev/null
+  . "${WORK}/vars"
+  ds_ranges="${WORK}/dirtysub-ranges.out"
+  ( cd "$dirtysub_host" || exit 1
+    set -euo pipefail
+    diff_args=(HEAD); untracked=1; acr_pathspec=(.); excludes=(':(exclude)no-such-path-zzz')
+    # shellcheck source=/dev/null
+    . "${WORK}/ranges.sh"
+  ) > "$ds_ranges" 2>/dev/null || true
+  if [ "$ds_status" != 0 ]; then
+    bad "a dirty submodule is in neither manifest nor range map" "capture exit $ds_status"
+  elif ! grep -q '^o\.txt$' "${WORK}/included"; then
+    bad "a dirty submodule is in neither manifest nor range map" "the ordinary changed file is missing, so nothing is proven"
+  elif grep -q '^libs/dep$' "${WORK}/included"; then
+    bad "a dirty submodule is in neither manifest nor range map" "included_paths names libs/dep: $(tr '\n' '|' < "${WORK}/included")"
+  elif grep -q '^libs/dep ' "$ds_ranges"; then
+    bad "a dirty submodule is in neither manifest nor range map" "changed_ranges names libs/dep: $(tr '\n' '|' < "$ds_ranges")"
+  elif grep -q 'libs/dep' "${tmp}/patch.diff"; then
+    bad "a dirty submodule is in neither manifest nor range map" "the patch carries libs/dep"
+  else
+    ok "a dirty submodule is in neither manifest nor range map"
+  fi
+else
+  bad "a dirty submodule is in neither manifest nor range map" "could not create the submodule fixture"
+fi
+
 # --- a submodule path may contain spaces -----------------------------------
 #
 # The recipe promises to NAME uncaptured submodules so they can be reviewed as
@@ -866,6 +919,46 @@ if [ "$filt_status" = 0 ] &&
   ok "exclusions reach the patch, the untracked files and both manifests"
 else
   bad "exclusions reach the patch, the untracked files and both manifests" "exit $filt_status"
+fi
+
+# `excluded_paths` names what an EXCLUSION removed, not everything the scope
+# narrowing left out. With the baseline manifest running repository-wide, a
+# review of one named path reported every other changed file there as though a
+# lockfile rule had dropped it — two different reasons for absence rendered as
+# one, in the section whose whole job is to say why something is missing. The
+# scope narrowing is already disclosed as the scope.
+narrowfilt="$(new_repo narrowfilt)"
+printf 'lock\n' > "${narrowfilt}/package-lock.json"
+printf 'other\n' > "${narrowfilt}/other.txt"
+git -C "$narrowfilt" add other.txt
+git -C "$narrowfilt" "${commit_env[@]}" commit -q -m other
+printf 'edited\n' >> "${narrowfilt}/tracked.txt"
+printf 'edited\n' >> "${narrowfilt}/other.txt"
+nf_status=0
+(
+  cd "$narrowfilt" || exit 1
+  set -euo pipefail
+  acr_scope=uncommitted; paths=(tracked.txt package-lock.json)
+  # shellcheck source=/dev/null
+  . "${WORK}/capture.sh"
+  # shellcheck source=/dev/null
+  . "${WORK}/filtered.sh"
+  printf '%s\n' "$included" > "${WORK}/nf-included"
+  printf '%s\n' "$excluded" > "${WORK}/nf-excluded"
+) || nf_status=$?
+if [ "$nf_status" != 0 ]; then
+  bad "excluded_paths names exclusions, not the unnamed scope" "exit $nf_status"
+elif ! grep -qx 'package-lock.json' "${WORK}/nf-excluded"; then
+  bad "excluded_paths names exclusions, not the unnamed scope" \
+    "the excluded lockfile is missing: $(tr '\n' '|' < "${WORK}/nf-excluded")"
+elif grep -qx 'other.txt' "${WORK}/nf-excluded"; then
+  bad "excluded_paths names exclusions, not the unnamed scope" \
+    "a file outside the named paths is reported as excluded: $(tr '\n' '|' < "${WORK}/nf-excluded")"
+elif ! grep -qx 'tracked.txt' "${WORK}/nf-included"; then
+  bad "excluded_paths names exclusions, not the unnamed scope" \
+    "the named path is missing from the manifest: $(tr '\n' '|' < "${WORK}/nf-included")"
+else
+  ok "excluded_paths names exclusions, not the unnamed scope"
 fi
 
 # The FILTERED recipe has its own enumerations, and fixing the unfiltered ones

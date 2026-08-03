@@ -35,9 +35,9 @@ if [ "${CSO_MUT_WORKER:-0}" != 1 ] &&
   pids=()
   starts=()
   start=1
-  while [ "$start" -le 76 ]; do
+  while [ "$start" -le 83 ]; do
     end=$((start + 3))
-    [ "$end" -le 76 ] || end=76
+    [ "$end" -le 83 ] || end=83
     starts+=("$start")
     CSO_MUT_WORKER=1 CSO_MUT_FROM="$start" CSO_MUT_TO="$end" \
       CSO_MUT_RESULT_DIR="$mut_results" "${HERE}/run-mutation-tests" \
@@ -64,11 +64,11 @@ if [ "${CSO_MUT_WORKER:-0}" != 1 ] &&
     fi
   done
   echo
-  if [ "$worker_failed" -eq 0 ] && [ "$total" -eq 76 ] && [ "$survived" -eq 0 ]; then
+  if [ "$worker_failed" -eq 0 ] && [ "$total" -eq 83 ] && [ "$survived" -eq 0 ]; then
     echo "all ${total} mutants killed — the suite has teeth"
     exit 0
   fi
-  echo "mutation sweep failed: total=${total}/76 survived=${survived} worker_failed=${worker_failed}"
+  echo "mutation sweep failed: total=${total}/83 survived=${survived} worker_failed=${worker_failed}"
   exit 1
 fi
 
@@ -245,8 +245,18 @@ mutate "an unaddressable id is refused" lib/common.bash \
 mutate "CODEX_HOME inside the repo refuses" lib/common.bash \
   'if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; }' \
   'if { false && inside_repo "$resolved_home"; }'
+# BOTH spellings at once. They are one check written twice — the path as
+# resolved and its nearest existing ancestor followed through symlinks — and
+# for a `sessions` that exists they return the same string, so removing either
+# alone changes nothing observable. The pair is measured together here, and the
+# ancestor half separately below, where a dangling target makes them differ.
 mutate "CODEX_HOME/sessions is followed" lib/common.bash \
-  '|| { [ -n "$resolved_sessions" ] && inside_repo "$resolved_sessions"; }' '|| { false; }'
+  '     || { [ -n "$resolved_sessions" ] && inside_repo "$resolved_sessions"; } \
+     || { [ -n "$sessions_anc" ] && inside_repo "$sessions_anc"; } \' \
+  '     || { false; } \'
+mutate "the sessions target is resolved through symlinks" lib/common.bash \
+  '    [ -z "$resolved_sessions" ] || sessions_anc="$(resolved_existing_ancestor "$resolved_sessions")"' \
+  '    sessions_anc=""'
 mutate "a repo-local TMPDIR is relocated" lib/common.bash \
   'if inside_repo "$scratch"; then' 'if false; then'
 mutate "the worktree list must be readable" lib/common.bash \
@@ -412,7 +422,13 @@ mutate "a JSON number is consumed whole" lib/common.bash \
 # separator check sees a separator that is there; none sees one that is
 # missing after a value.
 mutate "a finished value ends the value" lib/common.bash \
-  '          if (value_started) { garbage = 1; continue }' '          ;'
+  '        if (entry() && value_started && c !~ /[ \t\r]/ && c != "," && c != "}") garbage = 1' \
+  '        ;'
+# And a nested container CLOSING has to mark the value it was as finished, or
+# the check above cannot see a second one opening straight after it.
+mutate "a closed container is a finished value" lib/common.bash \
+  '        if (c == "}") { if (depth == 1) flush(1); depth--; if (entry()) value_started = 1; continue }' \
+  '        if (c == "}") { if (depth == 1) flush(1); depth--; continue }'
 # `log:` is a marker, and callers are told to trust the final one of a kind.
 # Printed only at startup it was the model, not this script, that wrote the
 # last one in a merged stream.
@@ -422,19 +438,49 @@ mutate "the log path is repeated after the result" lib/common.bash \
 # redirects the write exactly as one at the top does.
 mutate "nested session links are resolved" lib/common.bash \
   '     || [ -n "$nested_inside" ] \' '     || false \'
+# The walk descends THROUGH links, or a chain hides the level that lands
+# inside the repository behind one that does not.
+mutate "the session walk follows links" lib/common.bash \
+  "    done < <(find -L \"\$resolved_sessions\"" \
+  "    done < <(find \"\$resolved_sessions\""
+# And a sessions directory that EXISTS but cannot be entered is not one that
+# is absent: both leave the walk with nothing to do, and only one of them is
+# safe to proceed on.
+mutate "an unenterable sessions root refuses" lib/common.bash \
+  '        echo "error: $(flat "${sessions_path}") exists but could not be entered, so where codex would write cannot be established" >&2' \
+  '        resolved_sessions=""'
+
 mutate "a failed session walk refuses" lib/common.bash \
   '    if [ "$nested_status" != 0 ]; then' '    if false; then'
+# A DANGLING link names where codex would write just as a live one does:
+# `mkdir -p` follows it and creates the target.
+mutate "a dangling session link is resolved by its target" lib/common.bash \
+  '          nested_target="$(readlink "$nested_real" 2>/dev/null || true)"' \
+  '          nested_target=""'
+# And the target has to be compared in BOTH forms. `resolved_path` is lexical
+# except at a `..`, so an absolute target under a symlinked /var kept its
+# unresolved spelling and compared unequal to a `pwd -P` repository root.
+mutate "the nested target is resolved through symlinks" lib/common.bash \
+  '        nested_anc="$(resolved_existing_ancestor "$nested")"' \
+  '        nested_anc=""'
 
 # --- mode-specific ---------------------------------------------------------
 # A git read that FAILS while fingerprinting is not a tree that did not change.
 # Each of these fell back to an empty string — what a clean tree produces — and
 # failed the same way on both calls, so the digests compared equal.
+# A textconv or external diff driver is a program the REVIEWED REPOSITORY
+# names, run before codex's sandbox exists. Only a diff that produces output
+# invokes them, which is exactly what the fingerprint's diff does.
+mutate "the fingerprint diff runs no repository-named program" lib/review.bash \
+  'diff --no-ext-diff --no-textconv HEAD 2>/dev/null)" || meas_ok=0' \
+  'diff HEAD 2>/dev/null)" || meas_ok=0'
+
 mutate "a failed status abandons the fingerprint" lib/review.bash \
   'status --porcelain --untracked-files=normal 2>/dev/null)" || meas_ok=0' \
   'status --porcelain --untracked-files=normal 2>/dev/null)" || st=""'
 mutate "a failed diff abandons the fingerprint" lib/review.bash \
-  'diff --no-ext-diff HEAD 2>/dev/null)" || meas_ok=0' \
-  'diff --no-ext-diff HEAD 2>/dev/null)" || df=""'
+  'diff --no-ext-diff --no-textconv HEAD 2>/dev/null)" || meas_ok=0' \
+  'diff --no-ext-diff --no-textconv HEAD 2>/dev/null)" || df=""'
 mutate "a failed untracked listing abandons the fingerprint" lib/review.bash \
   '          > "$listing" 2>/dev/null || meas_ok=0' \
   '          > "$listing" 2>/dev/null || true'
@@ -499,7 +545,7 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. Pin the count:
 # any mutant that silently fails to launch is a failure in itself.
-EXPECTED_TOTAL=76
+EXPECTED_TOTAL=83
 if [ "${CSO_MUT_WORKER:-0}" = 1 ]; then
   printf '%s %s\n' "$total" "$survived" > "${CSO_MUT_RESULT_DIR}/${CSO_MUT_FROM}.result"
   echo "chunk ${CSO_MUT_FROM}-${CSO_MUT_TO}: ${total} mutants, ${survived} survived"

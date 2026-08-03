@@ -81,7 +81,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # This is a coverage guard, not merely a pretty total: a misplaced group
   # boundary must fail instead of making a faster suite by silently skipping
   # assertions.
-  expected=269
+  expected=278
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -1497,7 +1497,7 @@ group_review_paths_mcp_b() {
 # a complete listing with nothing enabled. `01` is not JSON either, and garbage
 # with no separator in front of it was seen by none of the separator checks,
 # which only ever look at a separator that IS there.
-for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]' '[{"name":"off","enabled":false,GARBAGE}]' '[{"name":"a","enabled":true,"other":falsegarbage}]' '[{"name":"a","enabled":true,"other":truex}]' '[{"name":"a","enabled":true,"other":nullx}]' '[{"name":"off","enabled":false,"port":1garbage}]' '[{"name":"off","enabled":false,"port":01}]' '[{"name":"off","enabled":false,"other":false xyz}]' '[{"name":"off","enabled":false,"other":false false}]' '[{"name":"off","enabled":false,"other":false 1}]'; do
+for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]' '[{"name":"off","enabled":false,GARBAGE}]' '[{"name":"a","enabled":true,"other":falsegarbage}]' '[{"name":"a","enabled":true,"other":truex}]' '[{"name":"a","enabled":true,"other":nullx}]' '[{"name":"off","enabled":false,"port":1garbage}]' '[{"name":"off","enabled":false,"port":01}]' '[{"name":"off","enabled":false,"other":false xyz}]' '[{"name":"off","enabled":false,"other":false false}]' '[{"name":"off","enabled":false,"other":false 1}]' '[{"name":"off"{},"enabled":false}]' '[{"name":"a","enabled":false,"t":{}{}}]' '[{"name":"a","enabled":false,"t":[][]}]'; do
   stderr="${workdir}/mcp-badjson.err"
   argv_log="${workdir}/argv-mcp-badjson.log"
   FAKE_MCP_LIST="$bad_json" FAKE_ARGV_LOG="$argv_log" \
@@ -2046,6 +2046,38 @@ else
   bad "review: TMPDIR='-P' is an operand, not a cd flag" "exit ${dash_status}, scratch went ${dash_placed} (${dash_log:-no log line})"
 fi
 
+# A textconv driver names a program too, and the repository under review picks
+# it: `.gitattributes` selects the driver, the config supplies the command, and
+# git runs it to produce the text an ordinary diff prints. The scope
+# fingerprint's diff prints text and runs twice per review, before codex's
+# sandbox exists — so this is a program the reviewed repository chooses,
+# executed by the wrapper that promises its prechecks run none.
+tcv="${workdir}/textconv"
+git init -q "$tcv"
+printf 'x\n' > "$tcv/a.bin"
+git -C "$tcv" add -A
+git -C "$tcv" "${commit_env[@]}" commit -q -m i
+tcv_marker="${workdir}/textconv-fired"
+cat > "${workdir}/textconv-driver" <<HOOK
+#!/bin/sh
+: > "${tcv_marker}"
+cat "\$1"
+HOOK
+chmod +x "${workdir}/textconv-driver"
+git -C "$tcv" config diff.probe.textconv "${workdir}/textconv-driver"
+git -C "$tcv" config diff.probe.command "${workdir}/textconv-driver"
+printf 'a.bin diff=probe\n' > "$tcv/.gitattributes"
+printf 'edited\n' >> "$tcv/a.bin"
+rm -f "$tcv_marker"
+"$wrapper" review --repo "$tcv" --timeout 30 >/dev/null 2>&1
+tcv_status=$?
+if [ "$tcv_status" = 0 ] && [ ! -e "$tcv_marker" ]; then
+  ok "review: no diff runs a textconv or external driver the repository names"
+else
+  bad "review: no diff runs a textconv or external driver the repository names" \
+    "exit $tcv_status, fired: $([ -e "$tcv_marker" ] && echo yes || echo no)"
+fi
+
 # core.fsmonitor names a program git runs while refreshing, outside every
 # sandbox codex could impose and before any of its feature gates exist.
 # --no-optional-locks does not stop it; -c core.fsmonitor=false does.
@@ -2311,6 +2343,100 @@ for depth in 1 2 3; do
     bad "review: a sessions link ${depth} level(s) down into the repo fails closed" "exit $status"
   fi
   rm -rf "$nest_home"
+done
+
+# `sessions` itself dangling, with an ABSOLUTE target. There is nothing to
+# `cd` into, so only the resolved-ancestor spelling sees where it lands: the
+# lexical form keeps `/var/...` while the repository's own roots came from
+# `pwd -P` and read `/private/var/...` on macOS, so the two compare unequal and
+# the check passes on a target that is plainly inside the tree.
+droot_home="${workdir}/dangling-root-home"
+mkdir -p "$droot_home"
+ln -s "${dirty}/not-created-yet" "${droot_home}/sessions"
+stderr="${workdir}/codex-home-dangling-root.err"
+argv_log="${workdir}/argv-dangling-root.log"
+CODEX_HOME="$droot_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a dangling sessions root into the repo fails closed"
+else
+  bad "review: a dangling sessions root into the repo fails closed" \
+    "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+rm -rf "$droot_home"
+
+# A CHAIN: sessions/2026 points at an outside directory, and that directory's
+# own `08` points into the repository. A physical traversal reports only the
+# first link, whose target is outside, so the check passed while codex's
+# logical path sessions/2026/08/... landed in the repository all the same.
+chain_home="${workdir}/chain-home"
+chain_mid="${workdir}/chain-outside"
+mkdir -p "${chain_home}/sessions" "$chain_mid"
+ln -s "$chain_mid" "${chain_home}/sessions/2026"
+ln -s "$dirty" "${chain_mid}/08"
+stderr="${workdir}/codex-home-chain.err"
+argv_log="${workdir}/argv-chain.log"
+CODEX_HOME="$chain_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a chained sessions link into the repo fails closed"
+else
+  bad "review: a chained sessions link into the repo fails closed" "exit $status"
+fi
+rm -rf "$chain_home" "$chain_mid"
+
+# `sessions` that EXISTS and cannot be entered is not `sessions` that is
+# absent, and both used to leave the walk skipped. Unmeasurable placement is
+# refused, not assumed safe.
+unent_home="${workdir}/unenterable-home"
+mkdir -p "${unent_home}/sessions"
+chmod 000 "${unent_home}/sessions"
+stderr="${workdir}/codex-home-unenterable.err"
+argv_log="${workdir}/argv-unenterable.log"
+CODEX_HOME="$unent_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+chmod 755 "${unent_home}/sessions"
+if [ "$status" = 3 ] && grep -q 'could not be entered' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a sessions directory that cannot be entered refuses the run"
+else
+  bad "review: a sessions directory that cannot be entered refuses the run" \
+    "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+rm -rf "$unent_home"
+
+# A DANGLING link is the same hazard: codex runs `mkdir -p` and that follows a
+# link to a directory that does not exist yet, creating it inside the
+# repository. `-d` is false for such a link, so resolving it by `cd` tests the
+# link's own location — under CODEX_HOME, outside the repo — and passes.
+# Relative and absolute targets both, since only one of them goes through the
+# link's own directory.
+for danglekind in absolute relative; do
+  dang_home="${workdir}/dangling-home-${danglekind}"
+  mkdir -p "${dang_home}/sessions"
+  case "$danglekind" in
+    absolute) ln -s "${dirty}/not-created-yet" "${dang_home}/sessions/2026" ;;
+    # From ${dang_home}/sessions, this climbs to $workdir and back down into
+    # the repository — the same place, spelled without a leading slash.
+    relative) ln -s "../../$(basename "$dirty")/not-created-yet" "${dang_home}/sessions/2026" ;;
+  esac
+  stderr="${workdir}/codex-home-dangling-${danglekind}.err"
+  argv_log="${workdir}/argv-dangling-${danglekind}.log"
+  CODEX_HOME="$dang_home" FAKE_ARGV_LOG="$argv_log" \
+    "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+  status=$?
+  if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr" &&
+     ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+    ok "review: a dangling sessions link (${danglekind}) into the repo fails closed"
+  else
+    bad "review: a dangling sessions link (${danglekind}) into the repo fails closed" "exit $status"
+  fi
+  rm -rf "$dang_home"
 done
 
 # A walk that FAILS is not a tree with no links in it. `find` runs in a process

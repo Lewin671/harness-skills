@@ -126,7 +126,14 @@ scope_fingerprint() {
       local meas_ok=1 head="" st="" df="" un=""
       head="$(git --no-optional-locks rev-parse HEAD 2>/dev/null)" || meas_ok=0
       st="$(git --no-optional-locks -c core.fsmonitor=false status --porcelain --untracked-files=normal 2>/dev/null)" || meas_ok=0
-      df="$(git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff HEAD 2>/dev/null)" || meas_ok=0
+      # `--no-textconv` beside `--no-ext-diff`, and it is not decoration: a
+      # repository selects a diff driver through `.gitattributes` and the
+      # config supplies `diff.<driver>.textconv`, which git RUNS to produce the
+      # text an ordinary diff prints. This one prints text, and it runs before
+      # codex's read-only sandbox exists — so without the flag the wrapper
+      # executed a program the repository under review chose, twice per run,
+      # while SKILL.md said its prechecks run no program its config names.
+      df="$(git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff --no-textconv HEAD 2>/dev/null)" || meas_ok=0
       # Each file REDIRECTED into shasum, never passed as an argument. Passing
       # names is what the first version did, and measured: an untracked file
       # named `-` hashes empty stdin (so editing it is invisible), one named
@@ -248,7 +255,11 @@ check_scope_nonempty() {
       # git refreshes stale stat data and rewrites .git/index — with or
       # without --no-optional-locks (measured). See git_readonly_index.
       diff_status=0
-      git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --quiet "$merge_base" || diff_status=$?
+      # Both flags here too. `--quiet` suppresses the output rather than the
+      # machinery, and relying on that distinction is a reading of git's
+      # internals this file has no business depending on: the flags cost
+      # nothing and remove the question.
+      git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff --no-textconv --quiet "$merge_base" || diff_status=$?
       if [ "$diff_status" -eq 0 ]; then
         echo "nothing to review: no changes since the merge base with ${scope_value}" >&2
         exit 2
@@ -276,7 +287,7 @@ check_scope_nonempty() {
       # code (128), not the documented environment exit 3.
       local commit_files
       if resolved_parent="$(git rev-parse --verify --quiet "${resolved_commit}^1")"; then
-        commit_files="$(git diff --name-only "$resolved_parent" "$resolved_commit")" || {
+        commit_files="$(git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff --no-textconv --name-only "$resolved_parent" "$resolved_commit")" || {
           echo "error: git diff failed for $(flat "${scope_value}")" >&2; exit 3; }
       else
         resolved_parent=""

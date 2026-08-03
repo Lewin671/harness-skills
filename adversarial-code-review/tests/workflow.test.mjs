@@ -659,7 +659,12 @@ function makeAgent(state, s) {
         // only way a constructed counterexample can reach it is the
         // attachment being tested here.
         r.emergent_candidate = s.dupEmergent
-          ? cand('util.js', 7, 'minor', 'present_code', 'off by one')
+          // dupEmergentDotted: the probe spells the path the OTHER way from
+          // the finder that filed the same claim. Both are the same file, so
+          // the claim really is a duplicate — and the recovery lookup has to
+          // agree with the insertion about that, or the counterexample is lost
+          // with the duplicate it came in with.
+          ? cand(s.dupEmergentDotted ? './util.js' : 'util.js', 7, 'minor', 'present_code', 'off by one')
           // emergentElsewhere: a valid candidate, inside the reviewed paths,
           // but nowhere near the region this probe was aimed at. R1 covers
           // pay.js:10-40, so bulk.js:3 is outside it by construction.
@@ -820,6 +825,10 @@ function makeAgent(state, s) {
 
     if (l.startsWith('adjudicate')) {
       if (s.adjNull) return null
+      // Schema-valid and useless: the array is allowed to be empty, so the
+      // batch RETURNS and grades nothing. Distinct from adjNull, which is the
+      // agent failing to answer at all.
+      if (s.adjEmpty && !l.includes('escalated')) return { verdicts: [] }
       const ids = expectedIds(prompt)
       if (s.adjAlwaysRefute) {
         return { verdicts: ids.map((id) => ({ candidate_id: id, state: 'refuted', final_severity: 'minor',
@@ -936,6 +945,16 @@ R.push(await run('adjudicator null', { ...BASE }, { adjNull: true,
     const lost = terminal.find((r) => r.state !== 'substantiated')
     return !lost || `${lost.candidate_id} reproduced under control but came out ${lost.state}`
   } }))
+// A batch that returns and grades nothing has failed, and the count has to say
+// so. The schema admits an empty `verdicts` array, so the run ended
+// `adjudication_failed` while `adjudicator_batches` published `failed: 0` —
+// a number contradicting the status printed beside it.
+R.push(await run('adjudicator returns no verdicts', { ...BASE }, { adjEmpty: true,
+  expect: (res) => {
+    const b = res.ledger.adjudicator_batches
+    if (!b || !b.attempted) return 'no adjudication batch was attempted, so the count is untested'
+    return b.failed === b.attempted
+      || `${b.attempted} batch(es) graded nothing and ${b.failed} were counted as failed` } }))
 R.push(await run('attack null', { ...BASE }, { attackNull: true }))
 R.push(await run('verifier null', { ...BASE }, { verifierNull: true }))
 R.push(await run('verifier null + adj substantiates', { ...BASE }, { verifierNull: true, adjAlwaysSubstantiate: true }))
@@ -1509,6 +1528,15 @@ R.push(await run('probe duplicates a finder claim', { ...BASE }, { dupEmergent: 
     if (!target) return 'the finder candidate it duplicates is not in the results'
     return Boolean(target.probe && target.probe.constructed)
       || 'the constructed counterexample was discarded with the duplicate claim' } }))
+R.push(await run('probe duplicates a finder claim under another spelling', { ...BASE },
+  { dupEmergent: true, dupEmergentDotted: true,
+  expect: (res) => {
+    const dup = (res.ledger.invalid_candidates || []).some((x) => /byte-identical duplicate/.test(x.reason))
+    if (!dup) return 'the ./-spelled emergent candidate was not recognised as the duplicate it is'
+    const target = (res.candidate_results || []).find((x) => x.anchor === 'util.js:7')
+    if (!target) return 'the finder candidate it duplicates is not in the results'
+    return Boolean(target.probe && target.probe.constructed)
+      || 'the counterexample was dropped: dedup matched the normalised record and the recovery looked up the raw one' } }))
 // Candidates that tie on every ranking field and whose text locale collation
 // calls equal must still resolve the same way in both emission orders.
 {

@@ -195,6 +195,28 @@ resolved_path() {
   printf '%s' "${out:-/}"
 }
 
+# The nearest ancestor that EXISTS, resolved with `pwd -P`. `resolved_path` is
+# lexical except where it meets a `..`, so an absolute path under a symlinked
+# prefix — `/var` on macOS, which is where `mktemp -d` hands out directories —
+# keeps its unresolved spelling and compares unequal to a repository root that
+# came from `pwd -P`. Measured: a dangling `sessions` link written with an
+# absolute target was approved while the RELATIVE spelling of the same target
+# was refused, because only the latter contained a `..` to trigger resolution.
+# The CODEX_HOME check tests both forms for exactly this reason; this names
+# that walk so the nested one can test both too.
+# `printf` is the last command, so a caller reads the path from stdout and the
+# empty string when nothing along the way exists.
+resolved_existing_ancestor() {
+  local probe="$1" parent
+  while [ -n "$probe" ] && [ ! -d "$probe" ]; do
+    parent="${probe%/*}"
+    [ "$parent" = "$probe" ] && parent=""
+    probe="$parent"
+  done
+  [ -n "$probe" ] || return 0
+  ( cd -- "$probe" 2>/dev/null && pwd -P ) || true
+}
+
 # Print one line per *enabled* server in a `codex mcp list --json`
 # payload read from stdin: its id, or `?` when the entry is enabled but
 # its name could not be read.
@@ -300,6 +322,15 @@ mcp_enabled_ids() {
         }
         # A fresh root array has no entry and no comma behind it yet.
         if (c == "[" && bdepth == 0) { arr_open = 1; arr_comma = 0 }
+        # A value that has already ENDED, followed by another value token.
+        # BEFORE the string, object and array branches, because each of them
+        # consumes its token and `continue`s: a check placed after them never
+        # saw `[{"name":"off"{},"enabled":false}]`, which balances, spells its
+        # booleans correctly, satisfies the key/value count and emits no id —
+        # so an unparseable listing read as "every server disabled" and the run
+        # started on it. At entry level the only things that may follow a
+        # finished value are whitespace, `,` and the `}` that closes the entry.
+        if (entry() && value_started && c !~ /[ \t\r]/ && c != "," && c != "}") garbage = 1
         if (c == "\"") {
           # Consume the whole string token, honouring backslash escapes,
           # so that a brace or colon inside it cannot move the parser.
@@ -370,14 +401,18 @@ mcp_enabled_ids() {
           trailing = 0
         }
         if (c == "{") { depth++; if (depth == 1) { entry_bdepth = bdepth; flush(0) }; continue }
-        if (c == "}") { if (depth == 1) flush(1); depth--; continue }
+        # A nested object CLOSING at entry level finishes the value it was.
+        # Without this the check above cannot see `{"a":{}{},...}`: the second
+        # `{` arrives with value_started still 0, because nothing marked the
+        # object as a completed value.
+        if (c == "}") { if (depth == 1) flush(1); depth--; if (entry()) value_started = 1; continue }
         # Brackets are tracked purely to prove the payload is whole.
         # Braces alone are not enough: a listing cut off between two
         # entries — after `}` but before `]` — is brace-balanced, so it
         # would parse as a complete listing that happens to omit every
         # server after the cut.
         if (c == "[") { bdepth++; continue }
-        if (c == "]") { bdepth--; continue }
+        if (c == "]") { bdepth--; if (entry()) value_started = 1; continue }
         if (entry() && key == "enabled" && substr(s, i, 4) == "true" && boundary(substr(s, i + 4, 1))) {
           enabled = 1; key = ""; i += 3
           value_started = 1
@@ -388,18 +423,7 @@ mcp_enabled_ids() {
         # this it reads as a complete listing with nothing enabled. Strings,
         # objects and arrays are consumed above; what reaches here is a
         # literal or a number, and anything else is not JSON.
-        if (entry() && c !~ /[ \t\r]/) {
-          # A value that has already ENDED, followed by more of one. Every
-          # separator check above sees a separator that is there and none of
-          # them sees one that is missing after a value, so
-          # `{"name":"a","enabled":false xyz}` balanced, spelled its boolean
-          # correctly, satisfied the key/value count and emitted no id — a
-          # complete-looking listing with nothing enabled. Measured. Strings,
-          # objects and arrays never reach this line, and literals and numbers
-          # are consumed whole, so at entry level the only things that may
-          # follow a finished value are whitespace, `,` and `}` — all of which
-          # continue earlier.
-          if (value_started) { garbage = 1; continue }
+        if (entry() && !value_started && c !~ /[ \t\r]/) {
           # A NUMBER is consumed whole and made to end at a delimiter, exactly
           # as the three literals below are. Marking the value "started" on the
           # leading digit and skipping the rest let anything follow it:
@@ -996,9 +1020,39 @@ common_resolve_scratch() {
   # CODEX_HOME=/outside/parent/new-home and /outside/parent/sessions linked
   # into the repository, the run refused although codex would write
   # /outside/parent/new-home/sessions, entirely outside it.
-  local resolved_sessions=""
-  if [ -d "$codex_home_abs" ]; then
-    resolved_sessions="$(cd -- "${codex_home_abs}/sessions" 2>/dev/null && pwd -P)" || resolved_sessions=""
+  local resolved_sessions="" sessions_anc="" sessions_dangling=0
+  local sessions_path="${codex_home_abs}/sessions" sessions_target=""
+  if [ -d "$codex_home_abs" ] && { [ -e "$sessions_path" ] || [ -L "$sessions_path" ]; }; then
+    resolved_sessions="$(cd -- "$sessions_path" 2>/dev/null && pwd -P)" || resolved_sessions=""
+    if [ -z "$resolved_sessions" ]; then
+      # It is THERE and it could not be entered, which is a different fact from
+      # its not existing — and both used to leave `resolved_sessions` empty, so
+      # an unreadable sessions directory skipped every check below and the run
+      # started without knowing where codex would write.
+      #
+      # A DANGLING link is the one recoverable case: it names its target, and
+      # `mkdir -p` will create it there. Everything else — permissions, an I/O
+      # error, a link to something that is not a directory — leaves the
+      # placement unmeasurable, and unmeasurable is refused.
+      if [ -L "$sessions_path" ] && [ ! -e "$sessions_path" ]; then
+        sessions_target="$(readlink "$sessions_path" 2>/dev/null || true)"
+        case "$sessions_target" in
+          '') resolved_sessions="" ;;
+          /*) resolved_sessions="$(resolved_path "$sessions_target")" ;;
+          *)  resolved_sessions="$(resolved_path "${sessions_path%/*}/${sessions_target}")" ;;
+        esac
+        sessions_dangling=1
+      else
+        echo "error: $(flat "${sessions_path}") exists but could not be entered, so where codex would write cannot be established" >&2
+        echo "hint: make it readable, or point CODEX_HOME somewhere else, outside the repository." >&2
+        exit 3
+      fi
+    fi
+    # The same both-forms rule the nested walk uses: the path as resolved, and
+    # its nearest existing ancestor followed through symlinks. A dangling
+    # target has only the lexical form, and that form is wrong across a
+    # symlinked prefix.
+    [ -z "$resolved_sessions" ] || sessions_anc="$(resolved_existing_ancestor "$resolved_sessions")"
   fi
 
   # `sessions` itself is not the only link that lands inside the repository.
@@ -1011,13 +1065,22 @@ common_resolve_scratch() {
   # date levels is still outside this check and stays disclosed in
   # internals.md rather than claimed.
   #
+  # `-L`, so the walk descends THROUGH a link rather than stopping at it. A
+  # chain — `sessions/2026` to an outside directory whose own `08` links into
+  # the repository — reported only the first link under the default physical
+  # traversal, and its target was outside, so the check passed while codex's
+  # logical path `sessions/2026/08/...` landed in the repository. Under `-L` a
+  # link to a directory is `-type d` and is followed; a BROKEN one is still
+  # `-type l`, which is why both are matched. A symlink cycle makes find exit
+  # non-zero and the run refuses rather than looping.
+  #
   # The exit status rides the stream as a final NUL record, because a process
   # substitution's own status is unreachable — a `find` that failed on an
   # unreadable directory would otherwise read as a tree with no symlinks in
   # it, which is the same fail-open as not looking. Unforgeable here: `find`
   # is given an ABSOLUTE root, so every real record starts with `/`.
-  local nested="" nested_real="" nested_inside="" nested_status=missing
-  if [ -n "$resolved_sessions" ]; then
+  local nested="" nested_real="" nested_target="" nested_anc="" nested_inside="" nested_status=missing
+  if [ -n "$resolved_sessions" ] && [ "$sessions_dangling" -eq 0 ]; then
     while IFS= read -r -d '' nested; do
       case "$nested" in
         'cdx_status '*) nested_status="${nested#cdx_status }"; continue ;;
@@ -1030,11 +1093,33 @@ common_resolve_scratch() {
         if [ -d "$nested_real" ]; then
           nested="$(cd -- "$nested_real" 2>/dev/null && pwd -P)" || nested="$nested_real"
         else
-          nested="$nested_real"
+          # A DANGLING link still names where codex would write: `mkdir -p`
+          # follows it and creates the target, so `sessions/2026 -> repo/x`
+          # with no `repo/x` yet lands the rollouts in the repository all the
+          # same. `-d` is false for it and `cd` cannot resolve what does not
+          # exist, so testing `nested_real` here would test the link's OWN
+          # location — which is under CODEX_HOME, outside the repository, and
+          # passes. The target text is resolved instead, relative to the link's
+          # directory when it is not absolute.
+          nested_target="$(readlink "$nested_real" 2>/dev/null || true)"
+          case "$nested_target" in
+            '') nested="$nested_real" ;;
+            /*) nested="$(resolved_path "$nested_target")" ;;
+            *)  nested="$(resolved_path "${nested_real%/*}/${nested_target}")" ;;
+          esac
         fi
-        if inside_repo "$nested"; then nested_inside="$nested"; fi
+        # BOTH forms, exactly as the CODEX_HOME check does it: the path as
+        # written, and its nearest existing ancestor resolved through symlinks.
+        # Neither alone is sufficient — a lexical collapse climbs OVER a
+        # symlink instead of through it, and `pwd -P` cannot reach a directory
+        # codex has yet to create.
+        nested_anc="$(resolved_existing_ancestor "$nested")"
+        if inside_repo "$nested" ||
+           { [ -n "$nested_anc" ] && inside_repo "$nested_anc"; }; then
+          nested_inside="$nested"
+        fi
       fi
-    done < <(find "$resolved_sessions" -mindepth 1 -maxdepth 3 -type l -print0 2>/dev/null \
+    done < <(find -L "$resolved_sessions" -mindepth 1 -maxdepth 3 \( -type d -o -type l \) -print0 2>/dev/null \
              && printf 'cdx_status 0\0' || printf 'cdx_status %s\0' "$?")
     if [ "$nested_status" != 0 ]; then
       echo "error: could not enumerate the session directories under CODEX_HOME (${nested_status}), so where codex would write cannot be established" >&2
@@ -1045,6 +1130,7 @@ common_resolve_scratch() {
 
   if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; } \
      || { [ -n "$resolved_sessions" ] && inside_repo "$resolved_sessions"; } \
+     || { [ -n "$sessions_anc" ] && inside_repo "$sessions_anc"; } \
      || [ -n "$nested_inside" ] \
      || inside_repo "$probe"; then
     echo "error: CODEX_HOME ($(flat "${codex_home}")) resolves inside $(flat "${worktree_root}") or its git storage." >&2

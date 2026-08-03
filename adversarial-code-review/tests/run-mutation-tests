@@ -184,7 +184,8 @@ mutate "excluded_paths entries are strings" "if (A.excluded_paths !== undefined 
 # ledger. Two mutants because the two sides fail independently: a caller who
 # writes the dotted spelling, and an agent who does.
 mutate "the manifest is normalised" "const normalisedIncluded = A.included_paths.map(normPath)" "const normalisedIncluded = A.included_paths.slice()"
-mutate "agent-supplied paths are normalised" "  c = normCandidatePaths(c)" "  "
+mutate "finder paths are normalised" "  const ordered = [...(res.candidates || [])].map(normCandidatePaths).sort(preProbeOrder)" "  const ordered = [...(res.candidates || [])].sort(preProbeOrder)"
+mutate "probe paths are normalised" "        const em = normCandidatePaths(o.r.emergent_candidate)" "        const em = o.r.emergent_candidate"
 # And the normaliser has to actually normalise. An identity function passes
 # both call sites while changing nothing.
 mutate "normPath collapses redundant syntax" "  const body = p.split('/').filter((s) => s !== '' && s !== '.').join('/')" "  const body = p"
@@ -290,7 +291,17 @@ why: \${target.why}"
 mutate "attack target location is fenced" "\${fenced(target.label)}" "\${target.label}"
 mutate "adjudicator heading carries no raw path" "=== candidate \${e.candidate.id}" "=== candidate \${e.candidate.id} at \${e.candidate.file}:\${e.candidate.line}"
 mutate "the finder sample reprices the rest" "if (restLenses.length && !admitTokens(restLenses.length * W.finder)) {" "if (false) {"
-mutate "duplicate probe keeps its evidence" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))" "          const existing = null"
+# A batch that returned and graded nothing has failed. Counting only the agent
+# call that never answered published `failed: 0` beside a status of
+# `adjudication_failed`.
+mutate "an ungraded batch counts as failed" "    if (verdictById.size === before) adjBatchesFailed += 1" "    "
+
+mutate "duplicate probe keeps its evidence" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(em))" "          const existing = null"
+# One canonical spelling for the insertion AND the recovery lookup. Dedup
+# compares normalised records, so a probe spelling a path the other way from
+# the finder it duplicates was refused as a duplicate and then not found by a
+# lookup on the raw record — losing the only executable evidence for the claim.
+mutate "the recovery lookup uses the normalised record" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(em))" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))"
 mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + escrow.adjudicator + escrow.verifier
 
 // Priced at the observed rate now." "prepaidDebtWU = 0
@@ -669,7 +680,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=246
+EXPECTED_TOTAL=249
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1

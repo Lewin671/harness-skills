@@ -288,8 +288,16 @@ patch_sha256="$(shasum -a 256 "${tmp}/patch.diff" | cut -d' ' -f1)"
 # test, so under `set -o pipefail` this otherwise perfect pipeline reports
 # failure. And each producer propagates explicitly, because `sort` succeeding
 # would otherwise hide a `git diff` that did not.
+# `--ignore-submodules=dirty` HERE TOO, and for the reason the capture uses
+# it: a submodule whose gitlink has not moved but whose worktree is dirty is
+# reported as changed by a default `git diff`. The capture drops it, so without
+# the same flag the manifest names a path the bound patch does not contain —
+# and included_paths is the one thing that keeps a finding inside the artifact,
+# so a candidate could then be accepted and reported against source nobody
+# captured. Every diff that feeds a manifest or a range needs the same policy
+# as the diff that feeds the patch, or the three describe different artifacts.
 acr_manifest() {                       # ${1}.. = extra pathspec arguments
-  { git diff --name-only "${diff_args[@]}" ${1+"$@"} || exit 1
+  { git diff --name-only --ignore-submodules=dirty "${diff_args[@]}" ${1+"$@"} || exit 1
     if [ "${untracked}" = 1 ]; then
       git ls-files --others --exclude-standard ${1+"$@"} || exit 1
     fi
@@ -636,7 +644,15 @@ Exclusions must be applied to the captured patch, not merely declared.
 A report that lists `excluded_paths` while every agent reviewed them —
 and the attack applied them — is exactly the kind of false disclosure
 this skill exists to prevent. Use pathspecs at capture time and hash
-the *filtered* patch:
+the *filtered* patch.
+
+And `excluded_paths` means *an exclusion removed this*, not *the review did
+not cover this*. The baseline manifest it is computed against therefore
+carries the same positive pathspec as `included` and differs only in the
+exclusion terms. Left repository-wide, a review of one named path listed
+every other changed file as excluded — scope narrowing and exclusion, two
+different reasons for absence, rendered as one in the section whose whole job
+is to distinguish them. The narrowing is already disclosed as the scope.
 
 ```bash
 # Exclusions are pathspec arguments to the same capture commands.
@@ -671,7 +687,13 @@ patch_sha256="$(shasum -a 256 "${tmp}/patch.diff" | cut -d' ' -f1)"
 # Both manifests, from the same pathspecs that produced the patch, through the
 # same helper — same pipefail and propagation reasoning as above.
 included="$(acr_manifest -- "${acr_pathspec[@]}" "${excludes[@]}")" || { echo "manifest capture failed" >&2; exit 1; }
-everything="$(acr_manifest)" || { echo "manifest capture failed" >&2; exit 1; }
+# The SAME positive pathspec as `included`, differing only in the exclusions.
+# Left repository-wide, every changed file outside the paths the user named
+# came out in `excluded_paths` as though an exclusion had removed it — two
+# different reasons for absence reported as one, in the section whose whole job
+# is to say why something was left out. The scope narrowing is already
+# disclosed as the scope.
+everything="$(acr_manifest -- "${acr_pathspec[@]}")" || { echo "manifest capture failed" >&2; exit 1; }
 excluded="$(comm -23 <(printf '%s\n' "${everything}") <(printf '%s\n' "${included}"))"
 ```
 
@@ -711,7 +733,7 @@ not the path. Use the `-z` variants when either is possible:
 # built from a failed `git diff` would name nothing and the review would
 # report a clean tree it never looked at.
 included_arr=()
-git diff --name-only -z "${diff_args[@]}" -- "${acr_pathspec[@]}" "${excludes[@]}" > "${tmp}/included.z" ||
+git diff --name-only -z --ignore-submodules=dirty "${diff_args[@]}" -- "${acr_pathspec[@]}" "${excludes[@]}" > "${tmp}/included.z" ||
   { echo "could not list changed paths" >&2; exit 1; }
 if [ "${untracked}" = 1 ]; then
   git ls-files --others --exclude-standard -z -- "${acr_pathspec[@]}" "${excludes[@]}" >> "${tmp}/included.z" ||
@@ -758,7 +780,11 @@ same filtered pathspecs, and cover all three shapes of change:
 # NUL-decoded included_paths. The range is filed under a key nobody has, the
 # real file gets none, and every candidate in it silently drops to file-level
 # binding. Measured.
-git -c core.quotePath=false diff --no-ext-diff --no-textconv --unified=0 "${diff_args[@]}" -- "${acr_pathspec[@]}" "${excludes[@]}" |
+# Same flag again: a dirty submodule's `Subproject commit <sha>-dirty`
+# pseudo-hunk would otherwise become a synthetic one-line range for a path the
+# patch does not carry — which is worse than having no entry, because an
+# explicit range is the only thing that can bind a candidate at hunk level.
+git -c core.quotePath=false diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0 "${diff_args[@]}" -- "${acr_pathspec[@]}" "${excludes[@]}" |
   awk '# A header pair is only a header pair INSIDE a file header — between
        # `diff --git` and the first hunk. Requiring the `--- ` half is not
        # enough: one hunk that rewrites a source line `-- a/forged` into
