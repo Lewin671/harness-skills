@@ -1,574 +1,90 @@
-#!/usr/bin/env bash
-# Does run-tests actually catch anything?
-#
-# Every mutant below breaks ONE protection the wrapper promises, and requires
-# run-tests to go red for it. A surviving mutant means that protection is
-# unguarded: the suite would stay green if it were deleted tomorrow, and a
-# green suite that cannot fail manufactures exactly the confidence it claims
-# to provide.
-#
-# This harness exists because the sibling skill's did. Spot-mutating this
-# suite by hand found one survivor in eight tries — the feature gate is
-# written `!= "false"` so that an unparseable state fails closed, and every
-# test supplied `true`, so rewriting it to `= "true"` kept the suite green.
-# Shipping the result of a sweep is not the same as shipping the sweep.
-#
-# Exit 0 when every mutant is killed. Full sweeps partition isolated mutant
-# ranges across workers; focused CSO_MUT_ONLY/FROM/TO runs stay single-process.
-set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-SKILL="$(cd "${HERE}/.." && pwd -P)"
+#!/usr/bin/env node
 
-if [ "${CSO_MUT_WORKER:-0}" != 1 ] &&
-   [ -z "${CSO_MUT_ONLY:-}${CSO_MUT_FROM:-}${CSO_MUT_TO:-}" ]; then
-  # A red baseline would score every mutant as killed for free. Run it once
-  # before partitioning; workers must not each repeat this eight-second gate.
-  if ! "${HERE}/run-tests" >/dev/null 2>&1; then
-    echo "baseline run-tests is already failing — fix that first; mutation results would be meaningless"
-    exit 1
-  fi
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { spawn } from 'node:child_process'
 
-  mut_results="$(mktemp -d "${TMPDIR:-/tmp}/cso-mut-results-XXXXXX")" &&
-    [ -n "$mut_results" ] || {
-      echo "cannot create the mutation result workspace" >&2; exit 1; }
-  trap 'rm -rf "$mut_results"' EXIT
-  pids=()
-  starts=()
-  start=1
-  while [ "$start" -le 84 ]; do
-    end=$((start + 3))
-    [ "$end" -le 84 ] || end=84
-    starts+=("$start")
-    CSO_MUT_WORKER=1 CSO_MUT_FROM="$start" CSO_MUT_TO="$end" \
-      CSO_MUT_RESULT_DIR="$mut_results" "${HERE}/run-mutation-tests" \
-      > "${mut_results}/${start}.out" 2>&1 &
-    pids+=("$!")
-    start=$((end + 1))
-  done
+const here = dirname(fileURLToPath(import.meta.url))
+const skill = dirname(here)
+const root = mkdtempSync(join(tmpdir(), 'cso-mutation-'))
+const maxJobs = Math.max(1, Number(process.env.CSO_MUTATION_JOBS || 8))
 
-  worker_failed=0
-  for pid in "${pids[@]}"; do
-    wait "$pid" || worker_failed=1
-  done
+const mutants = [
+  ['sandbox stays read-only', 'lib/runtime.mjs', `'sandbox_mode="read-only"'`, `'sandbox_mode="workspace-write"'`],
+  ['hooks stay disabled', 'lib/runtime.mjs', `'--disable', 'hooks', '--disable', 'apps'`, `'--disable', 'apps'`],
+  ['plugins stay disabled', 'lib/runtime.mjs', `'--disable', 'apps', '--disable', 'plugins'`, `'--disable', 'apps'`],
+  ['notify callback stays cleared', 'lib/runtime.mjs', `'-c', 'notify=[]'`, `'-c', 'notify=["unsafe"]'`],
+  ['strict config stays enabled', 'lib/runtime.mjs', `'--strict-config',`, ``],
+  ['failed feature output is discarded', 'lib/environment.mjs', `featureText = ''`, `featureText = features.stdout`],
+  ['MCP root must be an array', 'lib/mcp.mjs', `if (!Array.isArray(value)) {`, `if (false) {`],
+  ['MCP entries must be objects', 'lib/mcp.mjs', `if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {`, `if (false) {`],
+  ['MCP enabled field is required', 'lib/mcp.mjs', `if (!Object.hasOwn(entry, 'enabled')) {`, `if (false) {`],
+  ['MCP enabled field is boolean', 'lib/mcp.mjs', `if (typeof entry.enabled !== 'boolean') {`, `if (false) {`],
+  ['enabled MCP entries need names', 'lib/mcp.mjs', `if (entry.enabled && typeof entry.name !== 'string') {`, `if (false) {`],
+  ['model needs effort', 'lib/runtime.mjs', `if (state.modelSet && !state.effortSet) {`, `if (false) {`],
+  ['effort needs model', 'lib/runtime.mjs', `if (state.effortSet && !state.modelSet) {`, `if (false) {`],
+  ['inherit cannot mix with explicit flags', 'lib/runtime.mjs', `if (state.inheritSet && (state.modelSet || state.effortSet)) {`, `if (false) {`],
+  ['repeated model flags are rejected', 'lib/runtime.mjs', `if (state.modelSet > 1 || state.effortSet > 1 || state.inheritSet > 1) {`, `if (false) {`],
+  ['event metadata comes from last attempt', 'lib/runtime.mjs', `log.lastIndexOf(\`${'${ATTEMPT_MARKER}'}\\n\`)`, `log.indexOf(\`${'${ATTEMPT_MARKER}'}\\n\`)`],
+  ['fallback resumes with inherited settings', 'lib/runtime.mjs', `if (state.usedFallback || !state.model) return ' --inherit'`, `if (!state.model) return ' --inherit'`],
+  ['context fence cannot close early', 'lib/review.mjs', `review.context.replaceAll(CONTEXT_FENCE, \`${'${CONTEXT_FENCE}'}-ESCAPED\`)`, `review.context`],
+  ['UUID continuation remains strict', 'lib/consult.mjs', `if (!UUID.test(value)) {`, `if (false) {`],
+  ['symlink components resolve before dot-dot', 'lib/environment.mjs', `if (part === '..') { current = dirname(current); continue }`, `if (part === '..') { continue }`],
+]
 
-  total=0 survived=0
-  for start in "${starts[@]}"; do
-    cat "${mut_results}/${start}.out"
-    if [ -f "${mut_results}/${start}.result" ]; then
-      read chunk_total chunk_survived < "${mut_results}/${start}.result"
-      total=$((total + chunk_total))
-      survived=$((survived + chunk_survived))
-    else
-      echo "mutation worker starting at ${start} did not publish a result"
-      worker_failed=1
-    fi
-  done
-  echo
-  if [ "$worker_failed" -eq 0 ] && [ "$total" -eq 84 ] && [ "$survived" -eq 0 ]; then
-    echo "all ${total} mutants killed — the suite has teeth"
-    exit 0
-  fi
-  echo "mutation sweep failed: total=${total}/84 survived=${survived} worker_failed=${worker_failed}"
-  exit 1
-fi
-
-# Guarded, and not only for tidiness. This script does not set -e, and
-# `mutate` derives `work="${TMP}/work"` and then `rm -rf "$work"` — so an
-# empty TMP from a failed mktemp makes that `rm -rf /work`, before a single
-# mutant has run. tests/run-tests has guarded its own workdir from the start;
-# this one did not.
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/cso-mut-XXXXXX")" && [ -n "$TMP" ] || {
-  echo "cannot create the mutation workspace" >&2; exit 1; }
-trap 'rm -rf "${TMP}"' EXIT
-
-# A red baseline would score every mutant as killed for free — the same
-# can't-fail-meaningfully defect this script exists to catch, one level up.
-if [ "${CSO_MUT_WORKER:-0}" != 1 ] && ! "${HERE}/run-tests" >/dev/null 2>&1; then
-  echo "baseline run-tests is already failing — fix that first; mutation results would be meaningless"
-  exit 1
-fi
-
-survived=0
-total=0
-
-# name, file (relative to the skill dir), from, to
-# CSO_MUT_ONLY runs just the mutants whose name contains this substring. A
-# full sweep is ~50 minutes here, and iterating on one mutant should not cost
-# that. It can never be mistaken for a full run: filtered runs print a PARTIAL
-# banner and exit non-zero whatever the result, and the count pin below is
-# skipped because it no longer means anything.
-# CSO_MUT_FROM/CSO_MUT_TO select an index RANGE, which CSO_MUT_ONLY's
-# substring match cannot do: partitioning 57 mutants into survivable chunks
-# needs disjoint groups, and the names do not share prefixes. Indexes are
-# assigned in file order, so `FROM=1 TO=8` then `FROM=9 TO=16` covers
-# everything exactly once with no overlap and nothing skipped.
-filtered=0
-seen=0
-mutate() {
-  local name="$1" file="$2" from="$3" to="$4"
-  seen=$((seen + 1))
-  if [ -n "${CSO_MUT_FROM:-}${CSO_MUT_TO:-}" ]; then
-    if [ "$seen" -lt "${CSO_MUT_FROM:-1}" ] || [ "$seen" -gt "${CSO_MUT_TO:-999999}" ]; then
-      filtered=$((filtered + 1)); return
-    fi
-  fi
-  if [ -n "${CSO_MUT_ONLY:-}" ]; then
-    case "$name" in
-      *"$CSO_MUT_ONLY"*) : ;;
-      *) filtered=$((filtered + 1)); return ;;
-    esac
-  fi
-  total=$((total + 1))
-  local work="${TMP}/work"
-  rm -rf "$work"
-  cp -R "$SKILL" "$work" || { printf '%-50s %s\n' "$name" "SKIP (could not copy the skill)"; survived=$((survived + 1)); return; }
-
-  if ! CSO_FILE="${work}/${file}" CSO_FROM="$from" CSO_TO="$to" python3 - <<'PY'
-import os, pathlib, sys
-p = pathlib.Path(os.environ['CSO_FILE'])
-s = p.read_text()
-frm, to = os.environ['CSO_FROM'], os.environ['CSO_TO']
-if frm not in s:
-    sys.exit(9)
-p.write_text(s.replace(frm, to, 1))
-PY
-  then
-    printf '%-50s %s\n' "$name" "SKIP (target text not found — update this mutant)"
-    survived=$((survived + 1))
-    return
-  fi
-
-  # A mutant that does not PARSE takes the suite down whatever it changed:
-  # the wrapper fails to source its library and every case goes red for a
-  # reason no assertion had anything to do with. Counting that as a kill is
-  # the same manufactured confidence this file exists to catch.
-  if ! bash -n "${work}/${file}" 2>/dev/null; then
-    printf '%-50s %s\n' "$name" "INVALID (mutant does not parse — it would kill the suite for the wrong reason)"
-    survived=$((survived + 1))
-    return
-  fi
-
-  # Once one assertion observes the mutation, the verdict is fixed. Continuing
-  # through the remaining integration cases only repeats unrelated setup and
-  # wall-clock timeout tests. The unmodified baseline above still runs the
-  # complete suite, and run-tests keeps its normal collect-all behavior unless
-  # this mutation-only switch is set.
-  if CSO_FAIL_FAST=1 "${work}/tests/run-tests" >/dev/null 2>&1; then
-    printf '%-50s %s\n' "$name" "SURVIVED"
-    survived=$((survived + 1))
-  else
-    printf '%-50s %s\n' "$name" "killed"
-  fi
+function run(command, args, cwd) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { cwd, stdio: 'ignore', env: process.env })
+    child.on('error', () => resolve(127))
+    child.on('close', (code) => resolve(code ?? 1))
+  })
 }
 
-# --- the read-only boundary ------------------------------------------------
-# Each of these is a flag the run cannot be safe without, and each is applied
-# on EVERY invocation rather than once, so a mutant here removes it everywhere.
-mutate "sandbox_mode read-only override" lib/common.bash \
-  "cmd+=(-c 'sandbox_mode=\"read-only\"')" ":"
-mutate "hooks/apps/plugins disabled per run" lib/common.bash \
-  "cmd+=(--disable hooks --disable apps --disable plugins)" ":"
-mutate "notify callback cleared" lib/common.bash \
-  "cmd+=(-c 'notify=[]')" ":"
-mutate "--strict-config catches renamed keys" lib/common.bash \
-  "cmd+=(--strict-config)" ":"
+async function evaluate(mutant, index) {
+  const [name, relative, from, to] = mutant
+  const work = join(root, `mutant-${index}`)
+  cpSync(skill, work, { recursive: true })
+  const file = join(work, relative)
+  const source = readFileSync(file, 'utf8')
+  if (!source.includes(from)) return { name, verdict: 'INVALID: target text not found' }
+  writeFileSync(file, source.replace(from, to))
+  if (await run(process.execPath, ['--check', file], work) !== 0) return { name, verdict: 'INVALID: mutant does not parse' }
+  const status = await run(process.execPath, ['--test', join(work, 'tests/unit.test.mjs')], work)
+  return { name, verdict: status === 0 ? 'SURVIVED' : 'killed' }
+}
 
-# The feature gate is `!= false`, not `= true`, precisely so that an answer
-# it cannot read counts as enabled. This is the mutant that survived a manual
-# sweep: every test supplied `true`, so nothing asked for the rule.
-mutate "feature state must read exactly false" lib/common.bash \
-  'if [ "$state" != "false" ]; then' 'if [ "$state" = "true" ]; then'
+async function main() {
+  const baseline = await run(process.execPath, ['--test', join(skill, 'tests/unit.test.mjs')], skill)
+  if (baseline !== 0) {
+    process.stderr.write('baseline unit tests are failing; mutation results would be meaningless\n')
+    process.exitCode = 1
+    return
+  }
 
-# --- standalone MCP servers ------------------------------------------------
-# The string consumer honours backslash escapes so a quote INSIDE a name
-# cannot end the token early. Removing it does not fail open — the payload
-# unbalances and is refused as incomplete — so the discriminating case is a
-# legitimate all-disabled config being rejected, which is what this pins.
-mutate "escaped quotes inside a name are consumed" lib/common.bash \
-  '            if (c == "\\") { val = val substr(s, i, 2); i += 2; continue }' '            ;'
-mutate "mcp values must be bare booleans" lib/common.bash \
-  'elif ! mcp_enabled_values_boolean "$mcp_out"; then' 'elif false; then'
-mutate "an empty mcp listing is not an empty config" lib/common.bash \
-  "elif [ \"\$mcp_out\" = '[]' ]; then" \
-  "elif [ -z \"\$mcp_out\" ] || [ \"\$mcp_out\" = '[]' ]; then"
-mutate "an entry with no enabled field is refused" lib/common.bash \
-  '      if (closing && !seen_enabled) print "%"' ''
-# The no-true branch is the one where the sentinel carries the REFUSAL itself:
-# with this arm gone the case matches nothing, mcp_problem stays empty, and
-# the run starts. Measured — exit 0.
-mutate "the no-true branch refuses on that sentinel" lib/common.bash \
-  "          *'%'*)
-            mcp_problem=\"a standalone MCP entry carries no 'enabled' field, so whether it is reachable cannot be read from this listing\" ;;" ''
+  const results = new Array(mutants.length)
+  let cursor = 0
+  async function worker() {
+    for (;;) {
+      const index = cursor++
+      if (index >= mutants.length) return
+      results[index] = await evaluate(mutants[index], index)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(maxJobs, mutants.length) }, worker))
 
-# These two are named for the REASON, not the refusal, and the distinction is
-# real: `%` is not a TOML bare key, so with the sentinel arm deleted it falls
-# into the generic unaddressable-id refusal — and in the re-check, into the
-# `?*` still-enabled arm. Measured: both still exit 3. What breaks is what the
-# operator is told, and it is told something false — "standalone MCP server
-# '%' cannot be addressed", sending them after a server that does not exist,
-# or "still enabled after being switched off" about a listing that never said
-# so. This whole block exists to state truthfully why a run was refused, so
-# that is worth pinning; naming these after the refusal would have claimed a
-# safety property the mutant does not actually remove.
-mutate "a %-sentinel is not reported as an unaddressable id" lib/common.bash \
-  '      if [ "$mcp_id" = "%" ]; then
-        undeclared=1
-        break
-      fi' ''
-mutate "a %-sentinel is not reported as still-enabled" lib/common.bash \
-  "            *'%'*)
-              mcp_problem=\"could not confirm the standalone MCP servers were switched off (an entry in the re-check carries no 'enabled' field)\" ;;" ''
-mutate "a truncated payload outranks a bad entry" lib/common.bash \
-  '    while IFS= read -r mcp_id; do
-      if [ "$mcp_id" = "!" ]; then truncated=1; break; fi
-    done <<< "$mcp_ids"' ''
-# Named for the reason too, for the same measured reason: `?` is not a bare
-# key either, so the refusal survives via the unaddressable arm and only the
-# stated cause changes.
-mutate "a ?-sentinel is not reported as an unaddressable id" lib/common.bash \
-  '      if [ "$mcp_id" = "?" ]; then
-        unnamed=1
-        break
-      fi' ''
-mutate "a primitive array element is refused" lib/common.bash \
-  '        if (depth == 0 && bdepth == 1 && c != "{" && c != "}" && c != "," &&
-            c != "]" && c !~ /[ \t\r]/) garbage = 1' ''
-# `[` exempt again. A nested array produced no marker at all, and one holding
-# an entry emitted that entry's id as though it sat at the top level.
-mutate "a nested array is not an entry either" lib/common.bash \
-  '            c != "]" && c !~ /[ \t\r]/) garbage = 1' \
-  '            c != "[" && c != "]" && c !~ /[ \t\r]/) garbage = 1'
-mutate "an unaddressable id is refused" lib/common.bash \
-  '        *[!A-Za-z0-9_-]*) unaddressable="$mcp_id"; break ;;' '        no-such-pattern-zzz) : ;;'
+  let failed = 0
+  for (const result of results) {
+    process.stdout.write(`${result.name.padEnd(48)} ${result.verdict}\n`)
+    if (result.verdict !== 'killed') failed += 1
+  }
+  process.stdout.write(`\n${mutants.length - failed}/${mutants.length} mutants killed\n`)
+  process.exitCode = failed ? 1 : 0
+}
 
-# --- where this run may write ----------------------------------------------
-mutate "CODEX_HOME inside the repo refuses" lib/common.bash \
-  'if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; }' \
-  'if { false && inside_repo "$resolved_home"; }'
-# BOTH spellings at once. They are one check written twice — the path as
-# resolved and its nearest existing ancestor followed through symlinks — and
-# for a `sessions` that exists they return the same string, so removing either
-# alone changes nothing observable. The pair is measured together here, and the
-# ancestor half separately below, where a dangling target makes them differ.
-mutate "CODEX_HOME/sessions is followed" lib/common.bash \
-  '     || { [ -n "$resolved_sessions" ] && inside_repo "$resolved_sessions"; } \
-     || { [ -n "$sessions_anc" ] && inside_repo "$sessions_anc"; } \' \
-  '     || { false; } \'
-mutate "the sessions target is resolved through symlinks" lib/common.bash \
-  '    [ -z "$resolved_sessions" ] || sessions_anc="$(resolved_existing_ancestor "$resolved_sessions")"' \
-  '    sessions_anc=""'
-mutate "a repo-local TMPDIR is relocated" lib/common.bash \
-  'if inside_repo "$scratch"; then' 'if false; then'
-mutate "the worktree list must be readable" lib/common.bash \
-  'if [ "$wt_status" != 0 ]; then' 'if false; then'
-mutate "TMPDIR is a cd operand, not a flag" lib/common.bash \
-  '  if ! scratch="$(cd -- "$scratch" 2>/dev/null && pwd -P)"; then' \
-  '  if ! scratch="$(cd "$scratch" 2>/dev/null && pwd -P)"; then'
-mutate "the /tmp fallback is resolved" lib/common.bash \
-  '    scratch="$(cd -- /tmp 2>/dev/null && pwd -P)" || scratch="/tmp"' \
-  '    scratch="/tmp"'
-mutate "a path component is not a glob pattern" lib/common.bash \
-  '  case "$-" in *f*) had_noglob=1 ;; esac
-  set -f' '  case "$-" in *f*) had_noglob=1 ;; esac'
-mutate "noglob is restored for the caller" lib/common.bash \
-  '  [ "$had_noglob" -eq 1 ] || set +f' ''
-mutate "the precheck cannot rewrite the index" lib/common.bash \
-  'GIT_INDEX_FILE="$copy" "$@" || status=$?' '"$@" || status=$?'
-
-# Diagnostics carry caller-supplied values to stderr, where the marker
-# contract lives — and a failing run has no genuine marker after them.
-mutate "diagnostics are flattened" lib/consult.bash \
-  'echo "error: unknown argument: $(flat "$1")" >&2; mode_usage; exit 3 ;;' \
-  'echo "error: unknown argument: $1" >&2; mode_usage; exit 3 ;;'
-# `-s` passes for a file holding one newline.
-# DOUBLE quotes: the target contains single quotes, which cannot be escaped
-# inside a single-quoted bash string.
-mutate "a whitespace-only result is no result" lib/common.bash \
-  "  if [ ! -s \"\$out\" ] || [ -z \"\$(tr -d '[:space:]' < \"\$out\")\" ]; then" \
-  "  if [ ! -s \"\$out\" ]; then"
-# The caller's background is DATA, not another paragraph of the instructions.
-mutate "--context is fenced" lib/review.bash \
-  '    "$CONTEXT_FENCE" "$body" "$CONTEXT_FENCE"' \
-  '    "" "$body" ""'
-mutate "a fence marker in --context is escaped" lib/review.bash \
-  "  body=\"\$(printf '%s' \"\$context\" | sed \"s/\${CONTEXT_FENCE}/\${CONTEXT_FENCE}-ESCAPED/g\")\"" \
-  "  body=\"\$context\""
-# The fallback exists to retry on the USER's config; resending the rejected
-# model would fail again.
-mutate "the fallback retry inherits" lib/common.bash \
-  '      build_cmd "" ""' '      build_cmd "$model" "$effort"'
-# Consult never writes a `report:` marker, so one in a consult run is forged.
-mutate "consult emits no report marker" lib/common.bash \
-  '  echo "${result_noun}: ${out}" >&2' '  echo "report: ${out}" >&2'
-
-# --- the exit-code contract ------------------------------------------------
-# `grep -q` exits at its first match, so a pipeline's producer takes SIGPIPE
-# and pipefail turns that into 141 — read as "no rejection", skipping the
-# stale-default fallback. Measured with a rejection followed by a long tail.
-# `grep file | grep -q` gives the external producer SIGPIPE at the consumer's
-# first match, and pipefail reports 141 — read as "no rejection", so the
-# stale-default fallback never fires. Measured: exit 4 with no fallback.
-#
-# This was briefly recorded as KNOWN-EQUIVALENT on the strength of a test that
-# never emitted the error tail: the fake consumed FAKE_ERROR_TAIL in its
-# FAKE_FAIL branch while the case used FAKE_FAIL_ONCE, so nothing ever filled
-# the pipe. An equivalence argument is only as good as the case behind it.
-mutate "rejection detection is not a pipeline" lib/common.bash \
-  '  errlines="$(grep -E "$err_pat" "$log" 2>/dev/null || true)"' \
-  '  errlines=x; grep -E "$err_pat" "$log" 2>/dev/null | grep -qE "$rej_pat"; return $?'
-# A resumed session that landed on a different thread must be discarded, not
-# relayed. The assertion guarding this used to grep for a string the run never
-# produced, so it passed no matter what the wrapper printed.
-mutate "a mismatched session's answer is not relayed" lib/consult.bash \
-  '    tail_log
-    rm -f "$out"
-    exit 4' \
-  '    tail_log
-    cat "$out" 2>/dev/null
-    rm -f "$out"
-    exit 4'
-# The live-tree scopes are read twice, minutes apart. Without the second read
-# the report describes a state nobody approved while the scope line still
-# names the same flag.
-# Names are never arguments: an untracked file called `-` hashes empty stdin
-# and one called `--help` prints usage, both measured.
-mutate "untracked files are hashed by redirect, not by name" lib/review.bash \
-  'shasum -a 256 < "$f"' \
-  'shasum -a 256 "$f"'
-# A symlink by its target TEXT: hashing through it misses a repoint between
-# two files with equal contents.
-mutate "a symlink is fingerprinted by its target text" lib/review.bash \
-  '        if [ -L "$f" ]; then' '        if false; then'
-# Unreadable is not unchanged.
-mutate "an unreadable untracked file abandons the fingerprint" lib/review.bash \
-  '      if [ "$meas_ok" != 1 ] || [ -z "$head" ] || [ "$un_ok" != 1 ]; then' \
-  '      if [ "$meas_ok" != 1 ] || [ -z "$head" ]; then'
-mutate "the fingerprint covers HEAD" lib/review.bash \
-  '      fp="${head}${st}${df}${un}"' '      fp="${st}${df}${un}"'
-mutate "the fingerprint covers untracked content" lib/review.bash \
-  '      fp="${head}${st}${df}${un}"' '      fp="${head}${st}${df}"'
-mutate "working-tree drift is reported" lib/review.bash \
-  '  check_scope_drift' '  :'
-mutate "the drift check compares against the earlier fingerprint" lib/review.bash \
-  '  [ "$after" != "$scope_fp_before" ] || return 0' \
-  '  [ "$after" != "$after" ] || return 0'
-mutate "a bare repo is not a work tree" lib/common.bash \
-  '[ "$work_tree" = "true" ] ||' '[ "$work_tree" != "zzz" ] ||'
-# The whole check, both halves. The whitespace half has its own mutant above;
-# this one removes the guard entirely.
-mutate "an empty result is a failure" lib/common.bash \
-  "  if [ ! -s \"\$out\" ] || [ -z \"\$(tr -d '[:space:]' < \"\$out\")\" ]; then" \
-  "  if false; then"
-# BOTH checks. `mutate` replaces the first occurrence only, and there are
-# two: one after the first attempt and one after the stale-model retry. With
-# only the first mutated, deleting the second left both suites green while a
-# timed-out FALLBACK attempt reported exit 4 instead of the documented 5.
-mutate "a timeout surfaces as 5, not 4" lib/common.bash \
-  '  [ "$watchdog_fired" -eq 1 ] && exit_timed_out' '  :'
-mutate "a timeout on the fallback attempt is 5 too" lib/common.bash \
-  '      [ "$watchdog_fired" -eq 1 ] && exit_timed_out' '      :'
-mutate "model and effort must arrive together" lib/common.bash \
-  'if [ "$model_set" -eq 1 ] && [ "$effort_set" -eq 0 ]; then' 'if false; then'
-mutate "line breaks in model/effort are refused" lib/common.bash \
-  'case "${model}${effort}" in' 'case "no-such-value-zzz" in'
-mutate "a line break in the repo path is refused" lib/common.bash \
-  'case "$PWD" in' 'case "no-such-value-zzz" in'
-mutate "the result ends in a newline" lib/common.bash \
-  '[ -z "$(tail -c 1 "$out")" ] || echo' ':'
-
-# Malformed separators. Each balances, spells its booleans correctly and
-# satisfies the key/value count, so only a separator check sees them.
-mutate "repeated and leading commas in an entry" lib/common.bash \
-  '            if (pending_comma || just_opened) garbage = 1' '            ;'
-mutate "separators between array entries" lib/common.bash \
-  '          if (c == ",") {
-            if (arr_open || arr_comma) garbage = 1
-            arr_comma = 1
-          } else if (c == "{") {
-            if (!arr_open && !arr_comma) garbage = 1
-            arr_open = 0; arr_comma = 0
-          }' '          ;'
-# CODEX_HOME is printed, and shell_quote keeps a newline inside its quotes.
-mutate "a line break in CODEX_HOME is refused" lib/common.bash \
-  '    *"$cdx_lf"*|*"$cdx_cr"*)' '    no-such-pattern-zzz)'
-# codex still loads the real ~/.codex with HOME unset, so /.codex is a guess.
-mutate "an unknowable codex home is refused" lib/common.bash \
-  '  if [ -z "${CODEX_HOME:-}" ] && [ -z "${HOME:-}" ]; then' '  if false; then'
-mutate "the unknown mode is flattened" run-codex-second-opinion \
-  '$(printf '"'"'%s'"'"' "${mode}" | tr '"'"'\r\n'"'"' '"'"'  '"'"')' '${mode}'
-# The resume descriptor is advertised as ready to run.
-mutate "a non-default timeout reaches the descriptor" lib/consult.bash \
-  '    [ "$timeout_secs" != 3000 ] && resume_timeout=" --timeout ${timeout_secs}"' '    :'
-
-# The environment is the fourth route into the model settings, and the flag
-# state machine never saw it: a lone CODEX_SECOND_OPINION_MODEL paired an
-# arbitrary model with the pinned effort, and its rejection was then reported
-# as a stale shipped default.
-mutate "the environment pair is closed too" lib/common.bash \
-  '  if [ "$env_model_set" -ne "$env_effort_set" ]; then' '  if false; then'
-mutate "a rejected environment pair names its source" lib/common.bash \
-  '      if [ "$env_model_set" -eq 1 ]; then' '      if false; then'
-# JSON numbers end where they claim to. A digit used to mark the value started
-# and everything after it was skipped, so `"port":1garbage` read as a complete
-# listing with nothing enabled.
-mutate "a JSON number is consumed whole" lib/common.bash \
-  '            if (match(substr(s, i), /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?/) &&
-                boundary(substr(s, i + RLENGTH, 1))) {
-              value_started = 1; i += RLENGTH - 1; continue
-            }
-            garbage = 1; continue' \
-  '            value_started = 1; continue'
-# And a value that has ENDED may not be followed by more of one. Every
-# separator check sees a separator that is there; none sees one that is
-# missing after a value.
-mutate "a finished value ends the value" lib/common.bash \
-  '        if (entry() && value_started && c !~ /[ \t\r]/ && c != "," && c != "}") garbage = 1' \
-  '        ;'
-# And a nested container CLOSING has to mark the value it was as finished, or
-# the check above cannot see a second one opening straight after it.
-mutate "a closed container is a finished value" lib/common.bash \
-  '        if (c == "}") { if (depth == 1) flush(1); depth--; if (entry()) value_started = 1; continue }' \
-  '        if (c == "}") { if (depth == 1) flush(1); depth--; continue }'
-# `log:` is a marker, and callers are told to trust the final one of a kind.
-# Printed only at startup it was the model, not this script, that wrote the
-# last one in a merged stream.
-mutate "the log path is repeated after the result" lib/common.bash \
-  '  [ -n "${log:-}" ] && echo "log: ${log}" >&2' '  :'
-# Codex nests rollouts by date, so a symlink at any level under `sessions`
-# redirects the write exactly as one at the top does.
-mutate "nested session links are resolved" lib/common.bash \
-  '     || [ -n "$nested_inside" ] \' '     || false \'
-# The walk descends THROUGH links, or a chain hides the level that lands
-# inside the repository behind one that does not.
-mutate "the session walk follows links" lib/common.bash \
-  "    done < <(find -L \"\$resolved_sessions\"" \
-  "    done < <(find \"\$resolved_sessions\""
-# And a sessions directory that EXISTS but cannot be entered is not one that
-# is absent: both leave the walk with nothing to do, and only one of them is
-# safe to proceed on.
-mutate "an unenterable sessions root refuses" lib/common.bash \
-  '        echo "error: $(flat "${sessions_path}") exists but could not be entered, so where codex would write cannot be established" >&2' \
-  '        resolved_sessions=""'
-
-mutate "a failed session walk refuses" lib/common.bash \
-  '    if [ "$nested_status" != 0 ]; then' '    if false; then'
-# A DANGLING link names where codex would write just as a live one does:
-# `mkdir -p` follows it and creates the target.
-mutate "a dangling session link is resolved by its target" lib/common.bash \
-  '          nested="$(resolve_link_chain "$nested_real")"' \
-  '          nested="$nested_real"'
-# The WHOLE chain, not one hop: `readlink` returns the next link's text, and
-# that text can name another link whose own ancestor is outside the repository.
-mutate "a dangling link chain is followed to its end" lib/common.bash \
-  '  while [ -L "$path" ] && [ "$hops" -lt 40 ]; do' \
-  '  while [ -L "$path" ] && [ "$hops" -lt 1 ]; do'
-# And the target has to be compared in BOTH forms. `resolved_path` is lexical
-# except at a `..`, so an absolute target under a symlinked /var kept its
-# unresolved spelling and compared unequal to a `pwd -P` repository root.
-mutate "the nested target is resolved through symlinks" lib/common.bash \
-  '        nested_anc="$(resolved_existing_ancestor "$nested")"' \
-  '        nested_anc=""'
-
-# --- mode-specific ---------------------------------------------------------
-# A git read that FAILS while fingerprinting is not a tree that did not change.
-# Each of these fell back to an empty string — what a clean tree produces — and
-# failed the same way on both calls, so the digests compared equal.
-# A textconv or external diff driver is a program the REVIEWED REPOSITORY
-# names, run before codex's sandbox exists. Only a diff that produces output
-# invokes them, which is exactly what the fingerprint's diff does.
-mutate "the fingerprint diff runs no repository-named program" lib/review.bash \
-  'diff --no-ext-diff --no-textconv HEAD 2>/dev/null)" || meas_ok=0' \
-  'diff HEAD 2>/dev/null)" || meas_ok=0'
-
-mutate "a failed status abandons the fingerprint" lib/review.bash \
-  'status --porcelain --untracked-files=normal 2>/dev/null)" || meas_ok=0' \
-  'status --porcelain --untracked-files=normal 2>/dev/null)" || st=""'
-mutate "a failed diff abandons the fingerprint" lib/review.bash \
-  'diff --no-ext-diff --no-textconv HEAD 2>/dev/null)" || meas_ok=0' \
-  'diff --no-ext-diff --no-textconv HEAD 2>/dev/null)" || df=""'
-mutate "a failed untracked listing abandons the fingerprint" lib/review.bash \
-  '          > "$listing" 2>/dev/null || meas_ok=0' \
-  '          > "$listing" 2>/dev/null || true'
-mutate "the fingerprint reports every failed read" lib/review.bash \
-  '      if [ "$meas_ok" != 1 ] || [ -z "$head" ] || [ "$un_ok" != 1 ]; then' \
-  '      if [ -z "$head" ] || [ "$un_ok" != 1 ]; then'
-
-mutate "an empty uncommitted scope exits 2" lib/review.bash \
-  'if [ -z "$status_out" ]; then' 'if false; then'
-mutate "a scope flag carries the resolved object name" lib/review.bash \
-  '      --base)   cmd+=("${resolved_base:-$scope_value}") ;;' \
-  '      --base)   cmd+=("$scope_value") ;;'
-mutate "an empty --base scope exits 2" lib/review.bash \
-  '      if [ "$diff_status" -eq 0 ]; then' '      if false; then'
-mutate "--context cannot ride with --custom" lib/review.bash \
-  'if [ "$context_set" -eq 1 ] && [ "$scope_flag" = "--custom" ]; then' 'if false; then'
-mutate "a resumed session is verified" lib/consult.bash \
-  'if [ -n "$session_id" ] && [ "$session_out" != "$session_id" ]; then' 'if false; then'
-mutate "a follow-up is never auto-retried" lib/consult.bash \
-  '  [ -n "$session_id" ] || return 1' '  return 1'
-# Named for the newline guard, because that is all it removes: the UUID grep
-# below it still rejects every non-UUID, so this mutant is killed by the
-# embedded-newline case alone. The regex gets its own mutant rather than being
-# reported as covered by this one.
-mutate "--continue rejects a newline hiding a UUID" lib/consult.bash \
-  "        case \"\$1\" in
-          ''|*[![:alnum:]-]*)" \
-  "        case \"no-such-value-zzz\" in
-          ''|*[![:alnum:]-]*)"
-mutate "--continue requires the UUID shape itself" lib/consult.bash \
-  "        if ! printf '%s' \"\$1\" | grep -qiE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\$'; then" \
-  "        if false; then"
-# Cancellation kills the GROUP. Signalling the pid alone removes the process
-# a `pgrep` would look for while the descendant holding the pipeline survives.
-mutate "cancellation signals the process group" lib/common.bash \
-  '    kill -TERM "-${pgid}" 2>/dev/null || true
-    sleep 2
-    kill -KILL "-${pgid}" 2>/dev/null || true' \
-  '    kill -TERM "${pgid}" 2>/dev/null || true
-    sleep 2
-    kill -KILL "${pgid}" 2>/dev/null || true'
-# `--repo` must select the repository; ambient git selectors override it.
-mutate "ambient git selectors are cleared" run-codex-second-opinion \
-  'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
-      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
-      GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM' ':'
-
-# KNOWN-EQUIVALENT, excluded deliberately rather than left to survive:
-#
-#   inside_repo exact-root match    ([ "$candidate" = "$root" ] && return 0)
-#
-# The prefix arm below it already matches whenever candidate equals root:
-# `case "${candidate}/" in "${root%/}"/*)` appends a slash to the subject, and
-# `*` matches the empty string, so `/repo/` matches `/repo/*`. Checked at the
-# shapes that could differ — root `/repo` and root `/`, candidate equal to
-# either, and a child of each — and the prefix arm alone is sufficient in
-# every one. The exact arm is kept as a statement of intent and costs one
-# comparison; a mutant for it would survive by construction, and a suite that
-# tolerates a silent survivor is what this file exists to prevent.
-
-echo
-# A `mutate` line whose arguments fail to expand never reaches the function,
-# so neither counter moves and the run still prints success. Pin the count:
-# any mutant that silently fails to launch is a failure in itself.
-EXPECTED_TOTAL=84
-if [ "${CSO_MUT_WORKER:-0}" = 1 ]; then
-  printf '%s %s\n' "$total" "$survived" > "${CSO_MUT_RESULT_DIR}/${CSO_MUT_FROM}.result"
-  echo "chunk ${CSO_MUT_FROM}-${CSO_MUT_TO}: ${total} mutants, ${survived} survived"
-  [ "$survived" -eq 0 ]
-  exit $?
-fi
-if [ -n "${CSO_MUT_ONLY:-}${CSO_MUT_FROM:-}${CSO_MUT_TO:-}" ]; then
-  echo "PARTIAL RUN — ${filtered} of ${seen} mutant(s) filtered out."
-  echo "${survived}/${total} of the selected mutants survived. This is NOT a full sweep."
-  exit 1
-fi
-if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
-  echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
-  exit 1
-fi
-if [ "${survived}" -eq 0 ]; then
-  echo "all ${total} mutants killed — the suite has teeth"
-else
-  echo "${survived}/${total} mutants SURVIVED — those protections are unguarded"
-  exit 1
-fi
+try {
+  await main()
+} finally {
+  rmSync(root, { recursive: true, force: true })
+}

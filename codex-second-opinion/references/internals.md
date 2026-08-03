@@ -1,314 +1,203 @@
-# Why The Script Looks Like That
+# Runtime Internals
 
-Verified against `codex-cli 0.146.0`; recheck if these stop holding.
+Verified against `codex-cli 0.146.0`. Recheck the capability contract when
+Codex changes its feature, MCP, config, or JSONL interfaces.
 
-## Shared runtime (lib/common.bash)
+## Contents
 
-- The sandbox is set via `-c 'sandbox_mode="read-only"'` on every
-  path: `exec review` and `exec resume` have no `-s/--sandbox` flag,
-  and the config key is exactly what `-s` sets, so one spelling keeps
-  all paths verifiably identical.
-- That sandbox covers model-generated commands only. Trusted command
-  hooks run outside it — codex's own trust prompt says so — and so do
-  apps and plugins: an installed plugin can bundle a write-capable
-  connector and its own MCP server (capability `"Write"` in the
-  plugin manifest), none of which sandbox_mode touches. The script
-  passes `--disable hooks --disable apps --disable plugins` on every
-  invocation and verifies each *effective* state with
-  `codex features list`, exiting `3` if managed policy forces any of
-  them back on. Fail closed: the state must read exactly `false`, so an
-  unparseable, missing, or unanswered one counts as enabled. That rule
-  was untested until it was measured — rewriting the check to `= "true"`
-  left the suite green, because the only state under test was `true`.
-  The state is read as the LAST field, not the third: measured on
-  0.146.0 the format is `<name>  <stability>  <state>` and the stability
-  column itself contains a space for `under development`, so a fixed
-  column index would read the wrong one. The residual, stated rather
-  than guarded: a future release that appended a further column after
-  the state would be misread, and only if that column's value were
-  `false` would it fail open rather than closed.
-- Standalone MCP servers from the user's own config have no global
-  disable switch on 0.146.0 — but the per-server
-  `mcp_servers.<id>.enabled` key can be overridden through `-c` for a
-  single invocation, verified: `codex mcp list --json -c
-  mcp_servers.<id>.enabled=false` reports that server as disabled. So
-  the script switches them off rather than refusing, which removes the
-  exposure instead of merely declining to proceed in its presence.
-  Three things make that safe:
-  - Entries are read by brace depth, not by indentation or key order,
-    so the parser survives a compact listing and ignores nested
-    objects.
-  - The parser emits one line per enabled *entry*, printing `?` when it
-    cannot read that entry's name, and a `?` is a refusal. Keying
-    safety on names instead would put the same blind spot in both the
-    first pass and the re-check: a nameless enabled server sitting
-    beside a named one would be disabled in neither and reported by
-    neither. An id that is not a TOML bare key is refused for the same
-    reason — it cannot be reached by a dotted `-c` path.
-  - The overrides are not trusted on their own: the script re-runs
-    `codex mcp list --json` *with* them and refuses unless codex agrees
-    nothing is enabled any more. That re-check must also *look* like a
-    listing; output it cannot recognize — including nothing at all —
-    is evidence of nothing and is refused rather than read as "all
-    clear".
-  - The scanner also rejects two malformed shapes that balance and spell
-    their booleans correctly: a trailing comma before a close, and two
-    adjacent strings with no colon between them. It is deliberately not a
-    JSON validator — there is no parser to hand in a bash wrapper, and one
-    would be a dependency for a payload this script only needs to enumerate.
-    What it rejects is what it can name; the guarantee is structural, not
-    syntactic, and this sentence is the honest bound on it.
-  - Every entry must *carry* an `enabled` field, and an entry that does
-    not prints `%` — a refusal, like `?` and `!`. Absence is not
-    disabled: the enumeration keys entirely on that field's literal
-    bytes, so a CLI that stopped emitting it for default-enabled servers
-    would leave `[{"name":"hidden"},{"name":"off","enabled":false}]`
-    passing the key/value count, matching no `true` in the prefilter, and
-    parsing to no enabled entry — a listing read as all-clear while the
-    server it never described stays reachable. Verified on 0.146.0 that
-    every entry does carry it, so the requirement costs a correct CLI
-    nothing. `[{}]` alone was already refused as an unrecognised shape;
-    `[{},{"name":"off","enabled":false}]` was not, and is now.
-  - Every `"enabled"` field must be a bare `true` or `false`, checked by
-    counting keys against well-formed values. The enumeration keys
-    entirely on those literal bytes — the grep looks for `true`, the
-    parser matches four characters — so a payload spelling it
-    `"enabled":"true"` would satisfy neither and read as a server that is
-    switched off. Applied to the re-check as well, where booleans that
-    have become strings prove exactly as little.
-  - The *first* listing is held to the same bar, for the same reason.
-    Verified on 0.146.0: a config with no servers prints `[]`, three
-    bytes — never nothing. So a `mcp list` that exits 0 having printed
-    nothing has failed to enumerate, and reading that as "no servers"
-    is the one fail-open the rest of this block exists to prevent. It
-    was the first listing, not the re-check, that used to accept an
-    empty payload.
-  `--allow-mcp` inverts the default: it drops the overrides and leaves
-  the servers reachable, on explicit user approval. Local commands stay
-  read-only either way.
-- The legacy `notify = [...]` callback is not feature-gated, so
-  `--disable hooks` does not stop it. The script clears it with
-  `-c notify=[]`; plain config keys have no managed-policy override,
-  so the `-c` layer — the highest-precedence config source — is both
-  the fix and the guarantee.
-- `--strict-config` closes the one drift the rest of this file cannot
-  detect. Verified on 0.146.0: an unknown `-c` key is silently ignored
-  without it (`-c bogus_key_zzz="x"` runs fine; with `--strict-config`
-  it errors "unknown configuration field ... in -c/--config override").
-  So if a later codex renames or moves `sandbox_mode` or `notify`, the
-  two guarantees above would quietly stop applying while the run
-  succeeded. Everything else here already fails closed —
-  features/mcp verification, model rejection, session mismatch — and
-  this puts the config layer on the same footing. The cost: an unknown
-  field in the *user's* config.toml now fails the run too, with the
-  same error text, which is why the failure path prints a hint naming
-  both causes. All three keys this script sets are accepted under
-  `--strict-config` on 0.146.0.
-- The result comes from `-o` (the agent's last message), not stdout:
-  the event stream on stdout is `--json`, one bounded line per event,
-  because the default human stream echoes entire file dumps.
-- "Three things are written every run" counts what is KEPT: the result
-  file, the log, and the session. It is not a count of every write. Each
-  run also creates a private `mktemp -d` state directory under `TMPDIR`
-  and writes `pgid`, `status` and, on a timeout, the marker file into it,
-  removing the directory before it returns; `git_readonly_index` writes a
-  throwaway index copy there too, each scope fingerprint writes and removes
-  a NUL-separated listing of untracked paths, and codex writes scratch of its
-  own.
-  Naming these as transient rather than folding them into the count is
-  the honest form: an exhaustive list would go stale on the next codex
-  release, and a count that silently excluded them was simply wrong.
-- The result file must live outside the repo, or Codex's own file
-  sweeps pick it up and pollute the result. A repo-local TMPDIR is
-  detected and replaced with /tmp for the same reason.
-- `CODEX_HOME` gets the same test and the opposite answer. Codex writes
-  every run's session under it, so a `CODEX_HOME` inside the worktree
-  writes into the tree being read — same pollution, same dirty status,
-  and those session files then feed Codex's own file sweeps on the next
-  run. It cannot be substituted the way TMPDIR can: moving it orphans
-  every earlier session and breaks `--continue`. With no substitution
-  available the choice is refuse or break the claim, and the TMPDIR case
-  already settles which — exit `3`, naming the one variable that fixes
-  it. Resolved through the nearest *existing* ancestor, because codex
-  creates the directory on first use and a check that only looked at
-  directories that already exist would wave through the very run that
-  creates it.
-- The lexical half of that resolution runs under `set -f`. Splitting the
-  path on `IFS=/` is what the loop is for; pathname expansion is not, and
-  an unquoted expansion does both. Measured: a repository directory named
-  `*`, with `CODEX_HOME=/tmp/repo/*/codex-home` inside it, expanded that
-  component against the repository and produced a probe made of sibling
-  filenames — outside the tree, so the containment check passed, while
-  codex read the literal environment value and wrote its sessions inside
-  the repository. bash 3.2 has no function-local `set -f`, so the previous
-  state is saved from `$-` and restored.
-- The `CODEX_HOME` containment check covers that directory, its
-  `sessions` root, and every symlink up to three levels below that root —
-  all resolved through symlinks. Three because that is the nesting codex
-  writes, `sessions/YYYY/MM/DD/rollout-*.jsonl`: a link at any date level
-  redirects the write exactly as one at the top does, and checking only
-  the top approved it. The walk is stopped before it enters a day
-  directory, so it costs a handful of stats however many rollouts have
-  accumulated, and a `find` that fails refuses the run rather than
-  reading as a tree with no links in it.
+- [Architecture](#architecture)
+- [Safety boundary](#safety-boundary)
+- [Repository and storage checks](#repository-and-storage-checks)
+- [Process lifecycle](#process-lifecycle)
+- [Review mode](#review-mode)
+- [Consult mode](#consult-mode)
+- [Tests](#tests)
 
-  Four shapes it has to handle, and each was a hole once. The walk uses
-  `find -L`, so it descends THROUGH a link rather than stopping at it —
-  a chain whose first level points outside and whose second points back
-  in reported only the first. A DANGLING link is resolved by its target
-  text, because `mkdir -p` follows one and creates what it names. Every
-  target is tested in two spellings, as written and through its nearest
-  existing ancestor, since a lexical path under a symlinked prefix —
-  `/var` on macOS — compares unequal to a repository root that came from
-  `pwd -P`. And a `sessions` that exists but cannot be entered is refused
-  rather than treated as absent: both used to leave the walk with nothing
-  to do, and only one of them is safe to proceed on.
+## Architecture
 
-  Two bounds remain, stated rather than closed. A link planted *deeper*
-  than the date levels is not inspected — the day directories hold
-  rollout files, and walking them would make the check's cost scale with
-  a user's entire consultation history for a placement nobody has seen.
-  And the walk sees only what exists when it runs; codex creates
-  tomorrow's date directories itself, so this defends against a symlink
-  that is already there, not against one planted mid-run. What the check
-  is fundamentally for is a *placement* — a repository that is also the
-  home directory, a home pointed into the tree — and the nested walk
-  extends that to the one layout codex actually writes.
-- The scratch directory is resolved *before* the feature and MCP checks,
-  not after. Those checks use here-strings, and on the bash 3.2 macOS
-  ships `<<<` materialises a temporary file under `TMPDIR` — so a
-  repo-local `TMPDIR` was written inside the repository, briefly, before
-  the relocation that exists to prevent it. The relocation also exports
-  `TMPDIR`: moving only this script's own files would leave the shell's
-  temporaries, `mktemp`'s default, and codex itself still pointed inside
-  the tree.
-- There is no portable `timeout` binary on macOS, hence the watchdog
-  subshell. It signals the whole process group — codex spawns shell
-  commands that inherit the pipeline's stdout, and killing only the
-  parent leaves them holding it open. `set -m` gives codex its own
-  process group to make that possible; the INT/TERM traps forward
-  cancellation into that group for the same reason.
-- The pipeline is backgrounded and awaited because bash defers traps
-  until the foreground command finishes — a foreground pipeline would
-  swallow a cancel signal for the whole run.
-- The default model slug is pinned in this file, which will go stale.
-  That is why a rejected model triggers one automatic retry on the
-  user's config instead of a hard failure. `ultra` is deliberately not
-  used: it delegates subtasks, which is not what a second opinion
-  wants.
-- The `running:` diagnostic never includes the prompt or question
-  body: a multiline value would forge standalone `report:` /
-  `answer:` / `item.started` markers in the stderr feed. The consult
-  `resume:` line has the same exposure through caller-supplied
-  `--model`/`--effort` values, and sanitizes them the same way.
-- Model settings are validated as a closed three-way choice (pinned /
-  explicit pair / `--inherit`) rather than as independent flags. Left
-  open, `--model X` alone keeps the pinned effort — which the named
-  model need not accept — *and* clears `pinned`, which disables the
-  stale-default retry, so the documented "always pass both" rule was
-  the only thing standing between a caller and a guaranteed exit 4.
-  `--inherit` mixed with `--model` was order-dependent for the same
-  reason.
+`run-codex-second-opinion` is an executable Node.js entry point. It requires
+Node.js 18 or newer and uses only the standard library: no install step,
+package manager, transpiler, or generated artifact is involved.
 
-## Review mode (lib/review.bash)
+The runtime is split by responsibility:
 
-- Both `codex review` and `codex exec review` run non-interactively,
-  but only `exec review` exposes `-m`, `-o`, and `--json`, so the
-  script uses it.
-- The positional `[PROMPT]` is **mutually exclusive with all three
-  scope flags** — hence `--custom` being its own scope rather than a
-  modifier. Confirmed on 0.146.0: `exec review --uncommitted -- "x"`
-  fails at argument parsing with "the argument '--uncommitted' cannot
-  be used with '[PROMPT]'".
-- A `--context` prompt names revisions by resolved object name, never
-  by the ref the caller typed. `git check-ref-format` accepts branch
-  names like `a;whoami` and ``a`id` ``, and the composed prompt is a
-  command the reviewer is invited to run — a raw ref there is command
-  injection into that reviewer's shell, and can point the review at a
-  different scope. Hashes carry no metacharacters and pin the scope
-  against a ref that moves mid-run. The ref is still named for human
-  context, shell-quoted. The same helper quotes the model values in
-  consult's `resume:` line, which is advertised as ready to run.
-- That exclusivity is also why `--context` restates the scope as prose
-  instead of keeping the flag: there is no invocation that carries
-  both. The wrapper still runs the precheck on the real flag, so an
-  empty scope is caught, but the reviewed scope becomes
-  prompt-described. `--title` looked like a way out — it coexists with
-  scope flags — but it is not a general context channel: in the
-  binary, `commit_title` hangs off `ReviewTarget::Commit` alone
-  (`BaseBranch` and `Custom` carry one field each), so it reaches the
-  model only for `--commit` and only as a commit title.
-- The empty-scope prechecks must match what Codex actually reviews: it
-  diffs the merge base against the *working tree* (not HEAD) for
-  `--base`, and a merge commit needs a first-parent diff (not
-  `git show`, whose combined-diff semantics usually print nothing).
-- Those prechecks run *before* any sandbox exists, so they are the one
-  place the wrapper itself could write the repository or run a program.
-  Three measures, each measured against 0.146.0's git:
-  - `git status` refreshes stale stat info and rewrites `.git/index`;
-    `--no-optional-locks` suppresses exactly that write. The
-    `--uncommitted` scope sentence carries the same flag, where the
-    command is handed to a reviewer under a read-only sandbox that would
-    deny the write anyway.
-  - `git diff` against the working tree refreshes the index *with or
-    without* that flag, so the `--base` precheck runs it under a byte
-    copy through `GIT_INDEX_FILE`. Same index content, same answer, and
-    the refresh lands on the copy. When the copy cannot be made the run
-    refuses: the same scratch directory is about to fail the result file,
-    so running unprotected buys no successful run, only a rewritten
-    index on the way to the exit.
-  - A partial clone fetches promised objects on demand, so `git merge-base`
-    can reach the network and write `.git/objects` before Codex starts.
-    `GIT_NO_LAZY_FETCH=1` is exported for the prechecks. It landed in git
-    2.42 and does nothing below that — the residual is narrow, since the
-    common `--filter=blob:none` clone keeps every commit and merge-base
-    needs no blobs, but it is a residual and not a guarantee.
-  - `diff.external` and textconv drivers name programs too, so every `git
-    diff` this script runs now passes `--no-ext-diff --no-textconv`. The
-    claim that used to stand here — that neither runs for `diff --quiet` or
-    `diff --name-only`, "which is all this script uses" — was measured on git
-    2.39 and was true when it was written. It stopped being true the moment
-    the scope fingerprint added a diff that PRODUCES OUTPUT, which is exactly
-    the shape that invokes them, and it did so twice per run before codex's
-    sandbox exists. A measurement that licenses an omission has to be re-taken
-    when the code it describes changes; this one was not, and the flags are
-    cheaper than the reasoning that justified leaving them off.
-  - `core.fsmonitor` names a program git executes while refreshing —
-    outside every sandbox codex could impose, and before its hooks, apps
-    and plugins are disabled. `--no-optional-locks` does not stop it;
-    `-c core.fsmonitor=false` does. Verified: with a hook configured, a
-    plain status runs it and the flagged one does not.
-- `--output-schema` is silently ignored by `exec review` (an invalid
-  schema that makes plain `codex exec` fail with a 400 produces no
-  error here). Structured findings do exist, but only in the rollout
-  session file under `CODEX_HOME/sessions`, as
-  `exited_review_mode.review_output`. Parsing that is a possible
-  future addition; it would break under `--ephemeral`.
+- `lib/util.mjs` — exit errors, quoting, timeout parsing, paths, hashing, and
+  synchronous command probes.
+- `lib/mcp.mjs` — strict JSON parsing and schema validation for standalone MCP
+  listings.
+- `lib/environment.mjs` — repository discovery, scratch and `CODEX_HOME`
+  placement, feature gates, MCP neutralization, and read-only git helpers.
+- `lib/runtime.mjs` — shared model state, Codex command safety flags, JSONL
+  metadata, streaming, timeout/cancellation, fallback, and result emission.
+- `lib/review.mjs` and `lib/consult.mjs` — mode-specific parsing, scope or
+  session rules, command construction, and reporting.
 
-## Consult mode (lib/consult.bash)
+State is explicit: mode parsers fill one state object, `Environment` owns
+preflight facts, and `Runtime` owns one invocation's process and artifacts.
+Modules do not communicate through sourced-shell globals.
 
-- The session id comes from the `thread.started` event in the JSONL
-  stream; multi-turn works because sessions persist under
-  `CODEX_HOME/sessions`. Never pass `--ephemeral` — it would silently
-  break `--continue`.
-- Continuation is verified by comparing the stream's thread id against
-  the requested one: given a well-formed but expired session id, codex
-  0.146.0 silently starts a fresh thread and exits 0 — an answer
-  produced without the prior discussion. The script discards it and
-  exits `4` instead.
-- The *last* `thread.started` match in the log is authoritative: the
-  log accumulates across the stale-model fallback retry, and only the
-  final run's session can be resumed.
-- A rejected model on a follow-up is never auto-retried: codex may
-  have persisted the question in the session before rejecting the
-  model, and a resend could record it twice.
-- A `resume:` line is printed even when there is no session id, as
-  prose rather than a command. Callers are told to trust the *final*
-  marker line; printing nothing would hand that status to a `resume:`
-  line invented inside the model-controlled answer body.
-- The `resume:` line exists because the session id alone is not enough
-  to reproduce a turn: model settings do not travel with the session,
-  and the operator was otherwise expected to remember them. After a
-  stale-default fallback it prints `--inherit`, not the pinned
-  defaults — those already failed once, and a resumed session has no
-  automatic retry left to catch the second failure.
+## Safety boundary
+
+Every model invocation carries the same arguments, assembled in one method:
+
+- `-c sandbox_mode="read-only"`
+- `--disable hooks --disable apps --disable plugins`
+- `-c notify=[]`
+- `--strict-config`
+- one verified `mcp_servers.<id>.enabled=false` override per enabled standalone
+  server, unless `--allow-mcp` was explicitly approved
+- `--json` and `-o <result>`
+
+The sandbox covers model-generated local commands. Hooks, apps, plugins,
+legacy notify callbacks, and standalone MCP tools sit outside that boundary,
+so each is handled separately and fail-closed.
+
+The feature probe reads the final field for `hooks`, `apps`, and `plugins` and
+requires each to be exactly `false`. Missing, unknown, or unparsable state is
+not treated as disabled. When the feature command fails, `codex --version`
+distinguishes an unusable binary from a changed capability response; either
+way the run still refuses because the effective states were not proven false.
+
+MCP handling uses `JSON.parse`, then requires:
+
+- an array root;
+- an object for every entry;
+- an own `enabled` property on every entry;
+- a boolean `enabled` value;
+- a string `name` for every enabled entry;
+- a TOML-bare-key-compatible enabled name before constructing `-c` overrides.
+
+After constructing overrides, the runtime asks Codex for the effective listing
+again and requires zero enabled entries. Syntax errors, schema drift, a failed
+probe, or an override that did not take effect all refuse the run. `--allow-mcp`
+is the only route that accepts an unverified or reachable MCP boundary, and it
+prints the residual external-side-effect warning.
+
+`--strict-config` makes renamed safety keys fail instead of being silently
+ignored. Its error text cannot distinguish a key supplied by this runner from
+an unknown key in the user's config, so the failure path explains both causes.
+
+## Repository and storage checks
+
+Ambient Git selectors such as `GIT_DIR`, `GIT_WORK_TREE`, and
+`GIT_INDEX_FILE` are removed before repository discovery. `CDPATH` is removed
+too. All Git commands use argument arrays; no caller-controlled value is
+evaluated by a shell.
+
+The protected repository boundary includes:
+
+- the current worktree;
+- every sibling worktree reported by `git worktree list --porcelain -z`;
+- the absolute Git directory;
+- the common Git directory.
+
+The worktree list is required to complete successfully. A partial list is not
+evidence that a path is outside the repository.
+
+Scratch output is resolved physically. A repo-local `TMPDIR` is moved to the
+physical `/tmp`, exported to the Codex child, and checked again. The result and
+event log are created as private files outside the repository and intentionally
+kept; their final paths are reported. Codex keeps the third artifact, its
+session, below `CODEX_HOME/sessions`.
+
+`CODEX_HOME` cannot be relocated without breaking continuation, so an unsafe
+placement refuses the run. Resolution walks path components in filesystem
+order: a symlink is followed before a later `..` is applied. This differs from
+normalizing the whole string first and closes the `link/..` placement hole.
+The check also follows the `sessions` link and all directory/symlink
+destinations through the `YYYY/MM/DD` depth Codex writes. Dangling link targets
+are checked through their nearest existing ancestor. Unreadable or
+unenumerable state is refused, not treated as absent.
+
+Git prechecks disable fsmonitor, textconv, and external diff execution. Commands
+that may refresh the index receive a private byte-copy through `GIT_INDEX_FILE`;
+the real index is never used as their writable target. `GIT_NO_LAZY_FETCH=1`
+prevents promised-object fetches on Git versions that support it. Git older
+than 2.42 may still fetch a missing object, which remains a disclosed version
+bound rather than an overclaimed guarantee.
+
+## Process lifecycle
+
+Codex is started with `child_process.spawn` using `shell: false` and an argument
+array. `detached: true` gives the child a separate POSIX process group so a
+timeout or cancellation can terminate Codex and every command it spawned.
+
+Stdout and stderr are archived to the JSONL log as they arrive. A line-buffered
+view is streamed to stderr and capped at 180 characters per line; the log keeps
+the untruncated bytes. The prompt or question never appears in the `running:`
+diagnostic.
+
+The timeout uses a Node timer. At the deadline it sends `TERM` to the process
+group and follows with `KILL` after a one-second grace period. A dedicated
+boolean records that the timer fired, so a Codex process that independently
+exits `124` remains an ordinary Codex failure rather than a fabricated timeout.
+`INT`, `TERM`, and `HUP` are forwarded to the same group and preserve wrapper
+exit codes `130`, `143`, and `129`.
+
+Each attempt is separated in the log. Model and thread metadata are parsed as
+JSON only from the final attempt, preventing a rejected first attempt from
+supplying the successful fallback's model or session id.
+
+A pinned default rejected as unsupported retries once with inherited Codex
+settings. Explicit pairs never retry. A consult follow-up never retries because
+the rejected question may already have entered the persisted session.
+
+## Review mode
+
+Review accepts exactly one of `--uncommitted`, `--base`, `--commit`, or
+`--custom`; the default is `--uncommitted`. Empty-scope prechecks preserve exit
+`2` as “nothing in scope,” not a clean review.
+
+`--base` resolves the merge base once and passes that object id to Codex.
+`--commit` resolves the commit and first parent once; merge commits use a normal
+first-parent diff rather than combined-diff emptiness. `--context` keeps the
+real scope precheck but restates the scope with immutable object ids because
+Codex rejects a review scope flag combined with a positional prompt.
+
+Caller context is fenced as data. Occurrences of the fence token inside the
+body are escaped, so the body cannot close its own fence or replace the
+validated scope.
+
+Live `--uncommitted` and `--base` scopes are fingerprinted before and after the
+run. The fingerprint includes HEAD, status, the tracked diff, and contents or
+targets of untracked entries. Read failure produces “unknown,” never the same
+digest as another failure. Drifted or unmeasurable results are labelled
+non-reproducible.
+
+## Consult mode
+
+Consult requires exactly one non-empty question. `--continue` accepts a UUID
+only. After the run, the thread id is read from the final attempt's parsed
+`thread.started` event and must match the requested session on a continuation;
+otherwise the answer is discarded with exit `4`.
+
+The emitted resume descriptor repeats the model policy, repository, non-default
+timeout, and `--allow-mcp` state. Values are shell-quoted for display. When the
+stream provides no valid UUID, both `session:` and `resume:` emit explicit
+unavailable markers after the model-controlled answer, so forged look-alikes
+cannot become the final marker of their kind.
+
+## Tests
+
+Run the fast unit suite during normal development:
+
+```bash
+./codex-second-opinion/tests/run-tests
+```
+
+It uses `node:test`, runs in-process, and covers parsing, schema validation,
+state machines, safety argument construction, event segmentation, fencing, and
+filesystem-order path resolution. The mutation runner verifies that these
+tests fail when critical guards are removed:
+
+```bash
+./codex-second-opinion/tests/run-mutation-tests
+```
+
+The slower black-box compatibility suite uses a real executable fake Codex and
+exercises process, Git, storage, marker, and signal behavior without network or
+a real model:
+
+```bash
+./codex-second-opinion/tests/run-contract-tests
+```
