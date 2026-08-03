@@ -12,7 +12,15 @@
 # reliably the one that ships.
 #
 # Exit 0 when every mutation of the tree is detected. 1 otherwise.
-set -uo pipefail
+#
+# `set -u` ALONE, deliberately. The harness used to run under `pipefail` and
+# then source the recipe into that shell, so every digest pipeline in
+# acr_snapshot was guarded by an option the HARNESS supplied — the recipe is
+# copied into a plain Bash call, which has none, and the stage and flag guards
+# are reachable no other way. The recipe sets pipefail inside its own subshell
+# now, and not injecting it here is what makes a regression removing that line
+# go red.
+set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DOC="${HERE}/../references/orchestration.md"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/acr-snap-XXXXXX")" && [ -n "$WORK" ] || {
@@ -33,7 +41,12 @@ if len(picked) != 1:
     sys.exit(f"expected exactly one acr_snapshot definition in the doc, found {len(picked)}")
 body = picked[0]
 # Drop the doc's own invocation; the harness calls it per fixture.
-body = '\n'.join(l for l in body.splitlines() if not l.startswith('acr_snapshot >'))
+# The block's own `set -euo pipefail` header is dropped: sourcing it would arm
+# errexit for the whole harness, which then dies on the first deliberate
+# failure. The recipe's real protection is the `set -o pipefail` INSIDE the
+# subshell, which is indented and therefore kept.
+body = '\n'.join(l for l in body.splitlines()
+                 if not l.startswith('acr_snapshot >') and not l.startswith('set '))
 pathlib.Path(sys.argv[2]).write_text(body + '\n')
 PY
 extract_status=$?

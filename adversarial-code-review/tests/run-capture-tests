@@ -35,10 +35,11 @@ if len(picked) != 1:
     sys.exit(f"expected exactly one unfiltered capture block, found {len(picked)}")
 out = []
 for line in picked[0].splitlines():
-    # The scope alternatives are a menu, not a sequence: each assignment
-    # overwrites the last and two of them name variables a real caller sets.
-    # The harness picks one and prepends it.
-    if re.match(r'\s*(paths|diff_args)=\(', line):
+    # Only the three lines the recipe tells a caller to edit — acr_scope,
+    # from_ref/to_ref, paths. The `case` that reads them is KEPT and run, which
+    # is the point: the scope selection used to be four sequential assignments
+    # stripped wholesale, so nothing ever executed it.
+    if re.match(r'(acr_scope|from_ref|paths)=', line):
         continue
     out.append(line)
 pathlib.Path(sys.argv[2]).write_text('\n'.join(out) + '\n')
@@ -143,7 +144,7 @@ new_repo() {
 # --- the uncommitted scope, end to end -------------------------------------
 
 repo="$(new_repo plain)"
-status="$(run_capture "$repo" 'diff_args=(HEAD); untracked=1')"
+status="$(run_capture "$repo" 'acr_scope=uncommitted; paths=()')"
 if [ "$status" = 0 ]; then
   ok "the uncommitted capture recipe runs under set -euo pipefail"
 else
@@ -184,18 +185,96 @@ branch="$(new_repo branch)"
 git -C "$branch" add -A
 git -C "$branch" -c user.email=t@t -c user.name=t commit -q -m work
 base="$(git -C "$branch" rev-parse HEAD~1)"
-status="$(run_capture "$branch" "diff_args=(${base} HEAD); untracked=0")"
+status="$(run_capture "$branch" "acr_scope=range; from_ref=${base}; to_ref=HEAD; paths=()")"
 if [ "$status" = 0 ]; then
   ok "the branch capture recipe runs with untracked=0"
 else
   bad "the branch capture recipe runs with untracked=0" "exit $status"
 fi
 
+# --- the scope selector itself ---------------------------------------------
+#
+# The four alternatives used to be four assignments in sequence, and the
+# harness stripped every one of them — so the choice a real caller makes was
+# the one part of Phase 0 nothing executed. Pasted verbatim the sequence ran
+# ALL of them and died on `${from_ref}` under set -u. These cases run the
+# `case` instead.
+
+# `branch` resolves a default branch and captures merge-base..HEAD. The
+# fixture has an `origin/main` so the first ref the loop tries and finds is a
+# remote one, as in a real clone.
+brs="$(new_repo branchscope)"
+git -C "$brs" add -A
+git -C "$brs" "${commit_env[@]}" commit -q -m work
+git -C "$brs" branch -q -f main HEAD~1
+git -C "$brs" update-ref refs/remotes/origin/main "$(git -C "$brs" rev-parse main)"
+status="$(run_capture "$brs" 'acr_scope=branch; from_ref=""; to_ref=""; paths=()')"
+# shellcheck source=/dev/null
+. "${WORK}/vars"
+if [ "$status" != 0 ]; then
+  bad "acr_scope=branch captures against the merge-base" "exit $status"
+elif [ "$base_sha" != "$(git -C "$brs" rev-parse main)" ]; then
+  bad "acr_scope=branch captures against the merge-base" "base_sha=${base_sha}, expected $(git -C "$brs" rev-parse main)"
+else
+  ok "acr_scope=branch captures against the merge-base"
+fi
+
+# `range` with a half-filled pair. Refusing is not the interesting half — an
+# empty endpoint makes `git rev-parse ""` fail a few lines later and errexit
+# ends the run either way. What the guard buys is a DIAGNOSTIC that names the
+# choice the caller did not finish making, instead of a git error about an
+# empty revision, so that is what is asserted.
+rng_half="$(new_repo rangehalf)"
+rng_half_err="${WORK}/rangehalf.err"
+status="$(run_capture "$rng_half" 'acr_scope=range; from_ref=""; to_ref=""; paths=()' 2> "$rng_half_err")"
+if [ "$status" = 0 ]; then
+  bad "acr_scope=range refuses without from_ref and to_ref" "exit 0"
+elif ! grep -q 'from_ref' "$rng_half_err"; then
+  bad "acr_scope=range refuses without from_ref and to_ref" \
+    "it failed for some other reason: $(tr '\n' '|' < "$rng_half_err")"
+else
+  ok "acr_scope=range refuses without from_ref and to_ref"
+fi
+
+# A scope nobody defined must not fall through to whichever branch happens to
+# be last: a typo would otherwise review something other than what was asked.
+bogus="$(new_repo bogusscope)"
+status="$(run_capture "$bogus" 'acr_scope=uncomitted; from_ref=""; to_ref=""; paths=()' 2>/dev/null)"
+if [ "$status" != 0 ]; then
+  ok "an unknown acr_scope refuses rather than guessing"
+else
+  bad "an unknown acr_scope refuses rather than guessing" "exit 0"
+fi
+
+# Named paths narrow the patch AND the manifest through one pathspec. Passing
+# it to only one of them is how included_paths comes to describe something
+# other than the bound artifact.
+narrow="$(new_repo narrowed)"
+printf 'second\n' > "${narrow}/other.txt"
+git -C "$narrow" add other.txt
+git -C "$narrow" "${commit_env[@]}" commit -q -m other
+printf 'edited\n' >> "${narrow}/tracked.txt"
+printf 'edited\n' >> "${narrow}/other.txt"
+status="$(run_capture "$narrow" 'acr_scope=uncommitted; from_ref=""; to_ref=""; paths=(tracked.txt)')"
+# shellcheck source=/dev/null
+. "${WORK}/vars"
+if [ "$status" != 0 ]; then
+  bad "named paths narrow the patch and the manifest together" "exit $status"
+elif grep -q '^other\.txt$' "${WORK}/included"; then
+  bad "named paths narrow the patch and the manifest together" "the manifest still names other.txt"
+elif ! grep -q '^tracked\.txt$' "${WORK}/included"; then
+  bad "named paths narrow the patch and the manifest together" "the manifest lost tracked.txt"
+elif grep -q 'other\.txt' "${tmp}/patch.diff"; then
+  bad "named paths narrow the patch and the manifest together" "the patch still carries other.txt"
+else
+  ok "named paths narrow the patch and the manifest together"
+fi
+
 # --- an untracked filename that begins with a dash -------------------------
 
 dashy="$(new_repo dashy)"
 printf 'leading dash\n' > "${dashy}/-weird.txt"
-status="$(run_capture "$dashy" 'diff_args=(HEAD); untracked=1')"
+status="$(run_capture "$dashy" 'acr_scope=uncommitted; paths=()')"
 # shellcheck source=/dev/null
 . "${WORK}/vars"
 if [ "$status" = 0 ] && grep -q -- '-weird.txt' "${tmp}/patch.diff"; then
@@ -214,7 +293,7 @@ printf '\000\001\002bin\000' > "${binrepo}/blob.bin"
 git -C "$binrepo" add blob.bin
 git -C "$binrepo" -c user.email=t@t -c user.name=t commit -q -m blob
 printf '\000\003\004changed\000' > "${binrepo}/blob.bin"
-status="$(run_capture "$binrepo" 'diff_args=(HEAD); untracked=1')"
+status="$(run_capture "$binrepo" 'acr_scope=uncommitted; paths=()')"
 # shellcheck source=/dev/null
 . "${WORK}/vars"
 binapplied="${WORK}/bin-applied"
@@ -236,7 +315,7 @@ fi
 unreadable="$(new_repo unreadable)"
 printf 'secret\n' > "${unreadable}/locked.txt"
 chmod 000 "${unreadable}/locked.txt"
-status="$(run_capture "$unreadable" 'diff_args=(HEAD); untracked=1')"
+status="$(run_capture "$unreadable" 'acr_scope=uncommitted; paths=()')"
 chmod 644 "${unreadable}/locked.txt"
 if [ "$status" != 0 ]; then
   ok "an uncapturable untracked file stops the capture"
@@ -275,7 +354,7 @@ acr_dirs_before="$(ls -d "${failscratch}"/acr-* 2>/dev/null | wc -l | tr -d ' ')
   export TMPDIR="$failscratch"
   # A scope git cannot resolve: the capture dies after mktemp, before the
   # patch is complete.
-  diff_args=(no-such-ref-zzz); untracked=0
+  acr_scope=range; from_ref=no-such-ref-zzz; to_ref=HEAD; paths=()
   # shellcheck source=/dev/null
   . "${WORK}/capture.sh"
   printf '%s' "$tmp" > "${WORK}/failcap-tmp" ) > "$fail_out" 2>&1
@@ -303,7 +382,7 @@ mkdir -p "$dashhome"
 dashrepo="$(new_repo dashopt)"
 dash_status="$( ( cd "$dashrepo" || exit 1
   export HOME="$dashhome" TMPDIR=-P
-  diff_args=(HEAD); untracked=1
+  acr_scope=uncommitted; paths=()
   # shellcheck source=/dev/null
   . "${WORK}/capture.sh"
   printf '%s' "$tmp" > "${WORK}/dash-tmp" ) > /dev/null 2>&1; printf '%s' "$?" )"
@@ -337,7 +416,7 @@ if [ -d "$sgd_wt" ]; then
   git -C "$sgd_wt" "${commit_env[@]}" commit -q -m base
   printf 'two\n' >> "${sgd_wt}/tracked.txt"
   mkdir -p "${sgd_wt}/scratch"
-  sgd_status="$(TMPDIR="${sgd_wt}/scratch" run_capture "$sgd_wt" 'diff_args=(HEAD); untracked=1')"
+  sgd_status="$(TMPDIR="${sgd_wt}/scratch" run_capture "$sgd_wt" 'acr_scope=uncommitted; paths=()')"
   sgd_tmp="$(cat "${WORK}/tmp-raw" 2>/dev/null)"
   sgd_wt_real="$(cd "$sgd_wt" && pwd -P)"
   sgd_tmp_real="$(cd "$sgd_tmp" 2>/dev/null && pwd -P)" || sgd_tmp_real="$sgd_tmp"
@@ -363,7 +442,7 @@ mkdir -p "$crtmp"
 cr_out="${WORK}/cr-refusal.out"
 ( cd "$repo" || exit 1
   export TMPDIR="$crtmp"
-  diff_args=(HEAD); untracked=1
+  acr_scope=uncommitted; paths=()
   # shellcheck source=/dev/null
   . "${WORK}/capture.sh" ) > "$cr_out" 2>&1
 cr_status=$?
@@ -387,7 +466,7 @@ mkdir -p "$nltmp"
 nl_out="${WORK}/nl-refusal.out"
 ( cd "$repo" || exit 1
   export TMPDIR="$nltmp"
-  diff_args=(HEAD); untracked=1
+  acr_scope=uncommitted; paths=()
   # shellcheck source=/dev/null
   . "${WORK}/capture.sh" ) > "$nl_out" 2>&1
 nl_status=$?
@@ -408,7 +487,7 @@ if ! grep -q 'BASH_VERSION' "${WORK}/capture.sh"; then
   bad "the capture recipe refuses a non-bash shell" "no BASH_VERSION guard in the extracted block"
 elif command -v zsh >/dev/null 2>&1; then
   zsh_out="${WORK}/zsh-refusal.out"
-  ( cd "$repo" && export TMPDIR="${WORK}" && zsh -c "diff_args=(HEAD); untracked=1; . '${WORK}/capture.sh'" ) \
+  ( cd "$repo" && export TMPDIR="${WORK}" && zsh -c "acr_scope=uncommitted; paths=(); . '${WORK}/capture.sh'" ) \
     > "$zsh_out" 2>&1
   zsh_status=$?
   if [ "$zsh_status" != 0 ] && grep -q 'requires bash' "$zsh_out"; then
@@ -439,7 +518,7 @@ git -C "$subd" "${commit_env[@]}" commit -q -m sub
 printf 'edited\n' >> "${subd}/vendor/v.txt"
 printf 'edited\n' >> "${subd}/src/s.txt"
 printf 'fresh\n' > "${subd}/vendor/new.txt"
-status="$(run_capture "${subd}/src" 'diff_args=(HEAD); untracked=1')"
+status="$(run_capture "${subd}/src" 'acr_scope=uncommitted; paths=()')"
 if [ "$status" != 0 ]; then
   bad "the capture recipe runs from a subdirectory" "exit $status"
 else
@@ -549,7 +628,7 @@ lwlinked="${WORK}/lw linked"
 git -C "$lwmain" worktree add -q -b lw "$lwlinked" >/dev/null 2>&1
 printf 'dirty\n' > "${lwlinked}/untracked.txt"
 mkdir -p "${lwmain}/scratch"
-status="$(TMPDIR="${lwmain}/scratch" run_capture "$lwlinked" 'diff_args=(HEAD); untracked=1')"
+status="$(TMPDIR="${lwmain}/scratch" run_capture "$lwlinked" 'acr_scope=uncommitted; paths=()')"
 # shellcheck source=/dev/null
 . "${WORK}/vars"
 lwmain_real="$(cd "$lwmain" && pwd -P)"
@@ -571,7 +650,7 @@ fi
 # it is right, not because this proves it; said here rather than left to read
 # as coverage.
 mkdir -p "${lwlinked}/scratch"
-status="$(TMPDIR="${lwlinked}/scratch" run_capture "$lwlinked" 'diff_args=(HEAD); untracked=1')"
+status="$(TMPDIR="${lwlinked}/scratch" run_capture "$lwlinked" 'acr_scope=uncommitted; paths=()')"
 # shellcheck source=/dev/null
 . "${WORK}/vars"
 lwlinked_real="$(cd "$lwlinked" && pwd -P)"
@@ -611,7 +690,7 @@ if [ -d "$nllinked" ]; then
   nl_roots="${WORK}/nl-roots"
   ( cd "$nlmain" || exit 1
     export TMPDIR="${WORK}"
-    diff_args=(HEAD); untracked=1
+    acr_scope=uncommitted; paths=()
     # shellcheck source=/dev/null
     . "${WORK}/capture.sh"
     # NUL-separated: the values under test are the ones holding newlines.
@@ -712,14 +791,14 @@ printf 'loose\n' > "${shimrepo}/loose.txt"
 
 # Pass-through first: whatever the failing cases prove, it is not that the
 # shim itself breaks the recipe.
-status="$(PATH="${shimdir}:$PATH" run_capture "$shimrepo" 'diff_args=(HEAD); untracked=1')"
+status="$(PATH="${shimdir}:$PATH" run_capture "$shimrepo" 'acr_scope=uncommitted; paths=()')"
 if [ "$status" = 0 ]; then
   ok "the git shim passes through when nothing is forced to fail"
 else
   bad "the git shim passes through when nothing is forced to fail" "exit $status"
 fi
 
-status="$(ACR_SHIM_FAIL=worktree PATH="${shimdir}:$PATH" run_capture "$shimrepo" 'diff_args=(HEAD); untracked=1')"
+status="$(ACR_SHIM_FAIL=worktree PATH="${shimdir}:$PATH" run_capture "$shimrepo" 'acr_scope=uncommitted; paths=()')"
 if [ "$status" != 0 ]; then
   ok "a failing worktree enumeration stops the capture"
 else
@@ -728,7 +807,7 @@ fi
 
 rm -f "${WORK}/shim-count"
 status="$(ACR_SHIM_FAIL=lsfiles ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count" \
-  PATH="${shimdir}:$PATH" run_capture "$shimrepo" 'diff_args=(HEAD); untracked=1')"
+  PATH="${shimdir}:$PATH" run_capture "$shimrepo" 'acr_scope=uncommitted; paths=()')"
 if [ "$status" != 0 ]; then
   ok "a failing untracked enumeration stops the capture"
 else
@@ -739,7 +818,7 @@ fi
 
 inside="$(new_repo inside)"
 mkdir -p "${inside}/scratch"
-status="$(TMPDIR="${inside}/scratch" run_capture "$inside" 'diff_args=(HEAD); untracked=1')"
+status="$(TMPDIR="${inside}/scratch" run_capture "$inside" 'acr_scope=uncommitted; paths=()')"
 # shellcheck source=/dev/null
 . "${WORK}/vars"
 # BOTH sides resolved with pwd -P. On macOS mktemp hands back /var/folders/...
@@ -767,7 +846,7 @@ filt_status=0
 (
   cd "$filt" || exit 1
   set -euo pipefail
-  diff_args=(HEAD); untracked=1
+  acr_scope=uncommitted; paths=()
   # shellcheck source=/dev/null
   . "${WORK}/capture.sh"
   # shellcheck source=/dev/null
@@ -807,7 +886,8 @@ run_filtered() {
     export ACR_SHIM_FAIL="$fail" ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count"
     export PATH="${shimdir}:$PATH"
     tmp="$(mktemp -d "${WORK}/filt-XXXXXX")"
-    diff_args=(HEAD); untracked=1
+    # capture.sh is not sourced here, so the pathspec it derives is supplied.
+    diff_args=(HEAD); untracked=1; acr_pathspec=(.)
     # shellcheck source=/dev/null
     . "${WORK}/manifest_fn.sh"
     # shellcheck source=/dev/null
@@ -844,7 +924,7 @@ pf_status=0
   cd "$patchfail" || exit 1
   export ACR_SHIM_FAIL=patch ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count"
   export PATH="${shimdir}:$PATH"
-  diff_args=(HEAD); untracked=1
+  acr_scope=uncommitted; paths=()
   # shellcheck source=/dev/null
   . "${WORK}/capture.sh"
 ) >/dev/null 2>&1 || pf_status=$?
@@ -863,7 +943,7 @@ bs_status=0
   cd "$patchfail" || exit 1
   export ACR_SHIM_FAIL=basesha ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count"
   export PATH="${shimdir}:$PATH"
-  diff_args=(HEAD); untracked=1
+  acr_scope=uncommitted; paths=()
   # shellcheck source=/dev/null
   . "${WORK}/capture.sh"
 ) >/dev/null 2>&1 || bs_status=$?
@@ -885,7 +965,7 @@ run_included_arr() {
     export ACR_SHIM_FAIL="$fail" ACR_SHIM_NTH=1 ACR_SHIM_COUNT="${WORK}/shim-count"
     export PATH="${shimdir}:$PATH"
     tmp="$(mktemp -d "${WORK}/iarr-XXXXXX")"
-    diff_args=(HEAD); untracked=1
+    diff_args=(HEAD); untracked=1; acr_pathspec=(.)
     excludes=(':(exclude)package-lock.json')
     # shellcheck source=/dev/null
     . "${WORK}/included_arr.sh"
@@ -942,7 +1022,7 @@ git -C "$idxr" "${commit_env[@]}" commit -q -m clean
 printf 'edit\n' >> "${idxr}/tracked.txt"
 touch -m -t 202001010101 "${idxr}/clean-a.txt" "${idxr}/clean-b.txt" "${idxr}/tracked.txt"
 idx_before="$(shasum -a 256 "${idxr}/.git/index" | cut -d' ' -f1)"
-status="$(run_capture "$idxr" 'diff_args=(HEAD); untracked=1')"
+status="$(run_capture "$idxr" 'acr_scope=uncommitted; paths=()')"
 idx_after="$(shasum -a 256 "${idxr}/.git/index" | cut -d' ' -f1)"
 if [ "$status" = 0 ] && [ "$idx_before" = "$idx_after" ]; then
   ok "the capture does not rewrite .git/index"
@@ -1002,7 +1082,7 @@ git -C "$cfg" "${commit_env[@]}" commit -q -m attrs
 printf 'changed\n' > "${cfg}/payload.dat"
 
 rm -f "$fsm_marker" "$ext_marker" "$tc_marker"
-status="$(run_capture "$cfg" 'diff_args=(HEAD); untracked=1')"
+status="$(run_capture "$cfg" 'acr_scope=uncommitted; paths=()')"
 if [ "$status" = 0 ] && [ ! -e "$fsm_marker" ]; then
   ok "the capture does not run a configured fsmonitor program"
 else
@@ -1097,7 +1177,7 @@ rng_status=0
 (
   cd "$rng" || exit 1
   set -euo pipefail
-  diff_args=(HEAD); untracked=1; excludes=(':(exclude)no-such-path-zzz')
+  diff_args=(HEAD); untracked=1; acr_pathspec=(.); excludes=(':(exclude)no-such-path-zzz')
   # shellcheck source=/dev/null
   . "${WORK}/ranges.sh"
 ) > "$rng_out" 2>/dev/null || rng_status=$?
@@ -1167,7 +1247,7 @@ rng0_status=0
 (
   cd "$rng" || exit 1
   set -euo pipefail
-  diff_args=(HEAD); untracked=0; excludes=(':(exclude)no-such-path-zzz')
+  diff_args=(HEAD); untracked=0; acr_pathspec=(.); excludes=(':(exclude)no-such-path-zzz')
   # shellcheck source=/dev/null
   . "${WORK}/ranges.sh"
 ) > "$rng0_out" 2>/dev/null || rng0_status=$?

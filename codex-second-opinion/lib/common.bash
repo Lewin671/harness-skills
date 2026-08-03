@@ -29,6 +29,21 @@
 default_model="${CODEX_SECOND_OPINION_MODEL:-gpt-5.6-sol}"
 default_effort="${CODEX_SECOND_OPINION_EFFORT:-high}"
 
+# Which half of that pair the environment actually supplied, recorded before
+# the flag parsers can overwrite `model`/`effort`. The environment is the one
+# route into the model settings that the flag state machine below never saw,
+# and it reached the same half-configuration the flags refuse:
+# `CODEX_SECOND_OPINION_MODEL=weak` alone keeps the pinned `high` effort — the
+# exact tier weaker models reject — and the rejection then reads as a stale
+# shipped default rather than as the caller's own setting.
+# `-n "${VAR:-}"`, not `${VAR+x}`: `:-` above already treats an exported empty
+# value as absent, and set-ness spelled the other way would demand a partner
+# for a variable that contributed nothing.
+env_model_set=0
+if [ -n "${CODEX_SECOND_OPINION_MODEL:-}" ]; then env_model_set=1; fi
+env_effort_set=0
+if [ -n "${CODEX_SECOND_OPINION_EFFORT:-}" ]; then env_effort_set=1; fi
+
 model="$default_model"
 effort="$default_effort"
 pinned=1
@@ -373,8 +388,32 @@ mcp_enabled_ids() {
         # this it reads as a complete listing with nothing enabled. Strings,
         # objects and arrays are consumed above; what reaches here is a
         # literal or a number, and anything else is not JSON.
-        if (entry() && !value_started && c !~ /[ \t\r]/) {
-          if (c ~ /[-0-9]/) { value_started = 1; continue }
+        if (entry() && c !~ /[ \t\r]/) {
+          # A value that has already ENDED, followed by more of one. Every
+          # separator check above sees a separator that is there and none of
+          # them sees one that is missing after a value, so
+          # `{"name":"a","enabled":false xyz}` balanced, spelled its boolean
+          # correctly, satisfied the key/value count and emitted no id — a
+          # complete-looking listing with nothing enabled. Measured. Strings,
+          # objects and arrays never reach this line, and literals and numbers
+          # are consumed whole, so at entry level the only things that may
+          # follow a finished value are whitespace, `,` and `}` — all of which
+          # continue earlier.
+          if (value_started) { garbage = 1; continue }
+          # A NUMBER is consumed whole and made to end at a delimiter, exactly
+          # as the three literals below are. Marking the value "started" on the
+          # leading digit and skipping the rest let anything follow it:
+          # `{"name":"off","enabled":false,"port":1garbage}` balanced, counted
+          # its booleans, emitted no id — and so read as a complete listing
+          # with nothing enabled. Measured. `01` is caught by the same rule:
+          # the grammar matches `0`, and the `1` behind it is not a boundary.
+          if (c ~ /[-0-9]/) {
+            if (match(substr(s, i), /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?/) &&
+                boundary(substr(s, i + RLENGTH, 1))) {
+              value_started = 1; i += RLENGTH - 1; continue
+            }
+            garbage = 1; continue
+          }
           # A literal must be followed by a delimiter. `falsegarbage` starts
           # with `false`, and consuming the prefix leaves the suffix to be
           # skipped as part of an already-started value — so the listing reads
@@ -421,6 +460,18 @@ common_check_model_flags() {
       echo "error: the model and effort must not contain line breaks" >&2
       exit 3 ;;
   esac
+  # The environment pair is closed the same way the flags are, and for the
+  # same reason: a lone `CODEX_SECOND_OPINION_MODEL` pairs an arbitrary model
+  # with the pinned effort. Checked whatever the flags say — a half-set
+  # environment is a mistake wherever it is read, and making the refusal
+  # depend on the flags would hide it on exactly the runs that overrode both
+  # and then surface it on the next one that did not.
+  if [ "$env_model_set" -ne "$env_effort_set" ]; then
+    echo "error: CODEX_SECOND_OPINION_MODEL and CODEX_SECOND_OPINION_EFFORT must be set together." >&2
+    echo "hint: the pair replaces the pinned defaults wholesale; setting one half pairs your value with this script's other half, which is the combination the --model/--effort rules exist to refuse." >&2
+    echo "hint: set both, or unset both and pass '--model M --effort L' for a single run." >&2
+    exit 3
+  fi
   if [ "$model_set" -gt 1 ] || [ "$effort_set" -gt 1 ] || [ "$inherit_set" -gt 1 ]; then
     echo "error: --model, --effort, and --inherit may each be given only once." >&2
     echo "hint: repeating one makes the effective setting depend on flag order." >&2
@@ -950,8 +1001,51 @@ common_resolve_scratch() {
     resolved_sessions="$(cd -- "${codex_home_abs}/sessions" 2>/dev/null && pwd -P)" || resolved_sessions=""
   fi
 
+  # `sessions` itself is not the only link that lands inside the repository.
+  # Codex nests its rollouts by date — `sessions/YYYY/MM/DD/rollout-*.jsonl` —
+  # so a symlink at any of those levels redirects the write exactly as one at
+  # the top does, and resolving only `sessions` waved it through. Bounded at
+  # depth 3, which is the nesting codex uses: `find` is stopped before it
+  # descends into a day directory, so the walk costs a handful of stats
+  # however many rollouts have accumulated. A link planted deeper than the
+  # date levels is still outside this check and stays disclosed in
+  # internals.md rather than claimed.
+  #
+  # The exit status rides the stream as a final NUL record, because a process
+  # substitution's own status is unreachable — a `find` that failed on an
+  # unreadable directory would otherwise read as a tree with no symlinks in
+  # it, which is the same fail-open as not looking. Unforgeable here: `find`
+  # is given an ABSOLUTE root, so every real record starts with `/`.
+  local nested="" nested_real="" nested_inside="" nested_status=missing
+  if [ -n "$resolved_sessions" ]; then
+    while IFS= read -r -d '' nested; do
+      case "$nested" in
+        'cdx_status '*) nested_status="${nested#cdx_status }"; continue ;;
+      esac
+      # Draining rather than breaking on the first hit: the status marker is
+      # the LAST record, and leaving early would report a complete walk as a
+      # failed one.
+      if [ -z "$nested_inside" ]; then
+        nested_real="$(resolved_path "$nested")"
+        if [ -d "$nested_real" ]; then
+          nested="$(cd -- "$nested_real" 2>/dev/null && pwd -P)" || nested="$nested_real"
+        else
+          nested="$nested_real"
+        fi
+        if inside_repo "$nested"; then nested_inside="$nested"; fi
+      fi
+    done < <(find "$resolved_sessions" -mindepth 1 -maxdepth 3 -type l -print0 2>/dev/null \
+             && printf 'cdx_status 0\0' || printf 'cdx_status %s\0' "$?")
+    if [ "$nested_status" != 0 ]; then
+      echo "error: could not enumerate the session directories under CODEX_HOME (${nested_status}), so where codex would write cannot be established" >&2
+      echo "hint: make ${resolved_sessions} readable, or point CODEX_HOME elsewhere, outside the repository." >&2
+      exit 3
+    fi
+  fi
+
   if { [ -n "$resolved_home" ] && inside_repo "$resolved_home"; } \
      || { [ -n "$resolved_sessions" ] && inside_repo "$resolved_sessions"; } \
+     || [ -n "$nested_inside" ] \
      || inside_repo "$probe"; then
     echo "error: CODEX_HOME ($(flat "${codex_home}")) resolves inside $(flat "${worktree_root}") or its git storage." >&2
     echo "error: codex writes every session under CODEX_HOME/sessions, so this ${run_noun} would write the repository it is reading; refusing to start." >&2
@@ -1416,7 +1510,17 @@ run_with_fallback() {
       exit 4
     fi
     if defaults_rejected; then
-      echo "warning: '${model}' at effort '${effort}' was rejected — these pinned defaults look stale." >&2
+      # Name where the rejected pair CAME FROM. The fallback also fires for a
+      # pair supplied by CODEX_SECOND_OPINION_MODEL/_EFFORT — those replace the
+      # defaults rather than clearing `pinned` — and calling the caller's own
+      # environment "this script's pinned defaults gone stale" is a false
+      # report about whose setting failed, which is the one thing a warning
+      # relayed verbatim to a user must not get wrong.
+      if [ "$env_model_set" -eq 1 ]; then
+        echo "warning: '${model}' at effort '${effort}' was rejected — that pair came from CODEX_SECOND_OPINION_MODEL/_EFFORT, not from this script." >&2
+      else
+        echo "warning: '${model}' at effort '${effort}' was rejected — these pinned defaults look stale." >&2
+      fi
       echo "warning: retrying once with the model and effort from your codex config." >&2
       local retry_status=0
       # Truncated before the RETRY, and only there. `$out` starts life as a
@@ -1500,4 +1604,15 @@ emit_result() {
   # startup, so deleting it here would break a promise the caller may
   # still be holding. TMPDIR cleanup is the system's job.
   echo "${result_noun}: ${out}" >&2
+  # `log:` again, AFTER the model-controlled body. The startup line is the
+  # only other one, and it is printed before codex is even launched — so in a
+  # merged stream (2>&1) a result containing `log: /somewhere/else` was the
+  # LAST line of that kind, and a caller following the documented
+  # trust-the-final-marker rule would tail a file the model chose. Every other
+  # marker this script emits already lands after the body; this one did not,
+  # and one rule for all of them is worth one repeated line. Guarded, because
+  # a mode that reached here without scratch files should still print its
+  # result rather than dying on an unset variable.
+  [ -n "${log:-}" ] && echo "log: ${log}" >&2
+  return 0
 }

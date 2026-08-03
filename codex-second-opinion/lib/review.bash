@@ -51,8 +51,9 @@ perspective, or a higher tier matters.
 
 Environment:
   CODEX_BIN                     path to the codex binary (default: codex)
-  CODEX_SECOND_OPINION_MODEL    override the pinned default model
-  CODEX_SECOND_OPINION_EFFORT   override the pinned default effort
+  CODEX_SECOND_OPINION_MODEL    replace the pinned default model
+  CODEX_SECOND_OPINION_EFFORT   replace the pinned default effort
+                                (both together, or neither)
   CODEX_SECOND_OPINION_TIMEOUT  override the default timeout (seconds)' >&2
 }
 
@@ -114,10 +115,18 @@ scope_fingerprint() {
       #   - the CONTENT of untracked files, since porcelain prints `?? path`
       #     whatever the file now says, and --uncommitted promises to review
       #     untracked files.
-      local head="" st="" df="" un=""
-      head="$(git --no-optional-locks rev-parse HEAD 2>/dev/null)" || head=""
-      st="$(git --no-optional-locks -c core.fsmonitor=false status --porcelain --untracked-files=normal 2>/dev/null)" || st=""
-      df="$(git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff HEAD 2>/dev/null)" || df=""
+      # EVERY read is checked, not just HEAD. A failing `git status` or `git
+      # diff` used to fall back to an empty string, which is exactly what a
+      # clean tree produces — and it fails the same way on both calls, so the
+      # two digests compared equal and the run reported "the tree did not
+      # change" about a tree it could not read. That is the one answer this
+      # function must never invent: "could not tell" already has its own
+      # branch, and the whole point of taking a fingerprint twice is to
+      # distinguish those two.
+      local meas_ok=1 head="" st="" df="" un=""
+      head="$(git --no-optional-locks rev-parse HEAD 2>/dev/null)" || meas_ok=0
+      st="$(git --no-optional-locks -c core.fsmonitor=false status --porcelain --untracked-files=normal 2>/dev/null)" || meas_ok=0
+      df="$(git_readonly_index git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff HEAD 2>/dev/null)" || meas_ok=0
       # Each file REDIRECTED into shasum, never passed as an argument. Passing
       # names is what the first version did, and measured: an untracked file
       # named `-` hashes empty stdin (so editing it is invisible), one named
@@ -132,7 +141,20 @@ scope_fingerprint() {
       # failure here abandons the whole fingerprint, so the run reports
       # "could not tell" rather than a digest missing one entry — which would
       # compare equal next time and read as no drift.
-      local un_ok=1 f="" d=""
+      # Through a FILE, never a process substitution. `< <(git ls-files ...)`
+      # has no exit status the reader can see, so a git that failed or was
+      # killed mid-list read as "no untracked files" — an empty `un` on both
+      # calls, comparing equal while untracked content changed underneath.
+      # The status cannot ride the stream either: these records are PATHS, and
+      # anything that can write the tree can create a file named like a marker.
+      local un_ok=1 f="" d="" listing=""
+      listing="$(mktemp "${scratch:-${TMPDIR:-/tmp}}/codex-scope-XXXXXX" 2>/dev/null)" || listing=""
+      if [ -z "$listing" ]; then
+        meas_ok=0
+      else
+        git --no-optional-locks -c core.fsmonitor=false ls-files --others --exclude-standard -z \
+          > "$listing" 2>/dev/null || meas_ok=0
+      fi
       while IFS= read -r -d '' f; do
         if [ -L "$f" ]; then
           d="$(readlink "$f" 2>/dev/null)" || { un_ok=0; break; }
@@ -146,12 +168,14 @@ scope_fingerprint() {
           # and this line. None of them is "unchanged".
           un_ok=0; break
         fi
-      done < <(git --no-optional-locks -c core.fsmonitor=false ls-files --others --exclude-standard -z 2>/dev/null)
+      done < "${listing:-/dev/null}"
+      [ -z "$listing" ] || rm -f "$listing"
       fp="${head}${st}${df}${un}"
       # An empty tree is a legitimate state, so emptiness is not failure. What
-      # IS failure is having no HEAD to name, or an untracked listing this
-      # could not read to the end.
-      if [ -z "$head" ] || [ "$un_ok" != 1 ]; then
+      # IS failure is any read that did not complete: no HEAD to name, a git
+      # command that exited non-zero, or an untracked listing this could not
+      # read to the end.
+      if [ "$meas_ok" != 1 ] || [ -z "$head" ] || [ "$un_ok" != 1 ]; then
         fp=""
       else
         fp="$(printf '%s' "$fp" | shasum -a 256 2>/dev/null | cut -d' ' -f1)" || fp=""

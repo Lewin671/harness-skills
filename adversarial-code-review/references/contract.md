@@ -433,6 +433,13 @@ things that were actually counted.
 
 ## 7. What This Contract Assumes
 
+**A path has one identity, whoever spelled it.** The manifest, the changed-line
+map and every claim an agent files are compared as strings, and `./util.js` and
+`util.js` are the same file. Reconcile them to a single spelling before
+anything compares them: a harness that accepts a spelling in the manifest and
+cannot match it in a claim reports a clean review of a file whose findings it
+silently binned.
+
 **Comparisons that break ties must be total.** Locale collation reports two
 distinct strings as equal — a composed accent against a decomposed one — and
 a comparator that returns zero for different records hands the decision back
@@ -444,8 +451,20 @@ it emits claims in, so anything that keeps "the first N" hands that finder —
 or whatever wrote the code it read — a way to push a real defect out of the
 run behind padding. Where a bound exists, the survivors are chosen by
 consequence: severity first, then whether the anchor sits in a high-risk
-region, then confidence, and finally the record's own text so two runs given
-the same claims in different orders keep the same ones.
+region, then confidence, then the anchor itself, and finally the record's own
+content so two runs given the same claims in different orders keep the same
+ones.
+
+**And it must be one order, read in both directions.** Every bounded
+selection — what a per-lens cap keeps, what a rollback gives up, what a budget
+trim drops — has to rank by that same comparator, with the discarded set being
+its tail rather than a second rule that merely agrees about severity. Two rules
+that agree on severity and disagree on the tie-break do not just pick different
+candidates; they make the report's disclosure false, because "least
+consequential" then names something other than what "most consequential" named
+when the budget was being spent. Measured: with the tie-breaks pointing
+opposite ways, a trim gave up precisely the candidate the funding order would
+have verified first.
 
 The same rule reaches past claims. Where two records contradict each other
 about the same candidate — a batch returning both a substantiating and a

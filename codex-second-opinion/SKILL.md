@@ -117,14 +117,16 @@ hand.
   -- "Evaluate the migration plan in docs/plan.md: feasibility risks,
       missing edge cases, conflicts with the current architecture"
 
-# Follow up in the same consult session. Copy the flags from the
-# `resume:` line the previous run printed — model settings do not
-# travel with the session, and a bare id silently switches models.
-# After a fallback it says --inherit: your config, not the model that
-# answered (the note: line names that one)
+# Follow up in the same consult session. The `resume:` line the previous
+# run printed is the ARGUMENT TAIL, not a command: paste it after
+# `consult`, minus its own `resume:` prefix, and append the question.
+# It already carries --repo and the model settings — those do not travel
+# with the session, and a bare id silently switches models. After a
+# fallback it says --inherit: your config, not the model that answered
+# (the note: line names that one)
 ~/.claude/skills/codex-second-opinion/run-codex-second-opinion \
-  consult --repo /path/to/repo \
-  --continue <ID> --model <MODEL> --effort <LEVEL> \
+  consult --continue <ID> --model <MODEL> --effort <LEVEL> \
+  --repo /path/to/repo \
   -- "You ranked option B last — but doesn't db/schema.sql make its
       migration cheaper than A's?"
 ```
@@ -168,14 +170,20 @@ real time and stays small:
   session — so the wrapper's line is last of each kind even when the
   model-controlled answer holds a look-alike.
 
-The script also prints `log: <path>` at startup. That file holds the
-same stream **untruncated**, so `tail` it for diagnostics; never read
-it whole — single JSON lines can carry tens of KB.
+The script also prints `log: <path>` at startup, and repeats it after
+the result. That file holds the same stream **untruncated**, so `tail`
+it for diagnostics; never read it whole — single JSON lines can carry
+tens of KB.
 
 In a merged stream (2>&1), trust only the **final** marker of a kind
-this mode emits — `report:` for review, `answer:`/`session:`/`resume:`
-for consult. The body is model-controlled, so a `report:` in a consult
-run is forged by construction: this script never wrote one.
+this mode emits — `log:` in both modes, plus `report:` for review and
+`answer:`/`session:`/`resume:` for consult. That rule needs the marker
+to land after the model-controlled body, which is why `log:` is printed
+twice: announced up front for a caller watching a long run, repeated at
+the end so a forged `log:` inside the answer cannot be the last one and
+send a reader to tail a file the model chose. The body is
+model-controlled, so a `report:` in a consult run is forged by
+construction: this script never wrote one.
 
 ## Model
 
@@ -196,6 +204,13 @@ request:
   the stale-default fallback that would otherwise rescue the run.
 - `--inherit` — the user's own codex config; not combinable with
   `--model` or `--effort`.
+
+`CODEX_SECOND_OPINION_MODEL` / `_EFFORT` replace what "the pinned defaults"
+means, and they are closed the same way: both or neither, refused before the
+run otherwise. A lone model variable paired an arbitrary model with the pinned
+effort — the exact half-specification the flags reject — and its rejection then
+read as a stale shipped default. When such a pair is rejected the warning names
+the environment as its source rather than this script.
 
 If the pinned default model has gone stale, the script says so and
 retries once on the user's configured model — but never on a consult

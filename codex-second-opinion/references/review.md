@@ -96,6 +96,9 @@ as a plain sentence with no bullets at all, not an empty list.
    tree, which is read once by the precheck and again by Codex minutes
    later. The wrapper fingerprints it across that window and warns when it
    changed; relay that warning rather than calling the result reproducible.
+   There is a **third** answer and it needs relaying too: if any read that
+   feeds the fingerprint fails, the wrapper says it could not tell rather
+   than reporting no change. "Unmeasurable" is not "unchanged".
 5. Stop there. Applying fixes is a separate, user-authorized step.
 
 For open questions rather than code changes, use consult mode instead:

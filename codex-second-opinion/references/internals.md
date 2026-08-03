@@ -112,7 +112,9 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   run also creates a private `mktemp -d` state directory under `TMPDIR`
   and writes `pgid`, `status` and, on a timeout, the marker file into it,
   removing the directory before it returns; `git_readonly_index` writes a
-  throwaway index copy there too, and codex writes scratch of its own.
+  throwaway index copy there too, each scope fingerprint writes and removes
+  a NUL-separated listing of untracked paths, and codex writes scratch of its
+  own.
   Naming these as transient rather than folding them into the count is
   the honest form: an exhaustive list would go stale on the next codex
   release, and a count that silently excluded them was simply wrong.
@@ -140,15 +142,26 @@ Verified against `codex-cli 0.146.0`; recheck if these stop holding.
   codex read the literal environment value and wrote its sessions inside
   the repository. bash 3.2 has no function-local `set -f`, so the previous
   state is saved from `$-` and restored.
-- The `CODEX_HOME` containment check covers that directory and its
-  `sessions` root, both resolved through symlinks. It does not walk
-  deeper, and cannot: codex creates the per-session subdirectories at
-  run time, so there is nothing to inspect beforehand and a check that
-  enumerated today's tree would still miss tomorrow's. What it defends
-  against is a *placement* — a repository that is also the home
-  directory, a home pointed into the tree — not a symlink planted
-  several levels down inside one's own codex state. That bound is
-  stated here rather than closed by a walk that would still be partial.
+- The `CODEX_HOME` containment check covers that directory, its
+  `sessions` root, and every symlink up to three levels below that root —
+  all resolved through symlinks. Three because that is the nesting codex
+  writes, `sessions/YYYY/MM/DD/rollout-*.jsonl`: a link at any date level
+  redirects the write exactly as one at the top does, and checking only
+  the top approved it. The walk is stopped before it enters a day
+  directory, so it costs a handful of stats however many rollouts have
+  accumulated, and a `find` that fails refuses the run rather than
+  reading as a tree with no links in it.
+
+  Two bounds remain, stated rather than closed. A link planted *deeper*
+  than the date levels is not inspected — the day directories hold
+  rollout files, and walking them would make the check's cost scale with
+  a user's entire consultation history for a placement nobody has seen.
+  And the walk sees only what exists when it runs; codex creates
+  tomorrow's date directories itself, so this defends against a symlink
+  that is already there, not against one planted mid-run. What the check
+  is fundamentally for is a *placement* — a repository that is also the
+  home directory, a home pointed into the tree — and the nested walk
+  extends that to the one layout codex actually writes.
 - The scratch directory is resolved *before* the feature and MCP checks,
   not after. Those checks use here-strings, and on the bash 3.2 macOS
   ships `<<<` materialises a temporary file under `TMPDIR` — so a

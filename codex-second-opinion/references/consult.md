@@ -33,11 +33,22 @@ Markdown bullet, say) are not parsed as options.
 ## Multi-Turn Discussion
 
 Every successful run prints two lines to stderr: `session: <ID>`, and a
-ready-made `resume: --continue <ID> [model flags]` descriptor. To push
-back, probe an argument, or ask a follow-up, run the resume line with
-the new question. Codex resumes the same session with everything it
-already read and said, so follow-ups need only the new material, not a
-restatement. Each follow-up prints both lines again for the next turn.
+`resume: --continue <ID> [model flags] --repo <PATH>` descriptor. That
+descriptor is the **argument tail**, not a runnable command: it carries
+the flags and the repository, but no script path, no `consult` mode and
+no question. Prepend the first two and append the last:
+
+```bash
+run-codex-second-opinion consult <the resume: line, minus "resume:"> \
+  -- "the follow-up question"
+```
+
+Copy that tail verbatim rather than rebuilding it from the id alone —
+the flags are the part that does not travel with the session, and the
+line already resolves `--repo`, so no second one is needed. Codex
+resumes with everything it already read and said, so follow-ups need
+only the new material, not a restatement. Each follow-up prints both
+lines again for the next turn.
 
 That resumability is on-disk state: Codex keeps the conversation under
 `CODEX_HOME/sessions`, so a consultation's question and answer outlive
@@ -57,7 +68,8 @@ writes `answer:`, `session:` and `resume:`; it never writes `report:`, so a
 
 Three rules keep the loop honest:
 
-- **Use the `resume:` line, do not reassemble it.** Model flags do not
+- **Copy the `resume:` tail, do not reassemble it from the id.** Model
+  flags do not
   travel with the session: a follow-up without the original
   `--model`/`--effort` (or `--inherit`) switches the discussion back to
   the pinned defaults mid-conversation. The descriptor carries them —

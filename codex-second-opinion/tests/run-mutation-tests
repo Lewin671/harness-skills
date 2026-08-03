@@ -35,9 +35,9 @@ if [ "${CSO_MUT_WORKER:-0}" != 1 ] &&
   pids=()
   starts=()
   start=1
-  while [ "$start" -le 65 ]; do
+  while [ "$start" -le 76 ]; do
     end=$((start + 3))
-    [ "$end" -le 65 ] || end=65
+    [ "$end" -le 76 ] || end=76
     starts+=("$start")
     CSO_MUT_WORKER=1 CSO_MUT_FROM="$start" CSO_MUT_TO="$end" \
       CSO_MUT_RESULT_DIR="$mut_results" "${HERE}/run-mutation-tests" \
@@ -64,11 +64,11 @@ if [ "${CSO_MUT_WORKER:-0}" != 1 ] &&
     fi
   done
   echo
-  if [ "$worker_failed" -eq 0 ] && [ "$total" -eq 65 ] && [ "$survived" -eq 0 ]; then
+  if [ "$worker_failed" -eq 0 ] && [ "$total" -eq 76 ] && [ "$survived" -eq 0 ]; then
     echo "all ${total} mutants killed — the suite has teeth"
     exit 0
   fi
-  echo "mutation sweep failed: total=${total}/65 survived=${survived} worker_failed=${worker_failed}"
+  echo "mutation sweep failed: total=${total}/76 survived=${survived} worker_failed=${worker_failed}"
   exit 1
 fi
 
@@ -331,7 +331,8 @@ mutate "a symlink is fingerprinted by its target text" lib/review.bash \
   '        if [ -L "$f" ]; then' '        if false; then'
 # Unreadable is not unchanged.
 mutate "an unreadable untracked file abandons the fingerprint" lib/review.bash \
-  '      if [ -z "$head" ] || [ "$un_ok" != 1 ]; then' '      if [ -z "$head" ]; then'
+  '      if [ "$meas_ok" != 1 ] || [ -z "$head" ] || [ "$un_ok" != 1 ]; then' \
+  '      if [ "$meas_ok" != 1 ] || [ -z "$head" ]; then'
 mutate "the fingerprint covers HEAD" lib/review.bash \
   '      fp="${head}${st}${df}${un}"' '      fp="${st}${df}${un}"'
 mutate "the fingerprint covers untracked content" lib/review.bash \
@@ -389,7 +390,58 @@ mutate "the unknown mode is flattened" run-codex-second-opinion \
 mutate "a non-default timeout reaches the descriptor" lib/consult.bash \
   '    [ "$timeout_secs" != 3000 ] && resume_timeout=" --timeout ${timeout_secs}"' '    :'
 
+# The environment is the fourth route into the model settings, and the flag
+# state machine never saw it: a lone CODEX_SECOND_OPINION_MODEL paired an
+# arbitrary model with the pinned effort, and its rejection was then reported
+# as a stale shipped default.
+mutate "the environment pair is closed too" lib/common.bash \
+  '  if [ "$env_model_set" -ne "$env_effort_set" ]; then' '  if false; then'
+mutate "a rejected environment pair names its source" lib/common.bash \
+  '      if [ "$env_model_set" -eq 1 ]; then' '      if false; then'
+# JSON numbers end where they claim to. A digit used to mark the value started
+# and everything after it was skipped, so `"port":1garbage` read as a complete
+# listing with nothing enabled.
+mutate "a JSON number is consumed whole" lib/common.bash \
+  '            if (match(substr(s, i), /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?/) &&
+                boundary(substr(s, i + RLENGTH, 1))) {
+              value_started = 1; i += RLENGTH - 1; continue
+            }
+            garbage = 1; continue' \
+  '            value_started = 1; continue'
+# And a value that has ENDED may not be followed by more of one. Every
+# separator check sees a separator that is there; none sees one that is
+# missing after a value.
+mutate "a finished value ends the value" lib/common.bash \
+  '          if (value_started) { garbage = 1; continue }' '          ;'
+# `log:` is a marker, and callers are told to trust the final one of a kind.
+# Printed only at startup it was the model, not this script, that wrote the
+# last one in a merged stream.
+mutate "the log path is repeated after the result" lib/common.bash \
+  '  [ -n "${log:-}" ] && echo "log: ${log}" >&2' '  :'
+# Codex nests rollouts by date, so a symlink at any level under `sessions`
+# redirects the write exactly as one at the top does.
+mutate "nested session links are resolved" lib/common.bash \
+  '     || [ -n "$nested_inside" ] \' '     || false \'
+mutate "a failed session walk refuses" lib/common.bash \
+  '    if [ "$nested_status" != 0 ]; then' '    if false; then'
+
 # --- mode-specific ---------------------------------------------------------
+# A git read that FAILS while fingerprinting is not a tree that did not change.
+# Each of these fell back to an empty string — what a clean tree produces — and
+# failed the same way on both calls, so the digests compared equal.
+mutate "a failed status abandons the fingerprint" lib/review.bash \
+  'status --porcelain --untracked-files=normal 2>/dev/null)" || meas_ok=0' \
+  'status --porcelain --untracked-files=normal 2>/dev/null)" || st=""'
+mutate "a failed diff abandons the fingerprint" lib/review.bash \
+  'diff --no-ext-diff HEAD 2>/dev/null)" || meas_ok=0' \
+  'diff --no-ext-diff HEAD 2>/dev/null)" || df=""'
+mutate "a failed untracked listing abandons the fingerprint" lib/review.bash \
+  '          > "$listing" 2>/dev/null || meas_ok=0' \
+  '          > "$listing" 2>/dev/null || true'
+mutate "the fingerprint reports every failed read" lib/review.bash \
+  '      if [ "$meas_ok" != 1 ] || [ -z "$head" ] || [ "$un_ok" != 1 ]; then' \
+  '      if [ -z "$head" ] || [ "$un_ok" != 1 ]; then'
+
 mutate "an empty uncommitted scope exits 2" lib/review.bash \
   'if [ -z "$status_out" ]; then' 'if false; then'
 mutate "a scope flag carries the resolved object name" lib/review.bash \
@@ -447,7 +499,7 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success. Pin the count:
 # any mutant that silently fails to launch is a failure in itself.
-EXPECTED_TOTAL=65
+EXPECTED_TOTAL=76
 if [ "${CSO_MUT_WORKER:-0}" = 1 ]; then
   printf '%s %s\n' "$total" "$survived" > "${CSO_MUT_RESULT_DIR}/${CSO_MUT_FROM}.result"
   echo "chunk ${CSO_MUT_FROM}-${CSO_MUT_TO}: ${total} mutants, ${survived} survived"

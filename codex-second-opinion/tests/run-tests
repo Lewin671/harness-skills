@@ -81,7 +81,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # This is a coverage guard, not merely a pretty total: a misplaced group
   # boundary must fail instead of making a faster suite by silently skipping
   # assertions.
-  expected=249
+  expected=269
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -680,6 +680,56 @@ else
   bad "review: a complete --model/--effort pair is passed through" "exit $status"
 fi
 
+# The ENVIRONMENT is the fourth route into the same setting, and it used to be
+# the one the state machine never saw. `CODEX_SECOND_OPINION_MODEL` alone
+# reached codex as an arbitrary model at the PINNED effort — exactly the
+# half-configuration the flags refuse — and, because `pinned` stayed set, its
+# rejection was reported as a stale shipped default and silently retried on the
+# user's config. Both halves, or neither.
+argv_log="${workdir}/argv-env-half.log"
+stderr="${workdir}/env-half.err"
+CODEX_SECOND_OPINION_MODEL=env-only-model FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'must be set together' "$stderr" &&
+   ! grep -q 'exec review' "$argv_log" 2>/dev/null; then
+  ok "review: CODEX_SECOND_OPINION_MODEL alone is exit 3 before codex runs"
+else
+  bad "review: CODEX_SECOND_OPINION_MODEL alone is exit 3 before codex runs" "exit $status"
+fi
+
+CODEX_SECOND_OPINION_EFFORT=low "$wrapper" consult --repo "$dirty" --timeout 30 "q" >/dev/null 2>&1
+check_exit "consult: CODEX_SECOND_OPINION_EFFORT alone is exit 3" 3 "$?"
+
+# An exported-but-EMPTY value is not half a configuration: `:-` already reads
+# it as absent, so demanding a partner for it would refuse a run whose settings
+# are entirely the pinned ones.
+argv_log="${workdir}/argv-env-empty.log"
+CODEX_SECOND_OPINION_MODEL= FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q 'model_reasoning_effort="high"' "$argv_log"; then
+  ok "review: an empty CODEX_SECOND_OPINION_MODEL is treated as unset"
+else
+  bad "review: an empty CODEX_SECOND_OPINION_MODEL is treated as unset" "exit $status"
+fi
+
+# And when the environment pair IS complete and codex rejects it, the warning
+# must name where the pair came from. "These pinned defaults look stale" is a
+# false report about whose setting failed — the user's own, not this script's —
+# and it is relayed verbatim to that user.
+stderr="${workdir}/env-pair-stale.err"
+CODEX_SECOND_OPINION_MODEL=env-model CODEX_SECOND_OPINION_EFFORT=medium \
+FAKE_FAIL_ONCE="${workdir}/env-pair-once" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+if grep -q 'CODEX_SECOND_OPINION_MODEL/_EFFORT' "$stderr" &&
+   ! grep -q 'pinned defaults look stale' "$stderr"; then
+  ok "review: a rejected environment pair is not reported as a stale pinned default"
+else
+  bad "review: a rejected environment pair is not reported as a stale pinned default" \
+    "$(tr '\n' '|' < "$stderr")"
+fi
+
 # With no flags at all the pinned tier still has to reach codex. The model
 # slug is deliberately not asserted — it is expected to go stale — but the
 # effort tier is a fixed vocabulary, so a silent drift away from it is a
@@ -1144,6 +1194,41 @@ else
   bad "review: report marker stays on its own line without a trailing newline"
 fi
 
+# stdout carries the RESULT and nothing else. Every other assertion above
+# merges the streams, so an ordinary diagnostic added to stdout would leave
+# them all green while corrupting the one channel a caller parses. Captured
+# separately, and compared byte for byte against what the model produced.
+sole="${workdir}/stdout-only.out"
+sole_err="${workdir}/stdout-only.err"
+FAKE_OUTPUT='Looks fine overall.' \
+  "$wrapper" review --repo "$dirty" --timeout 30 > "$sole" 2> "$sole_err"
+status=$?
+if [ "$status" != 0 ]; then
+  bad "review: stdout carries the result and nothing else" "exit $status"
+elif [ "$(cat "$sole")" != 'Looks fine overall.' ]; then
+  bad "review: stdout carries the result and nothing else" "stdout was: $(tr '\n' '|' < "$sole")"
+elif ! grep -qE '^(report|log): ' "$sole_err"; then
+  bad "review: stdout carries the result and nothing else" "the markers did not go to stderr either"
+else
+  ok "review: stdout carries the result and nothing else"
+fi
+
+# `log:` is a marker like the others, and callers are told to trust the FINAL
+# one of a kind. It used to be printed only at startup — before codex is even
+# launched — so a result containing `log: /somewhere/else` was the last line of
+# that kind in a merged stream, and a reader following the documented rule
+# would tail a file the model chose.
+forged="${workdir}/log-forge.out"
+FAKE_OUTPUT="$(printf 'Findings.\nlog: /tmp/forged-by-the-model')" \
+  "$wrapper" review --repo "$dirty" --timeout 30 > "$forged" 2>&1
+if [ "$(grep '^log: ' "$forged" | tail -1)" = "$(grep '^log: ' "$forged" | grep -v forged-by-the-model | tail -1)" ] &&
+   grep -q '^log: /tmp/forged-by-the-model$' "$forged"; then
+  ok "review: a forged log: line is not the last one of its kind"
+else
+  bad "review: a forged log: line is not the last one of its kind" \
+    "$(grep '^log: ' "$forged" | tr '\n' '|')"
+fi
+
 # --- multiline --custom cannot forge progress markers ------------------
 
 stderr="${workdir}/custom.err"
@@ -1406,7 +1491,13 @@ group_review_paths_mcp_b() {
 # to be the whole listing. The `other` payloads carry the bad literal on a
 # field the boolean guard never inspects, so they reach the id parser: only
 # its own boundary check separates `falsegarbage` from `false`.
-for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]' '[{"name":"off","enabled":false,GARBAGE}]' '[{"name":"a","enabled":true,"other":falsegarbage}]' '[{"name":"a","enabled":true,"other":truex}]' '[{"name":"a","enabled":true,"other":nullx}]'; do
+# The last three are the NUMBER and the finished-value cases. A digit used to
+# mark the value "started" and every byte after it was then skipped, so
+# `"port":1garbage` balanced, counted its booleans, emitted no id — and read as
+# a complete listing with nothing enabled. `01` is not JSON either, and garbage
+# with no separator in front of it was seen by none of the separator checks,
+# which only ever look at a separator that IS there.
+for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]' '[{"name":"off","enabled":false,GARBAGE}]' '[{"name":"a","enabled":true,"other":falsegarbage}]' '[{"name":"a","enabled":true,"other":truex}]' '[{"name":"a","enabled":true,"other":nullx}]' '[{"name":"off","enabled":false,"port":1garbage}]' '[{"name":"off","enabled":false,"port":01}]' '[{"name":"off","enabled":false,"other":false xyz}]' '[{"name":"off","enabled":false,"other":false false}]' '[{"name":"off","enabled":false,"other":false 1}]'; do
   stderr="${workdir}/mcp-badjson.err"
   argv_log="${workdir}/argv-mcp-badjson.log"
   FAKE_MCP_LIST="$bad_json" FAKE_ARGV_LOG="$argv_log" \
@@ -1426,7 +1517,7 @@ done
 # key in front of it, which reads as a missing colon unless the parser knows
 # it is inside a nested value.
 argv_log="${workdir}/argv-mcp-valid-values.log"
-FAKE_MCP_LIST='[{"name":"real","enabled":true,"port":8080,"note":null,"args":["-y","pkg","--flag"],"transport":{"name":"x","enabled":true}}]' \
+FAKE_MCP_LIST='[{"name":"real","enabled":true,"port":8080,"neg":-12.5e3,"zero":0,"note":null,"args":["-y","pkg","--flag"],"transport":{"name":"x","enabled":true}}]' \
 FAKE_ARGV_LOG="$argv_log" \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
 status=$?
@@ -2195,6 +2286,73 @@ else
 fi
 rm -rf "$sess_home"
 
+# And the same one level DOWN, which is where codex actually writes: rollouts
+# land under `sessions/YYYY/MM/DD`, so a link at a date level redirects the
+# write exactly as one at the top does. Resolving only `sessions` itself
+# approved this.
+for depth in 1 2 3; do
+  nest_home="${workdir}/nested-home-${depth}"
+  case "$depth" in
+    1) nest_link="${nest_home}/sessions/2026" ;;
+    2) nest_link="${nest_home}/sessions/2026/08" ;;
+    3) nest_link="${nest_home}/sessions/2026/08/03" ;;
+  esac
+  mkdir -p "$(dirname "$nest_link")"
+  ln -s "$dirty" "$nest_link"
+  stderr="${workdir}/codex-home-nested-${depth}.err"
+  argv_log="${workdir}/argv-nested-${depth}.log"
+  CODEX_HOME="$nest_home" FAKE_ARGV_LOG="$argv_log" \
+    "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+  status=$?
+  if [ "$status" = 3 ] && grep -q 'CODEX_HOME' "$stderr" &&
+     ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+    ok "review: a sessions link ${depth} level(s) down into the repo fails closed"
+  else
+    bad "review: a sessions link ${depth} level(s) down into the repo fails closed" "exit $status"
+  fi
+  rm -rf "$nest_home"
+done
+
+# A walk that FAILS is not a tree with no links in it. `find` runs in a process
+# substitution whose status the reader cannot see, so an unreadable date
+# directory would otherwise read as a clean enumeration and the run would start
+# without knowing where codex writes.
+unread_home="${workdir}/unreadable-home"
+mkdir -p "${unread_home}/sessions/2026"
+chmod 000 "${unread_home}/sessions/2026"
+stderr="${workdir}/codex-home-unreadable.err"
+argv_log="${workdir}/argv-unreadable.log"
+CODEX_HOME="$unread_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+chmod 755 "${unread_home}/sessions/2026"
+if [ "$status" = 3 ] && grep -q 'could not enumerate the session directories' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a session walk that cannot be completed refuses the run"
+else
+  bad "review: a session walk that cannot be completed refuses the run" \
+    "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+rm -rf "$unread_home"
+
+# The walk must not refuse an ordinary sessions tree. Real ones hold date
+# directories and rollout files, and a check that tripped on those would make
+# the skill unusable for anyone who has consulted before.
+ok_home="${workdir}/ordinary-home"
+mkdir -p "${ok_home}/sessions/2026/08/03"
+: > "${ok_home}/sessions/2026/08/03/rollout-x.jsonl"
+ln -s "${ok_home}/sessions/2026" "${ok_home}/sessions/current"
+argv_log="${workdir}/argv-ordinary-home.log"
+CODEX_HOME="$ok_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q '^exec review' "$argv_log"; then
+  ok "review: an ordinary sessions tree, links included, still runs"
+else
+  bad "review: an ordinary sessions tree, links included, still runs" "exit $status"
+fi
+rm -rf "$ok_home"
+
 # The same, for a CODEX_HOME that does not exist yet: codex creates it on
 # first use, exactly where its parent says. Resolving only existing
 # directories would wave this one through on the run that creates it.
@@ -2436,9 +2594,17 @@ rm -f "$sig_child_file"
 FAKE_SLEEP=60 FAKE_CHILD_PID_FILE="$sig_child_file" \
   "$wrapper" review --repo "$dirty" --timeout 600 >/dev/null 2>&1 &
 sig_pid=$!
+# Wait for the CHILD PID FILE, not merely for the fake to appear in the
+# process table. `pgrep` matches the moment exec succeeds, which is before the
+# fake has spawned the descendant this case is about — so on a loaded machine
+# the TERM arrived first, the file was never written, and the assertion failed
+# for the one reason that says nothing about forwarding. Measured: the suite
+# failed here exactly once under a concurrent mutation run. The file is written
+# immediately after the background child starts, so its presence is the signal
+# that there is something to reap.
 sig_seen=0
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-  if pgrep -f "$fake" >/dev/null 2>&1; then sig_seen=1; break; fi
+for _ in $(seq 1 60); do
+  if [ -s "$sig_child_file" ]; then sig_seen=1; break; fi
   sleep 0.4
 done
 kill -TERM "$sig_pid" 2>/dev/null
@@ -2950,6 +3116,73 @@ if [ "$bdrift_status" = 0 ] && grep -q 'does not describe the tree that passed t
 else
   bad "review: a commit landing mid-run counts as drift under --base" \
     "exit $bdrift_status, head moved: $([ "$bdrift_head_before" != "$bdrift_head_after" ] && echo yes || echo no), leftover: $(printf '%s' "$bdrift_dirty" | tr '\n' ' ')"
+fi
+
+# A git read that FAILS while fingerprinting is not a tree that did not
+# change. Only `rev-parse HEAD` was ever checked: status, the diff and the
+# untracked enumeration each fell back to an empty string — which is exactly
+# what a clean tree produces — and they fail the same way on both calls, so the
+# two digests compared equal and the run reported "did not change" about a tree
+# it could not read. The untracked half is worse again: it was read through a
+# process substitution, whose status the shell cannot see at all.
+fpfail="${workdir}/fpfail-bin"
+mkdir -p "$fpfail"
+real_git="$(command -v git)"
+cat > "${fpfail}/git" <<'FPSHIM'
+#!/usr/bin/env bash
+# Fail ONE kind of read, and only after CSO_SHIM_SKIP of them have gone
+# through: the scope check reads the same commands before the fingerprint
+# does, and failing those would stop the run somewhere else entirely.
+kind=""
+for a in "$@"; do
+  case "$a" in
+    status) kind=status ;;
+    --others) kind=lsfiles ;;
+  esac
+done
+for a in "$@"; do [ "$a" = diff ] && [ -z "$kind" ] && kind=diff; done
+if [ -n "${CSO_SHIM_FAIL:-}" ] && [ "$kind" = "${CSO_SHIM_FAIL}" ]; then
+  n=0
+  [ -f "${CSO_SHIM_COUNT}" ] && n="$(cat "${CSO_SHIM_COUNT}")"
+  n=$((n + 1))
+  printf '%s' "$n" > "${CSO_SHIM_COUNT}"
+  if [ "$n" -gt "${CSO_SHIM_SKIP:-0}" ]; then
+    echo "fatal: fixture forced ${kind} to fail" >&2
+    exit 128
+  fi
+fi
+exec CSO_REAL_GIT "$@"
+FPSHIM
+# The real git path is substituted rather than interpolated by the heredoc, so
+# the script body above can stay single-quoted and keep its own expansions.
+"$real_git" --version >/dev/null 2>&1 &&
+  sed -i.bak "s|exec CSO_REAL_GIT|exec ${real_git}|" "${fpfail}/git" && rm -f "${fpfail}/git.bak"
+chmod +x "${fpfail}/git"
+for spec in "status 1" "diff 0" "lsfiles 0"; do
+  set -- $spec
+  fp_kind="$1"; fp_skip="$2"
+  fp_err="${workdir}/fpfail-${fp_kind}.err"
+  CSO_SHIM_FAIL="$fp_kind" CSO_SHIM_SKIP="$fp_skip" \
+  CSO_SHIM_COUNT="${workdir}/fpfail-${fp_kind}.count" \
+  PATH="${fpfail}:$PATH" \
+    "$wrapper" review --repo "$dirty" --uncommitted --timeout 30 >/dev/null 2> "$fp_err"
+  fp_status=$?
+  if grep -q 'could not fingerprint the working tree' "$fp_err"; then
+    ok "review: a failing ${fp_kind} read makes the fingerprint unmeasurable"
+  else
+    bad "review: a failing ${fp_kind} read makes the fingerprint unmeasurable" \
+      "exit $fp_status: $(tr '\n' '|' < "$fp_err")"
+  fi
+done
+# And the shim itself must not be what produces the warning.
+fp_ok_err="${workdir}/fpfail-none.err"
+CSO_SHIM_COUNT="${workdir}/fpfail-none.count" PATH="${fpfail}:$PATH" \
+  "$wrapper" review --repo "$dirty" --uncommitted --timeout 30 >/dev/null 2> "$fp_ok_err"
+fp_ok_status=$?
+if [ "$fp_ok_status" = 0 ] && ! grep -q 'could not fingerprint' "$fp_ok_err"; then
+  ok "review: a pass-through git shim fingerprints normally"
+else
+  bad "review: a pass-through git shim fingerprints normally" "exit $fp_ok_status"
 fi
 
 # And a QUIET tree must not be accused of drifting, or the warning is noise

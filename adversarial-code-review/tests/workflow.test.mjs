@@ -461,8 +461,15 @@ function makeAgent(state, s) {
         out.candidates.push(cand('auth.js', 12, 'major', 'present_code', 'same line, different claim'))
       }
       if (lens === 'boundary and error handling') {
-        out.candidates.push(cand('util.js', 7, 'minor', 'present_code', 'off by one'))
-        out.candidates.push(cand('util.js', 8, 'minor', 'present_code', 'swallowed error'))
+        // `./util.js` on BOTH the file and the anchor, which is what an agent
+        // that spells the path that way actually emits — evidenceProblem
+        // requires the two to agree, so a fixture that dotted only one of them
+        // would be testing the anchor check instead of the path rule.
+        const dotted = (c) => s.dottedCandidatePath
+          ? { ...c, file: `./${c.file}`, evidence: { ...c.evidence, anchor: `./${c.evidence.anchor}` } }
+          : c
+        out.candidates.push(dotted(cand('util.js', 7, 'minor', 'present_code', 'off by one')))
+        out.candidates.push(dotted(cand('util.js', 8, 'minor', 'present_code', 'swallowed error')))
       }
       if (lens === 'concurrency and async') out.candidates.push(cand('jobs.js', 33, 'minor', 'present_code', 'unawaited promise'))
       if (s.manyCandidates) {
@@ -661,6 +668,16 @@ function makeAgent(state, s) {
           : s.emergentElsewhere
             ? cand('bulk.js', 3, 'critical', 'present_code', 'emergent: found while probing elsewhere')
             : cand('pay.js', 15, 'critical', 'present_code', 'emergent: overflow no finder saw')
+        // A promoted region candidate does NOT pass through absorb, so the
+        // path normalisation it relies on is the one inside addCandidate. Left
+        // uncovered, that call could be deleted while the finder half kept the
+        // scenario green — and the recall channel whose whole purpose is to
+        // catch what the lenses missed would file its find as out of scope.
+        if (s.dottedCandidatePath) {
+          r.emergent_candidate = { ...r.emergent_candidate,
+            file: `./${r.emergent_candidate.file}`,
+            evidence: { ...r.emergent_candidate.evidence, anchor: `./${r.emergent_candidate.evidence.anchor}` } }
+        }
       }
       return r
     }
@@ -1167,10 +1184,49 @@ for (const [label, manifest] of [
 // And the shapes that must keep working — a bare filename, a nested path, and
 // a leading `./`, none of which leaves the repository. A rule that refused
 // these would silently empty the manifest of every real review.
+// The `./` case needs more than "was not rejected". Accepting the spelling and
+// then failing to MATCH it is the worse of the two failures: the finders'
+// util.js candidates were filed as naming an unreviewed file, the run reported
+// `ok` with a shorter findings list, and nothing anywhere said the two strings
+// were one path. Assert the candidates survive, not just the manifest.
 R.push(await run('scope manifest with ordinary repo-relative paths', {
   ...BASE, included_paths: ['auth.js', 'src/pay.js', './util.js', 'a..b/x.js'] }, {
-  expect: (res) => res.status !== 'invalid_args'
-    || `an ordinary repo-relative manifest was rejected: ${res.detail}` }))
+  expect: (res) => {
+    if (res.status === 'invalid_args') return `an ordinary repo-relative manifest was rejected: ${res.detail}`
+    const outOfScope = (res.ledger.invalid_candidates || [])
+      .filter((x) => /is not among the reviewed paths/.test(x.reason || ''))
+      .map((x) => x.anchor)
+    if (outOfScope.some((a) => /util\.js/.test(String(a)))) {
+      return `the manifest spelled util.js as ./util.js and its candidates were dropped as out of scope: ${JSON.stringify(outOfScope)}`
+    }
+    const seen = (res.candidate_results || []).map((r) => r.anchor)
+      .concat((res.found_but_not_verified || []).map((r) => r.anchor))
+    return seen.some((a) => /^util\.js:/.test(String(a)))
+      || `no util.js candidate reached the run at all, so the ./ spelling proves nothing: ${JSON.stringify(seen)}`
+  } }))
+// The other half of one spelling: a finder that writes `./util.js` against a
+// manifest that says `util.js`. Both directions have to reconcile, or the
+// normalisation is only half a rule.
+R.push(await run('a finder spells a reviewed path with a leading ./', { ...BASE }, {
+  dottedCandidatePath: true,
+  expect: (res) => {
+    const dropped = (res.ledger.invalid_candidates || [])
+      .filter((x) => /is not among the reviewed paths|does not match/.test(x.reason || ''))
+      .map((x) => `${x.anchor}: ${x.reason}`)
+    if (dropped.some((d) => /util\.js/.test(d))) return `a ./-spelled candidate was rejected: ${JSON.stringify(dropped)}`
+    const seen = (res.candidate_results || []).map((r) => r.anchor)
+      .concat((res.found_but_not_verified || []).map((r) => r.anchor))
+    if (!seen.some((a) => String(a) === 'util.js:7')) {
+      return `the ./-spelled candidate did not reach the run under its canonical anchor: ${JSON.stringify(seen)}`
+    }
+    // The region probe's promoted candidate is the other producer, and it does
+    // not go through absorb: its only normalisation is addCandidate's.
+    if ((res.ledger.invalid_regions || []).length) {
+      return `a region was rejected: ${JSON.stringify(res.ledger.invalid_regions)}`
+    }
+    return seen.some((a) => String(a) === 'pay.js:15')
+      || `the ./-spelled emergent candidate did not reach the run: ${JSON.stringify(seen)}`
+  } }))
 
 // excluded_paths is disclosure-only, and a malformed one is disclosed just as
 // faithfully as a real exclusion — the reader cannot tell the difference.
@@ -1332,21 +1388,24 @@ R.push(await run('rollback drops by rank, not arrival', { ...BASE, profile: 'rec
       if (dropped.some((f) => f.proposed_severity === 'critical')) {
         return 'the supplemental rollback gave up a critical while retaining majors'
       }
-      // Severity alone cannot tell the two selectors apart: absorb() has
-      // already ordered this finder's list, so the array tail is a major
-      // either way. What separates them is WHICH major goes. Both drop paths
-      // are required to use one selector, and it takes the fingerprint
-      // minimum — line 600 upward here — while the tail is line 623 downward.
-      // Two rules that disagree about "least consequential" make the
-      // disclosure describe something other than what was dropped.
+      // Severity alone cannot tell a working selector from a broken one:
+      // absorb() has already ordered this finder's list, so the array tail is
+      // a major either way. What separates them is WHICH major goes. Both
+      // drop paths are required to use ONE order, read forwards to fund and
+      // backwards to give up — so the majors funding would serve last, the
+      // high lines here, are exactly the ones the rollback must drop. When
+      // the two were written separately the victim selector took the
+      // fingerprint MINIMUM while funding served it first: the run gave up
+      // precisely the candidate it would otherwise have verified first, and
+      // the disclosure described something other than what was dropped.
       const lineOf = (a) => Number(String(a).split(':')[1])
       const goneLines = dropped.map((f) => lineOf(f.anchor)).filter((n) => n >= 600 && n < 700)
       if (!goneLines.length) return 'no supplemental major was rolled back, so the selector is untested'
       const keptLines = res.candidate_results
         .map((r) => lineOf(r.anchor)).filter((n) => n >= 600 && n < 700)
       if (!keptLines.length) return 'every supplemental major was rolled back, so the selector is untested'
-      return Math.max(...goneLines) < Math.min(...keptLines)
-        || `the rollback gave up ${JSON.stringify(goneLines)} while keeping ${JSON.stringify(keptLines)}; that is the array tail, not the shared victim selector`
+      return Math.min(...goneLines) > Math.max(...keptLines)
+        || `the rollback gave up ${JSON.stringify(goneLines)} while keeping ${JSON.stringify(keptLines)}; the victim selector is not reading the funding order backwards`
     }}))
 // Two channels that reach the agent holding execution privileges: evidence a
 // prober built, and commands triage read out of the repository. Both are

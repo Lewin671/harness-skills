@@ -185,31 +185,62 @@ export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=fal
 # changed_ranges — must use these same ones. A branch review that captures
 # base..HEAD but builds its manifest from `git diff HEAD` yields an EMPTY
 # included_paths on a clean tree, and the script then refuses to start.
-# (1) paths the user named: NOT a fourth set of endpoints. Keep the endpoints
-#     of whatever scope they sit in, and narrow by pathspec — which means
-#     running the FILTERED recipe below and putting them where its `-- .`
-#     stands. Patch, both manifests and changed_ranges must use the same list,
-#     or included_paths describes something other than the captured patch.
-paths=(src/pay.js src/auth.js)   # then: -- "${paths[@]}" "${excludes[@]}"
-# (2) uncommitted — the common case
-diff_args=(HEAD); untracked=1
-# (3) branch vs merge-base
-# `origin/HEAD` is an OPTIONAL symbolic ref: a clone made without it, or a
-# repository whose remote HEAD was never set, has none — measured, this very
-# repository exits 128 with "Not a valid object name origin/HEAD" while having
-# an `origin` remote. Under `set -e` that aborts Phase 0 before capture. Fall
-# back to the remote HEAD, then to the local default names, and say which was
-# used rather than guessing silently.
-acr_base_ref=""
-for acr_try in origin/HEAD "$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)" \
-               origin/main origin/master main master; do
-  [ -n "${acr_try}" ] || continue
-  if git rev-parse --verify --quiet "${acr_try}^{commit}" >/dev/null 2>&1; then acr_base_ref="${acr_try}"; break; fi
-done
-[ -n "${acr_base_ref}" ] || { echo "no default branch found; name the base explicitly" >&2; exit 1; }
-diff_args=("$(git merge-base "${acr_base_ref}" HEAD)" HEAD); untracked=0
-# (4) an explicit range the user named
-diff_args=("${from_ref}" "${to_ref}"); untracked=0
+#
+# ONE scope, chosen by a `case`, and the only lines to edit are the three
+# directly below. This was four assignments in sequence with `(1)`..`(4)`
+# comments — a menu written as a script. Pasted as it stood it ran all four:
+# `${from_ref}` is set by nobody but the explicit-range caller, so under
+# `set -u` the block aborted with `unbound variable` after the scope it wanted
+# had already been chosen and overwritten, and a repository with no default
+# branch exited 1 during a capture that never needed one. Both read as a broken
+# recipe rather than as a menu, and an agent that hits either improvises — the
+# one thing a bundled procedure exists to prevent.
+acr_scope=uncommitted            # uncommitted | branch | range
+from_ref=""; to_ref=""           # REQUIRED when acr_scope=range
+# Paths the user named: NOT a fourth scope. They keep the endpoints of whatever
+# scope they sit in and narrow it by pathspec, which means running the FILTERED
+# recipe below. Patch, both manifests and changed_ranges must use the same
+# list, or included_paths describes something other than the captured patch.
+paths=()                         # e.g. paths=(src/pay.js src/auth.js)
+
+case "${acr_scope}" in
+  uncommitted)
+    diff_args=(HEAD); untracked=1 ;;
+  branch)
+    # `origin/HEAD` is an OPTIONAL symbolic ref: a clone made without it, or a
+    # repository whose remote HEAD was never set, has none — measured, this
+    # very repository exits 128 with "Not a valid object name origin/HEAD"
+    # while having an `origin` remote. Under `set -e` that aborts Phase 0
+    # before capture. Fall back to the remote HEAD, then to the local default
+    # names, and say which was used rather than guessing silently.
+    acr_base_ref=""
+    for acr_try in origin/HEAD "$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)" \
+                   origin/main origin/master main master; do
+      [ -n "${acr_try}" ] || continue
+      if git rev-parse --verify --quiet "${acr_try}^{commit}" >/dev/null 2>&1; then acr_base_ref="${acr_try}"; break; fi
+    done
+    [ -n "${acr_base_ref}" ] || { echo "no default branch found; set acr_scope=range and name from_ref/to_ref" >&2; exit 1; }
+    diff_args=("$(git merge-base "${acr_base_ref}" HEAD)" HEAD); untracked=0 ;;
+  range)
+    # Checked, not assumed. Left to `set -u` this is an `unbound variable`
+    # abort that names a shell variable rather than the choice the caller did
+    # not finish making.
+    if [ -z "${from_ref}" ] || [ -z "${to_ref}" ]; then
+      echo "acr_scope=range needs both from_ref and to_ref" >&2; exit 1
+    fi
+    diff_args=("${from_ref}" "${to_ref}"); untracked=0 ;;
+  *)
+    echo "acr_scope must be one of: uncommitted, branch, range" >&2; exit 1 ;;
+esac
+
+# The pathspec every capture command shares, `.` when no paths were named. One
+# spelling for both cases, so the patch, the two manifests and the range map
+# cannot be narrowed in different places — which is how excluded_paths comes to
+# describe something other than what the agents received.
+# `${arr[@]+"${arr[@]}"}` because on bash 3.2 an empty array expands as unset
+# under `set -u`, and the recipe refuses to run under anything but bash.
+acr_pathspec=(.)
+if [ "${#paths[@]}" -gt 0 ]; then acr_pathspec=(${paths[@]+"${paths[@]}"}); fi
 
 base_sha="$(git rev-parse "${diff_args[0]}")"
 # Explicit, not left to errexit alone. This one command produces the entire
@@ -217,7 +248,7 @@ base_sha="$(git rev-parse "${diff_args[0]}")"
 # stays invisible: the untracked half still appends, the manifest still names
 # every path, and the hash still computes — over a patch missing the tracked
 # changes the review claims to be about.
-git diff --no-ext-diff --no-textconv --binary --ignore-submodules=dirty "${diff_args[@]}" > "${tmp}/patch.diff" ||
+git diff --no-ext-diff --no-textconv --binary --ignore-submodules=dirty "${diff_args[@]}" -- "${acr_pathspec[@]}" > "${tmp}/patch.diff" ||
   { echo "could not capture the tracked patch" >&2; exit 1; }
 # Untracked files exist only in the working tree, so they belong to the
 # uncommitted scope alone. Added without touching the index.
@@ -232,7 +263,7 @@ if [ "${untracked}" = 1 ]; then
   # cannot ride the stream here the way it does for worktrees: these records
   # are PATHS, and an attacker can create a file named like any marker.
   acr_untracked=()
-  git ls-files --others --exclude-standard -z > "${tmp}/untracked.z" ||
+  git ls-files --others --exclude-standard -z -- "${acr_pathspec[@]}" > "${tmp}/untracked.z" ||
     { echo "could not enumerate untracked files" >&2; exit 1; }
   while IFS= read -r -d '' f; do acr_untracked+=("$f"); done < "${tmp}/untracked.z"
   for f in ${acr_untracked[@]+"${acr_untracked[@]}"}; do
@@ -264,7 +295,10 @@ acr_manifest() {                       # ${1}.. = extra pathspec arguments
     fi
   } | sort -u
 }
-included="$(acr_manifest)" || { echo "manifest capture failed" >&2; exit 1; }
+# The pathspec goes here too, so a caller who named paths gets the same
+# narrowing in the manifest as in the patch. Passing it to only one of them is
+# how included_paths comes to describe something other than the bound artifact.
+included="$(acr_manifest -- "${acr_pathspec[@]}")" || { echo "manifest capture failed" >&2; exit 1; }
 excluded=""
 ```
 
@@ -350,6 +384,8 @@ either way. Both snapshots would be byte-identical while the contents
 changed underneath. Hash the contents:
 
 ```bash
+set -euo pipefail                        # this is a Phase 0 Bash call too
+
 acr_snapshot() {
   # A FRESH copy of the LIVE index for every snapshot, not the frozen one the
   # capture above reads through. Staging existing work changes .git/index and
@@ -366,6 +402,17 @@ acr_snapshot() {
   [ -f "${acr_real}" ] && cp "${acr_real}" "${acr_idx}"
 
   (
+    # `pipefail` HERE, not borrowed from whoever called. Four of the digests
+    # below are pipelines ending in `shasum`, and without it a `git ls-files`
+    # that fails hands `shasum` an empty stream, which exits 0 — so the `||
+    # exit 1` never fires, the digest is the hash of nothing, and it is the
+    # hash of nothing IDENTICALLY before and after. That is the silent
+    # all-clear this whole function exists to rule out, produced by the one
+    # shell option a caller is most likely not to have set: the function is
+    # copied into a fresh Bash call, and a plain Bash call has no pipefail.
+    # Measured on `ls-files --stage` and `ls-files -v`, whose guards are
+    # reachable no other way.
+    set -o pipefail
     # The top level, for the same reason as the capture block: both `ls-files`
     # calls below are scoped to the current directory, so a snapshot taken
     # from a subdirectory hashes a SUBTREE — and does so identically before
@@ -512,6 +559,7 @@ agent that finds it gone tends to fall back to `git status` alone — the
 status-only check this recipe exists to replace.
 
 ```bash
+set -euo pipefail                        # every Phase 0 Bash call, this one too
 acr_snapshot > "${tmp}/tree-after"       # same definition, same call
 if ! diff -q "${tmp}/tree-before" "${tmp}/tree-after" >/dev/null; then
   diff -u "${tmp}/tree-before" "${tmp}/tree-after"   # disclose, never revert
@@ -596,7 +644,7 @@ excludes=(':(exclude)*.lock' ':(exclude)package-lock.json'
           ':(exclude)vendor/**' ':(exclude)**/node_modules/**'
           ':(exclude)**/__snapshots__/**' ':(exclude)*.min.js')
 
-git diff --no-ext-diff --no-textconv --binary --ignore-submodules=dirty "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/patch.diff" ||
+git diff --no-ext-diff --no-textconv --binary --ignore-submodules=dirty "${diff_args[@]}" -- "${acr_pathspec[@]}" "${excludes[@]}" > "${tmp}/patch.diff" ||
   { echo "could not capture the tracked patch" >&2; exit 1; }
 
 # The SAME pathspecs must filter untracked files. `git check-ignore` only
@@ -607,7 +655,7 @@ if [ "${untracked}" = 1 ]; then
   # substitution's exit status is unreachable, so a failing enumeration reads
   # as "no untracked files" and the patch omits what included_paths names.
   acr_untracked=()
-  git ls-files --others --exclude-standard -z -- . "${excludes[@]}" > "${tmp}/untracked.z" ||
+  git ls-files --others --exclude-standard -z -- "${acr_pathspec[@]}" "${excludes[@]}" > "${tmp}/untracked.z" ||
     { echo "could not enumerate untracked files" >&2; exit 1; }
   while IFS= read -r -d '' f; do acr_untracked+=("$f"); done < "${tmp}/untracked.z"
   for f in ${acr_untracked[@]+"${acr_untracked[@]}"}; do
@@ -622,7 +670,7 @@ patch_sha256="$(shasum -a 256 "${tmp}/patch.diff" | cut -d' ' -f1)"
 
 # Both manifests, from the same pathspecs that produced the patch, through the
 # same helper — same pipefail and propagation reasoning as above.
-included="$(acr_manifest -- . "${excludes[@]}")" || { echo "manifest capture failed" >&2; exit 1; }
+included="$(acr_manifest -- "${acr_pathspec[@]}" "${excludes[@]}")" || { echo "manifest capture failed" >&2; exit 1; }
 everything="$(acr_manifest)" || { echo "manifest capture failed" >&2; exit 1; }
 excluded="$(comm -23 <(printf '%s\n' "${everything}") <(printf '%s\n' "${included}"))"
 ```
@@ -663,10 +711,10 @@ not the path. Use the `-z` variants when either is possible:
 # built from a failed `git diff` would name nothing and the review would
 # report a clean tree it never looked at.
 included_arr=()
-git diff --name-only -z "${diff_args[@]}" -- . "${excludes[@]}" > "${tmp}/included.z" ||
+git diff --name-only -z "${diff_args[@]}" -- "${acr_pathspec[@]}" "${excludes[@]}" > "${tmp}/included.z" ||
   { echo "could not list changed paths" >&2; exit 1; }
 if [ "${untracked}" = 1 ]; then
-  git ls-files --others --exclude-standard -z -- . "${excludes[@]}" >> "${tmp}/included.z" ||
+  git ls-files --others --exclude-standard -z -- "${acr_pathspec[@]}" "${excludes[@]}" >> "${tmp}/included.z" ||
     { echo "could not enumerate untracked files" >&2; exit 1; }
 fi
 while IFS= read -r -d '' f; do included_arr+=("$f"); done < "${tmp}/included.z"
@@ -710,7 +758,7 @@ same filtered pathspecs, and cover all three shapes of change:
 # NUL-decoded included_paths. The range is filed under a key nobody has, the
 # real file gets none, and every candidate in it silently drops to file-level
 # binding. Measured.
-git -c core.quotePath=false diff --no-ext-diff --no-textconv --unified=0 "${diff_args[@]}" -- . "${excludes[@]}" |
+git -c core.quotePath=false diff --no-ext-diff --no-textconv --unified=0 "${diff_args[@]}" -- "${acr_pathspec[@]}" "${excludes[@]}" |
   awk '# A header pair is only a header pair INSIDE a file header — between
        # `diff --git` and the first hunk. Requiring the `--- ` half is not
        # enough: one hunk that rewrites a source line `-- a/forged` into
@@ -743,7 +791,7 @@ git -c core.quotePath=false diff --no-ext-diff --no-textconv --unified=0 "${diff
 # of a Phase 0 Bash call that is the call's own exit status: the tracked ranges
 # above were produced correctly and the step still reports failure.
 if [ "${untracked}" = 1 ]; then
-git ls-files --others --exclude-standard -z -- . "${excludes[@]}" |
+git ls-files --others --exclude-standard -z -- "${acr_pathspec[@]}" "${excludes[@]}" |
   while IFS= read -r -d '' f; do
     # `./$f`, exactly as the snapshot recipe does it, and for the same reason:
     # a file literally named `-` makes awk read STDIN — which here is the NUL
@@ -968,16 +1016,34 @@ weak verdicts and a single escrowed rerun, that changed which candidate
 came out substantiated. Sorting the severity buckets was not enough; the
 batches are cut from the array, not the buckets.
 
-Both drop paths — the supplemental-lens rollback and this trim — use **one**
-victim selector: lowest severity, then outside a high-risk region, then
-lowest confidence, and finally the candidate's content fingerprint. They
-were written separately once, and the rollback dropped whichever candidate
-a finder emitted last: a supplemental lens returning twenty-four majors and
-then one critical gave up the critical. The fingerprint is the final
-tie-break rather than arrival order or id, so co-located claims that tie on
-every other field resolve identically in two runs whose finders answered in
-a different order — which is also what decides, at a budget affording one
-probe, which of them gets it.
+Every bounded selection reads **one** order — the per-lens cap, the
+supplemental-lens rollback and this trim — and the two drop paths read it
+backwards. The order is severity first, then inside a high-risk region, then
+confidence, then `file:line`, and finally the candidate's content fingerprint;
+the victim is its last element. It has to be literally the same order and not
+merely a similar one, because the disclosure says what was *least*
+consequential and that has to mean what "most consequential" meant when the
+budget was spent. Three comparators stood here once. The rollback dropped
+whichever candidate a finder emitted last, so a supplemental lens returning
+twenty-four majors and then one critical gave up the critical. And after that
+was fixed the victim selector still ran its fingerprint tie-break the *other
+way* from the funding order, and ignored `file:line` entirely: among claims
+tying on everything meaningful, the run gave up precisely the one it would
+have verified first.
+
+The fingerprint is the final tie-break rather than arrival order or id, so
+co-located claims that tie on every other field resolve identically in two
+runs whose finders answered in a different order — which is also what decides,
+at a budget affording one probe, which of them gets it.
+
+**One spelling per path, too.** `included_paths`, `changed_ranges` keys and
+every agent-supplied `file` and anchor are canonicalised — redundant `.`
+segments and repeated slashes removed, `..` deliberately left alone — before
+anything compares them. Every scope check is an exact string match, so a
+manifest that said `./util.js` while a finder said `util.js` rejected that
+finder's candidates as naming an unreviewed file, and the run reported `ok`
+with them in the invalid-candidate ledger. A spelling the validator accepts
+and the pipeline cannot match is worse than one it refuses.
 
 Report achieved depth as `verification_depth.candidates_found` against
 `candidates_retained`, so a trimmed run cannot be read as a run that

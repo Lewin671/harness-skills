@@ -49,8 +49,9 @@ perspective, or a higher tier matters.
 
 Environment:
   CODEX_BIN                     path to the codex binary (default: codex)
-  CODEX_SECOND_OPINION_MODEL    override the pinned default model
-  CODEX_SECOND_OPINION_EFFORT   override the pinned default effort
+  CODEX_SECOND_OPINION_MODEL    replace the pinned default model
+  CODEX_SECOND_OPINION_EFFORT   replace the pinned default effort
+                                (both together, or neither)
   CODEX_SECOND_OPINION_TIMEOUT  override the default timeout (seconds)' >&2
 }
 

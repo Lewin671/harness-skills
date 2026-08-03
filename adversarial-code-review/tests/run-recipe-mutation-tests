@@ -5,7 +5,9 @@
 # real shell, and they are where this skill's user-facing correctness lives:
 # which commit the review binds to, what reaches the patch, where scratch
 # lands, what the handoff says happened, whether the post-run snapshot can see
-# a change at all. review-workflow.js has 233 registered mutants. The prose
+# a change at all. review-workflow.js has a mutant registry of its own — see
+# EXPECTED_TOTAL in run-mutation-tests, which is the one place that count is
+# pinned, so quoting it here would be a second copy that goes stale. The prose
 # had none — so every recipe protection rested on tests nobody had ever seen
 # fail, which is the exact manufactured confidence the sibling harness was
 # written to catch.
@@ -162,6 +164,38 @@ mutate "the current checkout root is enumerated" \
   'acr_roots+=("$(pwd -P)")' \
   ':'
 
+# --- the scope selector ----------------------------------------------------
+# Four sequential assignments with `(1)`..`(4)` comments were a menu written as
+# a script: pasted verbatim they ran all four and died on an unset from_ref.
+# The `case` that replaced them is now the one part of Phase 0 a caller drives,
+# so each of its guards is measured.
+mutate "an unknown scope refuses rather than guessing" \
+  '    echo "acr_scope must be one of: uncommitted, branch, range" >&2; exit 1 ;;' \
+  '    diff_args=(HEAD); untracked=1 ;;'
+mutate "a half-specified range refuses" \
+  '    if [ -z "${from_ref}" ] || [ -z "${to_ref}" ]; then' \
+  '    if false; then'
+# One pathspec, applied to the patch AND the manifest. Narrowing only one of
+# them leaves included_paths describing something other than the bound patch —
+# the exact false disclosure the exclusion rules exist to prevent.
+mutate "named paths narrow the patch" \
+  'git diff --no-ext-diff --no-textconv --binary --ignore-submodules=dirty "${diff_args[@]}" -- "${acr_pathspec[@]}" > "${tmp}/patch.diff" ||' \
+  'git diff --no-ext-diff --no-textconv --binary --ignore-submodules=dirty "${diff_args[@]}" > "${tmp}/patch.diff" ||'
+mutate "named paths narrow the manifest" \
+  'included="$(acr_manifest -- "${acr_pathspec[@]}")" || { echo "manifest capture failed" >&2; exit 1; }' \
+  'included="$(acr_manifest)" || { echo "manifest capture failed" >&2; exit 1; }'
+
+# --- the snapshot does not borrow its caller's shell options ---------------
+# Four of its digests are pipelines ending in `shasum`, which exits 0 on the
+# empty stream a failed `git ls-files` leaves — so without pipefail the `||
+# exit 1` never fires and both snapshots agree on the hash of nothing. It was
+# the HARNESS that supplied the option, which is the same manufactured
+# confidence one level out: the recipe is pasted into a plain Bash call.
+mutate "the snapshot sets its own pipefail" \
+  '    set -o pipefail
+    # The top level, for the same reason as the capture block' \
+  '    # The top level, for the same reason as the capture block'
+
 # --- where scratch lands ---------------------------------------------------
 # Everything Phase 0 writes goes under acr_root before the baseline that could
 # disclose it exists. Inside the repository, it is in the tree being reviewed.
@@ -232,7 +266,7 @@ echo
 # A `mutate` line whose arguments fail to expand never reaches the function,
 # so neither counter moves and the run still prints success — the manufactured
 # confidence this script exists to catch, one level up again.
-EXPECTED_TOTAL=11
+EXPECTED_TOTAL=16
 if [ -n "${ACR_RECIPEMUT_ONLY:-}" ]; then
   echo "PARTIAL RUN: ${total} of $((total + filtered)) mutants selected. This is NOT a sweep."
   echo "${survived}/${total} of the selected mutants survived."

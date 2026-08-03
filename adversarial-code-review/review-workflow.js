@@ -169,6 +169,26 @@ if (!Array.isArray(A.included_paths) || !A.included_paths.length) {
 // happily as a real one — so a candidate anchored at /etc/passwd would carry
 // the same "inside the reviewed artifact" binding as one in the patch. Shape
 // is all this can check; it cannot resolve a path it has no filesystem for.
+// ONE spelling per path, because every scope check below is an exact string
+// match. `pathProblem` accepts `./util.js` — it is repo-relative, it climbs out
+// of nothing, and a caller writing a manifest by hand reasonably spells it that
+// way — but a finder reporting `util.js` in that same review was then rejected
+// as "not among the reviewed paths", and a review whose manifest was spelled
+// that way could finish `ok` with every real candidate in the invalid ledger
+// and nothing anywhere saying the two strings were the same file. Accepting a
+// spelling the rest of the pipeline cannot match is worse than refusing it.
+//
+// REDUNDANT syntax only: `.` segments, repeated and trailing slashes. `..` is
+// deliberately left alone — collapsing it without a filesystem is wrong across
+// a symlink, and `pathProblem` refuses it in a manifest anyway. Backslashes are
+// left alone too: `\` is a legal character in a Unix filename, so rewriting it
+// as a separator would invent a path the repository does not have.
+const normPath = (p) => {
+  if (typeof p !== 'string') return p
+  const abs = p.startsWith('/')
+  const body = p.split('/').filter((s) => s !== '' && s !== '.').join('/')
+  return abs ? `/${body}` : body
+}
 const pathProblem = (p) => {
   if (typeof p !== 'string' || !p.trim().length) return 'must be a non-empty string'
   if (p.startsWith('/')) return 'must be repo-relative, not absolute'
@@ -178,9 +198,14 @@ const pathProblem = (p) => {
   if (p.split(/[\\/]/).includes('..')) return 'must not climb out of the repository with ".."'
   return null
 }
-const badIncluded = A.included_paths.findIndex((p) => pathProblem(p) !== null)
+// Judged on the NORMALISED spelling, since that is the one every check
+// downstream uses — `"."` normalises to the empty string and is refused as the
+// non-path it is — while the message quotes what the caller actually wrote, so
+// it names something they can find in their own manifest.
+const normalisedIncluded = A.included_paths.map(normPath)
+const badIncluded = normalisedIncluded.findIndex((p) => pathProblem(p) !== null)
 if (badIncluded !== -1) {
-  return { status: 'invalid_args', detail: `included_paths[${badIncluded}] is ${JSON.stringify(A.included_paths[badIncluded])}: it ${pathProblem(A.included_paths[badIncluded])}` }
+  return { status: 'invalid_args', detail: `included_paths[${badIncluded}] is ${JSON.stringify(A.included_paths[badIncluded])}: it ${pathProblem(normalisedIncluded[badIncluded])}` }
 }
 // excluded_paths is disclosure-only — it is echoed into the report as what
 // the review left out — but a malformed one is echoed just as faithfully,
@@ -200,7 +225,10 @@ if (A.excluded_paths !== undefined && A.excluded_paths !== null) {
     }
   }
 }
-const includedPaths = A.included_paths
+// The canonical spellings, not the caller's. Everything downstream — the scope
+// check, the range lookup, the per-path binding disclosure — compares against
+// this array, so it is the one place the two spellings have to be reconciled.
+const includedPaths = normalisedIncluded
 // Optional but strongly preferred: the changed line ranges per file, from
 // `git diff --unified=0`. File-level binding still lets a candidate cite an
 // untouched line in a reviewed file; this closes that to the hunk.
@@ -231,7 +259,23 @@ if (A.changed_ranges !== undefined && A.changed_ranges !== null) {
       }
     }
   }
-  changedRanges = A.changed_ranges
+  // Re-keyed on the same canonical spelling as the manifest. A caller who
+  // writes `./util.js` in one and `util.js` in the other — or in both — would
+  // otherwise get a range map nothing ever hits: every candidate in that file
+  // would silently drop to file-level binding, which is the weaker claim this
+  // script exists to disclose rather than to hand out by accident.
+  // Null-prototype for the same reason as scopeBindingByPath: a reviewed path
+  // may be named `__proto__`, and on a plain object that assignment sets the
+  // prototype instead of creating an own property.
+  const rekeyed = Object.create(null)
+  for (const file of Object.keys(A.changed_ranges)) {
+    const key = normPath(file)
+    // Two spellings of one path, merged rather than one silently winning:
+    // dropping either half would rule out lines the caller said had changed,
+    // and an explicit range list is the only thing that can REJECT a candidate.
+    rekeyed[key] = (rekeyed[key] || []).concat(A.changed_ranges[file])
+  }
+  changedRanges = rekeyed
 }
 
 // What each reviewed path could actually be bound to. Recorded up front so
@@ -1208,7 +1252,13 @@ function regionProblem(r) {
 
 function keepRegions(list, source) {
   const out = []
-  for (const r of list || []) {
+  for (const raw of list || []) {
+    // Canonical spelling here too, and for the same reason as a candidate's:
+    // a region is checked against the manifest by exact string, so `./util.js`
+    // from triage would consume nothing and be filed as naming an unreviewed
+    // file — losing a probe target in the one channel whose job is to catch
+    // what the lenses missed.
+    const r = raw && typeof raw === 'object' ? { ...raw, file: normPath(raw.file) } : raw
     const problem = regionProblem(r)
     if (problem) {
       ledger.invalid_regions.push({ source, anchor: r && r.file ? `${r.file}:${r.start_line}-${r.end_line}` : null, why: r && r.why, reason: problem })
@@ -1553,7 +1603,28 @@ const canonical = (v) => {
 }
 const fingerprintOf = (c) => JSON.stringify(canonical([c && c.file, c && c.line, c && c.title, c && c.evidence_kind, c && c.evidence, c && c.proposed_severity, c && c.confidence]))
 
+// `file` and the file half of `evidence.anchor`, together and unconditionally.
+// evidenceProblem requires the anchor to agree with `file:line`, so normalising
+// one side alone would turn an internally consistent record into a rejected
+// one — and normalising neither leaves an agent that wrote `./util.js` filed
+// as being outside a manifest that lists that very file. Done before the
+// fingerprint, so two lenses spelling one claim differently collapse into the
+// single claim they are.
+const normCandidatePaths = (c) => {
+  if (!c || typeof c !== 'object') return c
+  const out = { ...c, file: normPath(c.file) }
+  const anchor = c.evidence && c.evidence.anchor
+  if (typeof anchor === 'string') {
+    // The LAST colon: a path may contain one, and splitting on the first would
+    // hand the line number a fragment of the filename.
+    const at = anchor.lastIndexOf(':')
+    if (at > 0) out.evidence = { ...c.evidence, anchor: `${normPath(anchor.slice(0, at))}${anchor.slice(at)}` }
+  }
+  return out
+}
+
 function addCandidate(c, lens, origin) {
+  c = normCandidatePaths(c)
   // Identical records are noise, and a hostile artifact can manufacture them
   // in bulk: every duplicate raises the mandatory accuracy floor, so enough of
   // them abort the review and suppress the real findings with it. Collapse
@@ -1635,18 +1706,47 @@ const SEV_WEIGHT = { critical: 2, major: 1, minor: 0 }
 // outside survived.
 const inKnownRegion = (c) => [...triageRegions, ...extraRegions]
   .some((r) => r.file === c.file && c.line >= r.start_line && c.line <= r.end_line)
-const consequence = (c) => (SEV_WEIGHT[c.proposed_severity] || 0) * 100
-  + (inKnownRegion(c) ? 50 : 0)
-  + (CONF_RANK[c.confidence] || 0) * 10
-// The final tie-break is the content fingerprint, never discovery order or
-// id: two runs whose finders emitted the same claims in a different order
-// must give up the same candidates. Co-located claims tie on everything else.
+// ONE order, and the victim is its last element. Three comparators used to
+// decide what a bounded selection keeps — the per-lens cap, the supplemental
+// rollback, the pre-verification trim — and they disagreed on the tail:
+// `byRank` funds the smaller fingerprint FIRST while the victim selector took
+// the smaller fingerprint as the WORST, so among candidates tying on severity,
+// region and confidence the run gave up precisely the one it would otherwise
+// have verified first. The victim also ignored the `file:line` term funding
+// breaks on before it ever reaches a fingerprint, and the per-lens cap ordered
+// by whole-record text, which is a third answer again. The trim's own comment
+// promises "the same ranking the rest of the wave funds by"; three comparators
+// are how that promise stopped being true.
+//
+// `region` is a parameter because `in_high_risk_region` is not populated until
+// after the probe wave, and the per-lens cap and the supplemental rollback both
+// run before that. The two predicates cover the same set — `allRegions` is
+// `triageRegions` plus `extraRegions` with duplicates removed — so this is one
+// order read through whichever spelling is available at the call site.
+const rankBy = (region) => (c) => -(SEV_WEIGHT[c.proposed_severity] || 0) * 1000
+  + (region(c) ? 0 : 1) * 100 - (CONF_RANK[c.confidence] || 0) * 10
+// Raw finder output has no id and no fingerprint yet — those are assigned in
+// addCandidate — so the shared order is given a key it can compute for either
+// shape. Without the fallback every raw candidate would key on the string
+// "undefined", the tail would tie for all of them, and the per-lens cap would
+// silently go back to keeping whatever the finder listed first.
+const fpKey = (c) => (c && c.fingerprint !== undefined ? String(c.fingerprint) : fingerprintOf(c))
+const orderBy = (region) => {
+  const r = rankBy(region)
+  // Total, so two runs whose finders emitted the same claims in a different
+  // order fund — and give up — the same candidates. Co-located claims tie on
+  // file and line, and the content fingerprint is what separates them; never
+  // discovery order or id.
+  return (a, b) => r(a) - r(b)
+    || cmp(`${a.file}:${a.line}`, `${b.file}:${b.line}`)
+    || cmp(fpKey(a), fpKey(b))
+}
+const preProbeOrder = orderBy(inKnownRegion)
 function pickVictim(pool) {
   let worst = null
   for (const c of pool) {
     if (!worst) { worst = c; continue }
-    const d = consequence(c) - consequence(worst)
-    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c
+    if (preProbeOrder(c, worst) > 0) worst = c
   }
   return worst
 }
@@ -1684,10 +1784,14 @@ function absorb(res, lens) {
   // rather than the ones that arrived first. A finder that emits twenty-five
   // minors and then a critical would otherwise lose the critical to the cap —
   // and a hostile artifact only has to pad the front of the list to hide one.
-  // Ties break on the record's own text so two runs given the same claims in
-  // different orders keep the same ones.
-  const ordered = [...(res.candidates || [])].sort((a, b) =>
-    consequence(b) - consequence(a) || cmp(JSON.stringify(canonical(a)), JSON.stringify(canonical(b))))
+  // The SAME order the rollback and the trim read backwards, so "least
+  // consequential" means one thing in this run; ties break on content, so two
+  // runs given the same claims in different orders keep the same ones.
+  // Paths canonicalised BEFORE the sort, not only in addCandidate: the
+  // high-risk term compares a candidate's file against a region's, regions are
+  // already canonical, and a finder spelling one `./util.js` would otherwise
+  // rank as though it sat outside a region it is inside.
+  const ordered = [...(res.candidates || [])].map(normCandidatePaths).sort(preProbeOrder)
   // Collapse this lens's repeats of ITSELF before the cap sees them. A lens
   // that files the same claim thirty times has made one claim, and charging
   // it thirty slots would let a repetitive — or steered — finder crowd out
@@ -1936,14 +2040,13 @@ candidates.forEach((c) => { c.in_high_risk_region = inRegion(c) })
 // and adjudication batches are cut from that array. Without the severity
 // term a budget that funds only the first batch could adjudicate a
 // high-confidence minor and defer a low-confidence critical.
-const rank = (c) => -(SEV_WEIGHT[c.proposed_severity] || 0) * 1000
-  + (c.in_high_risk_region ? 0 : 1) * 100 - CONF_RANK[c.confidence] * 10
-// Funding order. The fingerprint tail makes it total: co-located claims tie on
-// file, line and rank, and without it the order they are funded in is just the
-// order the finders happened to return them.
-const byRank = (a, b) => rank(a) - rank(b)
-  || cmp(`${a.file}:${a.line}`, `${b.file}:${b.line}`)
-  || cmp(String(a.fingerprint), String(b.fingerprint))
+const rank = rankBy((c) => !!c.in_high_risk_region)
+// Funding order — the same `orderBy` the victim selector reads backwards, so
+// "least consequential" means one thing in this run. The fingerprint tail
+// makes it total: co-located claims tie on file, line and rank, and without it
+// the order they are funded in is just the order the finders happened to
+// return them.
+const byRank = orderBy((c) => !!c.in_high_risk_region)
 
 // ---------------------------------------------------------------------------
 // Trim to what the budget can actually verify — BEFORE anything is derived

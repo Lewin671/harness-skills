@@ -51,10 +51,19 @@ never stands in for coverage it lacks. Two more cover the protections
 living in prose, extracted straight out of orchestration.md so the doc
 stays their only source of truth: `run-snapshot-tests` for the
 write-safety snapshot, `run-capture-tests` for the patch capture and its
-changed-range map — both found runtime defects `bash -n` cannot see. Run
-all four after editing any of them: a green suite proves nothing on its
-own, which is why this skill refuses to call an unrefuted candidate
-verified.
+changed-range map — both found runtime defects `bash -n` cannot see.
+`run-recipe-mutation-tests` is to those two what `run-mutation-tests` is
+to the contract tests, and it is the one most easily left out: without
+it the prose protections rest on assertions nobody has watched fail. Run
+**all five** after editing any of them — a green suite proves nothing on
+its own, which is why this skill refuses to call an unrefuted candidate
+verified:
+
+```bash
+tests/run-tests && tests/run-mutation-tests &&
+tests/run-snapshot-tests && tests/run-capture-tests &&
+tests/run-recipe-mutation-tests
+```
 
 ## Positioning
 

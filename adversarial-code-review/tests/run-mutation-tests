@@ -177,6 +177,17 @@ mutate "scope manifest is mandatory" "if (!Array.isArray(A.included_paths) || !A
 # run reports `ok` with zero candidates over a scope it could not read.
 mutate "scope manifest entries are strings" "  if (typeof p !== 'string' || !p.trim().length) return 'must be a non-empty string'" "  if (false) return 'x'"
 mutate "excluded_paths entries are strings" "if (A.excluded_paths !== undefined && A.excluded_paths !== null) {" "if (false) {"
+# One spelling per path, on BOTH sides. `pathProblem` accepts `./util.js`, and
+# every scope check is an exact string match — so with either half of the
+# normalisation gone the manifest and the finders can name the same file and
+# never match, and the run reports `ok` with those candidates in the invalid
+# ledger. Two mutants because the two sides fail independently: a caller who
+# writes the dotted spelling, and an agent who does.
+mutate "the manifest is normalised" "const normalisedIncluded = A.included_paths.map(normPath)" "const normalisedIncluded = A.included_paths.slice()"
+mutate "agent-supplied paths are normalised" "  c = normCandidatePaths(c)" "  "
+# And the normaliser has to actually normalise. An identity function passes
+# both call sites while changing nothing.
+mutate "normPath collapses redundant syntax" "  const body = p.split('/').filter((s) => s !== '' && s !== '.').join('/')" "  const body = p"
 # Non-empty strings that are not repo-relative. `includes()` matches them as
 # exactly as a real path, so a candidate anchored outside the repository would
 # carry the same "inside the reviewed artifact" binding as one in the patch.
@@ -279,8 +290,6 @@ why: \${target.why}"
 mutate "attack target location is fenced" "\${fenced(target.label)}" "\${target.label}"
 mutate "adjudicator heading carries no raw path" "=== candidate \${e.candidate.id}" "=== candidate \${e.candidate.id} at \${e.candidate.file}:\${e.candidate.line}"
 mutate "the finder sample reprices the rest" "if (restLenses.length && !admitTokens(restLenses.length * W.finder)) {" "if (false) {"
-mutate "lens cap keeps the consequential" "  const ordered = [...(res.candidates || [])].sort((a, b) =>
-    consequence(b) - consequence(a) || cmp(JSON.stringify(canonical(a)), JSON.stringify(canonical(b))))" "  const ordered = [...(res.candidates || [])]"
 mutate "duplicate probe keeps its evidence" "          const existing = candidates.find((x) => x.fingerprint === fingerprintOf(o.r.emergent_candidate))" "          const existing = null"
 mutate "adjudication debt precedes repricing" "prepaidDebtWU = adjReserveWU + escrow.adjudicator + escrow.verifier
 
@@ -292,8 +301,8 @@ mutate "the probe sample reprices the rest" "    if (admitTokens(probePendingWU 
 mutate "tie-breaks are a total order" "const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)" "const cmp = (a, b) => String(a).localeCompare(String(b))"
 mutate "optional purchases respect tokens" "  if (!admitTokens(costWU + protectedWU)) return false" "  "
 mutate "remaining verifiers respect tokens" "  if (admitTokens(verifyPendingWU + v.wu)) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }" "  if (true) { verifyPendingWU += v.wu; verifyAdmitted.push(v); continue }"
-mutate "ranking sees flagged regions" "  + (inKnownRegion(c) ? 50 : 0)" "  + (c.in_high_risk_region ? 50 : 0)"
-mutate "confidence ranks bounded selections" "  + (CONF_RANK[c.confidence] || 0) * 10" "  + 0"
+mutate "ranking sees flagged regions" "const preProbeOrder = orderBy(inKnownRegion)" "const preProbeOrder = orderBy((c) => !!c.in_high_risk_region)"
+mutate "confidence ranks bounded selections" "  + (region(c) ? 0 : 1) * 100 - (CONF_RANK[c.confidence] || 0) * 10" "  + (region(c) ? 0 : 1) * 100 - 0 * 10"
 mutate "depth counts deferrals" "    actions_deferred: ledger.deferred.length," "    actions_deferred: 0,"
 mutate "checklist counts deferrals" "    actions_deferred: ledger.deferred.length," "    actions_deferred: 0," 2
 mutate "checklist counts dropped candidates" "    candidates_dropped_invalid: ledger.invalid_candidates.length," "    candidates_dropped_invalid: 0,"
@@ -399,9 +408,13 @@ mutate "attack vectors are non-blank" "    if (!(Array.isArray(a.vectors_attempt
 mutate "blocked reason is non-blank" "    if (out.grade === 'blocked' && !nonblank(out.reason)) {" "    if (out.grade === 'blocked' && !out.reason) {"
 
 # Severity leads the canonical order the adjudication batches are cut from.
-mutate "canonical order leads with severity" "const rank = (c) => -(SEV_WEIGHT[c.proposed_severity] || 0) * 1000
-  + (c.in_high_risk_region ? 0 : 1) * 100" "const rank = (c) => 0 * 1000
-  + (c.in_high_risk_region ? 0 : 1) * 100"
+mutate "canonical order leads with severity" "const rankBy = (region) => (c) => -(SEV_WEIGHT[c.proposed_severity] || 0) * 1000
+  + (region(c) ? 0 : 1) * 100" "const rankBy = (region) => (c) => 0 * 1000
+  + (region(c) ? 0 : 1) * 100"
+# The high-risk term of that same order. A region triage named before any
+# finder ran must protect a candidate anchored inside it from both bounded
+# selections, and nothing else in the order can stand in for it.
+mutate "the region term ranks bounded selections" "  + (region(c) ? 0 : 1) * 100 - (CONF_RANK[c.confidence] || 0) * 10" "  + 0 * 100 - (CONF_RANK[c.confidence] || 0) * 10"
 
 # The attacker's own counterexample, for the path the prompt asks for and the
 # schema had no room for.
@@ -517,11 +530,22 @@ mutate "checklist counts unnamed predicates" "      r.state === 'unresolved' && 
 # sorts each finder's OWN list, which does not make the concatenated array
 # globally ordered — so neither the victim selector nor the funding order can
 # be assumed redundant.
-mutate "rollback drops by rank" "    const dropped = pickVictim(candidates.slice(beforeSupplemental))" "    const dropped = candidates[candidates.length - 1]"
+# The slice HEAD, not its tail. absorb() has already ordered each finder's own
+# list most-consequential-first, so `candidates[candidates.length - 1]` is now
+# the same record the shared selector returns and could not be told apart —
+# named here rather than left in as a mutant that cannot fail. The head is the
+# candidate funding serves FIRST, which is the mistake worth guarding.
+mutate "rollback drops by rank" "    const dropped = pickVictim(candidates.slice(beforeSupplemental))" "    const dropped = candidates[beforeSupplemental]"
 # Key order is a finder's choice, so it must not be part of a claim's identity
 # or of the tie-break that decides which claims survive a bounded selection.
 mutate "fingerprints are key-order independent" "const fingerprintOf = (c) => JSON.stringify(canonical([" "const fingerprintOf = (c) => JSON.stringify((["
-mutate "the per-lens tie-break is canonical" "cmp(JSON.stringify(canonical(a)), JSON.stringify(canonical(b))))" "cmp(JSON.stringify(a), JSON.stringify(b)))"
+# The per-lens cap now reads the same order the rollback and the trim read
+# backwards, so what guards its tail is the shared content key rather than a
+# comparator of its own. Raw finder output has no fingerprint yet: without the
+# fallback every candidate keys on the string "undefined", every tie collapses,
+# and the cap silently goes back to keeping whatever the finder listed first.
+mutate "the per-lens tail is content-derived" "const fpKey = (c) => (c && c.fingerprint !== undefined ? String(c.fingerprint) : fingerprintOf(c))" "const fpKey = (c) => String(c && c.fingerprint)"
+mutate "the per-lens cap reads the shared order" "  const ordered = [...(res.candidates || [])].map(normCandidatePaths).sort(preProbeOrder)" "  const ordered = [...(res.candidates || [])].map(normCandidatePaths)"
 # The prompt and the script have to read the same verdict about whether a
 # counterexample exists, or the attacker is told one does and downgraded for
 # not having built it.
@@ -531,8 +555,15 @@ mutate "the attack prompt follows the normalised probe" '${probeResult && probeR
 # The frontier promises what the NEXT unit buys; the trim gives up the least
 # consequential first, so the last victim is the one restored first.
 mutate "the frontier names the last victim" "trimmed[trimmed.length - 1]" "trimmed[0]"
-mutate "victim tie-break is deterministic" "    if (d < 0 || (d === 0 && String(c.fingerprint) < String(worst.fingerprint))) worst = c" "    if (d < 0) worst = c"
-mutate "funding order is total" "  || cmp(String(a.fingerprint), String(b.fingerprint))" "  || 0"
+# The victim is the funding order read BACKWARDS. Reversed, the run gives up
+# the candidate it would otherwise have verified first.
+mutate "the victim inverts the funding order" "    if (preProbeOrder(c, worst) > 0) worst = c" "    if (preProbeOrder(worst, c) > 0) worst = c"
+# And it is the SAME order, not a second one that happens to agree about
+# severity. Dropping the shared comparator for a bare consequence comparison
+# reinstates exactly the divergence this rewrite removed: no file:line term,
+# and a fingerprint tail pointing the other way.
+mutate "both drop paths read one order" "    if (preProbeOrder(c, worst) > 0) worst = c" "    const rk = rankBy(inKnownRegion); if (rk(c) - rk(worst) < 0 || (rk(c) === rk(worst) && String(c.fingerprint) < String(worst.fingerprint))) worst = c"
+mutate "funding order is total" "    || cmp(fpKey(a), fpKey(b))" "    || 0"
 
 # The reachability half of the terminal-evidence rule. A control shows the
 # changed code misbehaves WHEN THE TEST CALLS IT; an attacker can call an
@@ -638,7 +669,7 @@ echo
 # so neither counter moves and the run still prints success. That is the
 # manufactured confidence this script exists to catch, one level up again.
 # Pin the count: any mutant that silently fails to launch is now a failure.
-EXPECTED_TOTAL=241
+EXPECTED_TOTAL=246
 if [ "${total}" -ne "${EXPECTED_TOTAL}" ]; then
   echo "expected ${EXPECTED_TOTAL} mutants, ran ${total} — a mutate line failed before it could run"
   exit 1
