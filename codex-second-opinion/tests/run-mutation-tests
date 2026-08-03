@@ -94,7 +94,12 @@ PY
     return
   fi
 
-  if "${work}/tests/run-tests" >/dev/null 2>&1; then
+  # Once one assertion observes the mutation, the verdict is fixed. Continuing
+  # through the remaining integration cases only repeats unrelated setup and
+  # wall-clock timeout tests. The unmodified baseline above still runs the
+  # complete suite, and run-tests keeps its normal collect-all behavior unless
+  # this mutation-only switch is set.
+  if CSO_FAIL_FAST=1 "${work}/tests/run-tests" >/dev/null 2>&1; then
     printf '%-50s %s\n' "$name" "SURVIVED"
     survived=$((survived + 1))
   else

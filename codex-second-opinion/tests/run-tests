@@ -206,10 +206,35 @@ export CODEX_BIN="$fake"
 
 pass=0 fail=0
 ok()   { pass=$((pass + 1)); echo "ok   - $1"; }
-bad()  { fail=$((fail + 1)); echo "FAIL - $1${2:+ ($2)}"; }
+bad()  {
+  fail=$((fail + 1))
+  echo "FAIL - $1${2:+ ($2)}"
+  # Mutation runs only need one discriminating failure. The ordinary suite
+  # keeps collecting every failure so developers still get the full report.
+  [ "${CSO_FAIL_FAST:-0}" = 1 ] && exit 1
+  return 0
+}
 check_exit() { # name expected actual
   if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected exit $2, got $3"; fi
 }
+
+# The mutation runner depends on fail-fast for runtime, while an ordinary run
+# depends on collect-all diagnostics. Pin both sides of that test-harness
+# contract before any expensive fixtures start.
+(
+  fail=0
+  CSO_FAIL_FAST=1
+  bad "intentional fail-fast probe" >/dev/null
+  exit 99
+)
+check_exit "test harness: mutation mode stops at the first failure" 1 "$?"
+(
+  fail=0
+  CSO_FAIL_FAST=0
+  bad "intentional collect-all probe" >/dev/null
+  [ "$fail" = 1 ]
+)
+check_exit "test harness: ordinary mode keeps collecting failures" 0 "$?"
 
 commit_env=(-c user.email=test@test -c user.name=test)
 
