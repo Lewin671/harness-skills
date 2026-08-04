@@ -36,6 +36,12 @@ const GIT_ENV_KEYS = [
   'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
   'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE',
   'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+  // Trace sinks can point at a file inside the reviewed repository; Git
+  // appends to an absolute GIT_TRACE path, so an inherited trace variable
+  // would let the unsandboxed preflight git commands write into the tree.
+  'GIT_TRACE', 'GIT_TRACE2', 'GIT_TRACE2_EVENT', 'GIT_TRACE2_PERF',
+  'GIT_TRACE_PACK_ACCESS', 'GIT_TRACE_PACKET', 'GIT_TRACE_PERFORMANCE',
+  'GIT_TRACE_SETUP', 'GIT_TRACE_SHALLOW',
 ]
 
 function exists(path) {

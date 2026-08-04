@@ -60,9 +60,17 @@ repo_root_of() {
 launch_dir=$(pwd -P)
 launch_dir=$(repo_root_of "$launch_dir") || launch_dir=$(pwd -P)
 
+unset CDPATH 2>/dev/null || true
+
 repo_dir=
+skip_next=false
 prev=
 for arg do
+  if $skip_next; then skip_next=false; prev=; continue; fi
+  case $arg in
+    --model|--effort|--base|--commit|--custom|--context|--timeout|--continue)
+      skip_next=true ;;
+  esac
   case $prev in
     --repo) repo_dir=$arg ;;
   esac

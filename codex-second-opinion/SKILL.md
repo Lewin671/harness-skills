@@ -118,7 +118,7 @@ run-codex-second-opinion consult --repo DIR [OPTIONS] [--] QUESTION
 run-codex-second-opinion consult --repo DIR --continue ID [OPTIONS] [--] QUESTION
 ```
 
-**`--repo` is required** for both modes. Scope, model, and risk flags:
+`--repo` defaults to the current directory. Scope, model, and risk flags:
 
 | Flags | Rule |
 |-------|------|
