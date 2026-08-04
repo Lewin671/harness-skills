@@ -68,7 +68,7 @@ prev=
 for arg do
   if $skip_next; then skip_next=false; prev=; continue; fi
   case $prev in
-    --repo) repo_dir=$arg ;;
+    --repo) repo_dir=$arg; prev=; continue ;;
   esac
   case $arg in --) break ;; esac
   case $arg in
