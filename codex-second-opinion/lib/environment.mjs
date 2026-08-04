@@ -153,7 +153,10 @@ function collectSessionDestinations(root, maxDepth = 3) {
     for (const entry of entries) {
       const child = join(logical, entry.name)
       let target = lexicallyResolve(child)
-      if (entry.isSymbolicLink()) target = resolvePathSemantics(child) || resolveLinkChain(child)
+      if (entry.isSymbolicLink()) {
+        target = resolvePathSemantics(child)
+        if (!target) throw new Error(`${child} could not be resolved (symlink cycle or too many components)`)
+      }
       const real = physicalPath(target)
       const destination = real || target
       destinations.push({ logical: child, destination })
@@ -493,7 +496,12 @@ export class Environment {
     if (isDirectory(absoluteHome) && exists(sessions)) {
       let sessionDestination
       if (isSymlink(sessions)) {
-        sessionDestination = resolvePathSemantics(sessions) || resolveLinkChain(sessions)
+        sessionDestination = resolvePathSemantics(sessions)
+        if (!sessionDestination) {
+          die(3,
+            `error: ${flat(sessions)} could not be resolved (symlink cycle or too many components), so where codex would write cannot be established`,
+            'hint: make sessions a plain directory or a symlink to a readable path outside the repository.')
+        }
         const real = physicalPath(sessions)
         if (real) destinations.push(real)
       } else {
@@ -527,7 +535,12 @@ export class Environment {
         }
       }
     } else if (isSymlink(sessions)) {
-      const target = resolvePathSemantics(sessions) || resolveLinkChain(sessions)
+      const target = resolvePathSemantics(sessions)
+      if (!target) {
+        die(3,
+          `error: ${flat(sessions)} could not be resolved (symlink cycle or too many components), so where codex would write cannot be established`,
+          'hint: make sessions a plain directory or a symlink to a readable path outside the repository.')
+      }
       destinations.push(target)
       const real = physicalPath(sessions)
       if (real) destinations.push(real)
