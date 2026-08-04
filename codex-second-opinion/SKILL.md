@@ -113,9 +113,9 @@ branch on how interesting the disagreement is:
 ## Command Synopsis
 
 ```
-run-codex-second-opinion review --repo DIR [SCOPE] [OPTIONS]
-run-codex-second-opinion consult --repo DIR [OPTIONS] [--] QUESTION
-run-codex-second-opinion consult --repo DIR --continue ID [OPTIONS] [--] QUESTION
+run-codex-second-opinion review [--repo DIR] [SCOPE] [OPTIONS]
+run-codex-second-opinion consult [--repo DIR] [OPTIONS] [--] QUESTION
+run-codex-second-opinion consult [--repo DIR] --continue ID [OPTIONS] [--] QUESTION
 ```
 
 `--repo` defaults to the current directory. Scope, model, and risk flags:

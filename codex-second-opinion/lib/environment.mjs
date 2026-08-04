@@ -36,12 +36,6 @@ const GIT_ENV_KEYS = [
   'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
   'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE',
   'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
-  // Trace sinks can point at a file inside the reviewed repository; Git
-  // appends to an absolute GIT_TRACE path, so an inherited trace variable
-  // would let the unsandboxed preflight git commands write into the tree.
-  'GIT_TRACE', 'GIT_TRACE2', 'GIT_TRACE2_EVENT', 'GIT_TRACE2_PERF',
-  'GIT_TRACE_PACK_ACCESS', 'GIT_TRACE_PACKET', 'GIT_TRACE_PERFORMANCE',
-  'GIT_TRACE_SETUP', 'GIT_TRACE_SHALLOW',
 ]
 
 function exists(path) {
@@ -159,7 +153,7 @@ function collectSessionDestinations(root, maxDepth = 3) {
     for (const entry of entries) {
       const child = join(logical, entry.name)
       let target = lexicallyResolve(child)
-      if (entry.isSymbolicLink()) target = resolveLinkChain(child)
+      if (entry.isSymbolicLink()) target = resolvePathSemantics(child) || resolveLinkChain(child)
       const real = physicalPath(target)
       const destination = real || target
       destinations.push({ logical: child, destination })
@@ -246,6 +240,9 @@ export class Environment {
     this.mcpArgs = []
     this.baseEnv = { ...process.env }
     for (const key of GIT_ENV_KEYS) delete this.baseEnv[key]
+    for (const key of Object.keys(this.baseEnv)) {
+      if (key.startsWith('GIT_TRACE')) delete this.baseEnv[key]
+    }
     delete this.baseEnv.CDPATH
     // A relative PATH entry is a hijack risk for every child this script
     // spawns, not just codex: git subcommands, and -- the concrete case
@@ -496,12 +493,7 @@ export class Environment {
     if (isDirectory(absoluteHome) && exists(sessions)) {
       let sessionDestination
       if (isSymlink(sessions)) {
-        sessionDestination = resolveLinkChain(sessions)
-        // resolveLinkChain uses lexicallyResolve which collapses symlink/..
-        // before following the symlink — a target like /outside/hop/.. where
-        // hop -> /repo/child would resolve to /outside instead of /repo.
-        // physicalPath (realpathSync) follows the kernel's resolution order,
-        // so it catches the trick when the target exists.
+        sessionDestination = resolvePathSemantics(sessions) || resolveLinkChain(sessions)
         const real = physicalPath(sessions)
         if (real) destinations.push(real)
       } else {
@@ -535,7 +527,7 @@ export class Environment {
         }
       }
     } else if (isSymlink(sessions)) {
-      const target = resolveLinkChain(sessions)
+      const target = resolvePathSemantics(sessions) || resolveLinkChain(sessions)
       destinations.push(target)
       const real = physicalPath(sessions)
       if (real) destinations.push(real)
