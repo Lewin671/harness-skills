@@ -37,9 +37,11 @@ review --repo /path --base main \
              unchanged. Callers in jobs/ rely on the old back-off timing."
 ```
 
-Keep it to intended behaviour, facts, and constraints. Claude's
-suspected defects do not belong there — that is a cross-check, and it
-belongs in `--custom` with the result labelled accordingly. The prompt
+Keep it to what the Independence Contract in SKILL.md allows: the
+user's stated requirements, repository documentation, and mechanical
+scope facts. Claude's suspected defects do not belong there — that is a
+cross-check, and it belongs in `--custom` with the result labelled
+accordingly. The prompt
 tells Codex to treat the background as something to check the code
 against, not to accept: where code and stated intent disagree, that
 mismatch is itself a finding.
@@ -111,23 +113,19 @@ Either way, never report a verdict the output does not actually state.
 
 ## Reporting Duties
 
+Follow the general reporting rules in SKILL.md § Reporting, plus these
+review-specific additions:
+
 1. Account for every finding with its priority, file, and line range.
-   Summarise repetitive detail if useful, but do not silently drop
-   low-priority findings.
-2. Add a Claude-side trust line per finding: agree, disagree with
-   reason, or needs-checking. You have repo context Codex lacks, and
-   Codex has no stake in defending code Claude wrote.
-3. Flag disagreements explicitly rather than averaging them away. A
-   contested finding is the most useful output review mode produces.
-4. State the scope reviewed and the model used. Only `--commit` names an
-   immutable object: `--uncommitted` and `--base` diff the live working
-   tree, which is read once by the precheck and again by Codex minutes
-   later. The wrapper fingerprints it across that window and warns when it
-   changed; relay that warning rather than calling the result reproducible.
-   There is a **third** answer and it needs relaying too: if any read that
-   feeds the fingerprint fails, the wrapper says it could not tell rather
-   than reporting no change. "Unmeasurable" is not "unchanged".
-5. Stop there. Applying fixes is a separate, user-authorized step.
+   Do not silently drop low-priority findings.
+2. Add a Claude-side trust line **per finding**: agree, disagree with
+   reason, or needs-checking. Codex has no stake in defending code
+   Claude wrote.
+3. Only `--commit` names an immutable object. `--uncommitted` and
+   `--base` diff the live working tree, which the wrapper fingerprints
+   across the run window. Relay drift and unmeasurable warnings rather
+   than calling the result reproducible. "Unmeasurable" is not
+   "unchanged".
 
 For open questions rather than code changes, use consult mode instead:
 it returns a reasoned position instead of a defect list.

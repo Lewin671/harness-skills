@@ -75,16 +75,26 @@ lifecycle, storage placement and the git-precheck guarantees in full.
 
 ## Independence Contract
 
-Keep the first pass independent. Give Codex the artifacts, facts,
-constraints, candidate options in neutral order, and evaluation criteria.
-Those travel in the question body in consult mode, and through
-`--context` in review mode — a plain scope flag carries the diff and
-nothing else, so a review that needs to know the intended behaviour has
-to say so there. Do **not** include Claude's preferred answer, ranking,
-suspected defect, or argument unless evaluating that exact claim is what
-the user asked for.
-For a targeted claim, label the run as a cross-check rather than a blind
-opinion.
+Keep the first pass independent. What enters the prompt must come from
+one of these sources:
+
+- **The user's own words** — their stated requirements, constraints,
+  and evaluation criteria, as given in the conversation.
+- **The repository** — file contents, documentation, commit messages,
+  and configuration that Codex can also read directly.
+- **Mechanical observation** — scope facts this script can verify:
+  changed file paths, line counts, branch names, resolved hashes.
+
+Do **not** include anything derived from Claude's own analysis:
+suspected defects, inferred constraints, hypothesised risks, preferred
+approaches, or rankings. If you cannot tell whether a "constraint" is
+something the user said or something you inferred, omit it. In review
+mode, context travels through `--context` — a plain scope flag carries
+the diff and nothing else, so a review that needs the intended behaviour
+has to say so there. In consult mode, everything goes in the question.
+
+If the user explicitly wants a Claude claim challenged, include the
+claim but label the run as a cross-check rather than a blind opinion.
 
 After Codex answers, there is one order of operations, and it does not
 branch on how interesting the disagreement is:
@@ -99,6 +109,26 @@ branch on how interesting the disagreement is:
 3. Editing code is a separate authorization. Proceed only if the user's
    current request already asked for the fix as well as the review;
    otherwise present and ask.
+
+## Command Synopsis
+
+```
+run-codex-second-opinion review --repo DIR [SCOPE] [OPTIONS]
+run-codex-second-opinion consult --repo DIR [OPTIONS] [--] QUESTION
+run-codex-second-opinion consult --repo DIR --continue ID [OPTIONS] [--] QUESTION
+```
+
+**`--repo` is required** for both modes. Scope, model, and risk flags:
+
+| Flags | Rule |
+|-------|------|
+| `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. Exactly one; default `--uncommitted`. |
+| `--context TEXT` | Review only. Cannot combine with `--custom`. |
+| `--model M --effort L` | Always a pair, or omit both. |
+| `--inherit` | Alone; cannot combine with `--model`/`--effort`. |
+| `--allow-mcp` / `--allow-git-filters` | User-authorized risk overrides. Never add on your own. |
+| `--timeout N` | 1–86400 seconds; default 3000. |
+| `--continue ID` | Consult only. Paste the `resume:` tail, not just the id. |
 
 ## Usage
 
