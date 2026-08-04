@@ -86,7 +86,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # Five former Bash-internal path helper assertions now live in the fast
   # node:test suite. This contract suite stays black-box and counts only
   # behavior observable through the executable entry point.
-  expected=284
+  expected=288
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -146,10 +146,6 @@ cat > "$fake" <<'FAKE'
 #   FAKE_SLEEP          seconds to stall before writing the result
 #   FAKE_OUTPUT         result body, written verbatim (no trailing newline added)
 #   FAKE_ARGV_LOG       file to append each invocation's argv to, one line per call
-#   FAKE_ARGV0_LOG      file to append each invocation's $0 (argv[0]) to --
-#                       distinct from FAKE_ARGV_LOG, which only ever
-#                       captured "$*" (the arguments), never the identity
-#                       the process was invoked under
 #   FAKE_FAIL           reject the model: emit a stale-model line and exit 1
 #   FAKE_ERROR_TAIL     emit N more error-like lines after a rejection
 #   FAKE_FAIL_ONCE      path: fail like FAKE_FAIL only while this file is
@@ -164,11 +160,14 @@ cat > "$fake" <<'FAKE'
 #                       moves or renames the id field, distinct from
 #                       FAKE_NO_THREAD (no thread.started event at all)
 #   FAKE_CONFIG_ERR     fail the way --strict-config fails on an unknown key
+#   FAKE_SPLIT_EVENT    write the thread.started event in two stdout halves
+#                       with a stderr write in between, reproducing the chunk
+#                       interleaving that used to splice stderr into the middle
+#                       of a JSON line in the LOG and delete the event
 #   FAKE_FORGE_LINE     emit this verbatim as a plain (non-JSON) output line,
 #                       so a codex line that mimics a wrapper marker can be
 #                       checked to arrive prefixed rather than bare
 [ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
-[ -n "${FAKE_ARGV0_LOG:-}" ] && printf '%s\n' "$0" >> "$FAKE_ARGV0_LOG"
 [ -n "${FAKE_TMPDIR_LOG:-}" ] && printf '%s\n' "${TMPDIR:-unset}" >> "$FAKE_TMPDIR_LOG"
 case "${1:-}" in
   --version)
@@ -322,8 +321,18 @@ done
   printf '{"type":"thread.started","thread_id":"%s"}\n' "$FAKE_BAD_THREAD"
 [ -n "${FAKE_THREAD_NO_ID:-}" ] && [ -z "${FAKE_NO_THREAD:-}" ] && [ -z "${FAKE_BAD_THREAD:-}" ] &&
   echo '{"type":"thread.started"}'
-[ -z "${FAKE_NO_THREAD:-}" ] && [ -z "${FAKE_BAD_THREAD:-}" ] && [ -z "${FAKE_THREAD_NO_ID:-}" ] &&
+if [ -n "${FAKE_SPLIT_EVENT:-}" ]; then
+  # Two stdout writes with a stderr write between them. The wrapper receives
+  # three separate chunks; appending them raw to one log spliced the stderr
+  # bytes into the middle of this JSON line, so it stopped parsing and the
+  # thread id vanished while other events kept hasRecognizedEvent happy.
+  printf '%s' '{"type":"thread.started","thread_id":"0198aaaa-bbbb'
+  printf '%s\n' 'codex chatter on stderr, mid-line' >&2
+  sleep 0.2
+  printf '%s\n' '-cccc-dddd-eeeeffff0000"}'
+elif [ -z "${FAKE_NO_THREAD:-}" ] && [ -z "${FAKE_BAD_THREAD:-}" ] && [ -z "${FAKE_THREAD_NO_ID:-}" ]; then
   echo '{"type":"thread.started","thread_id":"0198aaaa-bbbb-cccc-dddd-eeeeffff0000"}'
+fi
 [ -n "${FAKE_LONG_LINE:-}" ] &&
   awk -v n="$FAKE_LONG_LINE" 'BEGIN{s="";while(length(s)<n)s=s "X";printf "{\"type\":\"item.completed\",\"blob\":\"%s\"}\n", s}'
 [ -n "${FAKE_IGNORE_TERM:-}" ] && trap '' TERM
@@ -577,6 +586,44 @@ if [ "$status" = 0 ] && ! grep -q 'FAKE NODE RAN' "$absrepo_arg_out"; then
 else
   bad "wrapper bootstrap: --repo's own bin directory cannot substitute node either" \
     "exit $status, output: $(cat "$absrepo_arg_out" 2>/dev/null)"
+fi
+
+# Launched from a SUBDIRECTORY of the repository. Filtering against the launch
+# directory alone protected only that subdirectory, so `/repo/bin` survived and
+# could still supply node. The filter widens to the repository root -- found by
+# walking up for a `.git` entry, since asking `git` would mean resolving `git`
+# on the very PATH being vetted.
+mkdir -p "${absrepo}/nested/deeper"
+subdir_out="${workdir}/absrepo-subdir.out"
+(
+  cd "${absrepo}/nested/deeper" &&
+    PATH="${absrepo}/bin:${PATH}" "$wrapper" --help > "$subdir_out" 2>&1
+)
+status=$?
+if [ "$status" = 0 ] && ! grep -q 'FAKE NODE RAN' "$subdir_out"; then
+  ok "wrapper bootstrap: launching from a repo subdirectory still drops the repo's bin"
+else
+  bad "wrapper bootstrap: launching from a repo subdirectory still drops the repo's bin" \
+    "exit $status, output: $(cat "$subdir_out" 2>/dev/null)"
+fi
+
+# Same widening for --repo naming a subdirectory rather than the root. The
+# launch directory must NOT be an ancestor of the repo here, or the launch-dir
+# check alone would catch the entry and this would pass without exercising the
+# --repo path at all. Measured: run from "$workdir" it did exactly that, and
+# stayed green with the --repo widening reverted.
+mkdir -p "${workdir}/launchpad"
+subarg_out="${workdir}/absrepo-subarg.out"
+(
+  cd "${workdir}/launchpad" &&
+    PATH="${absrepo}/bin:${PATH}" "$wrapper" review --repo "${absrepo}/nested" --help > "$subarg_out" 2>&1
+)
+status=$?
+if [ "$status" = 0 ] && ! grep -q 'FAKE NODE RAN' "$subarg_out"; then
+  ok "wrapper bootstrap: --repo naming a subdirectory still drops the repo's bin"
+else
+  bad "wrapper bootstrap: --repo naming a subdirectory still drops the repo's bin" \
+    "exit $status, output: $(cat "$subarg_out" 2>/dev/null)"
 fi
 
 # Filtering can legitimately leave a PATH with no node on it at all. Reaching
@@ -3102,6 +3149,38 @@ long_logfile="$(sed -n 's/^log: //p' "$long_err" | tail -1)"
 # speaking, which is the rule SKILL.md tells agents to use.
 widest="$(awk '/^codex> / { if (length($0) > m) m = length($0) } END { print m + 0 }' "$long_err")"
 log_widest="$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' "$long_logfile" 2>/dev/null)"
+# A stdout JSON event split across chunks, with stderr arriving in between.
+# The log is what jsonEvents() parses, so line framing has to hold THERE, not
+# only in the echoed view: appending raw chunks spliced the stderr bytes into
+# the middle of the event and the session id disappeared. Consult mode is the
+# probe because it prints the thread id it managed to read.
+split_err="${workdir}/split-event.err"
+FAKE_SPLIT_EVENT=1 "$wrapper" consult --repo "$dirty" --timeout 30 \
+  -- "question" >/dev/null 2> "$split_err"
+split_status=$?
+split_logfile="$(sed -n 's/^log: //p' "$split_err" | tail -1)"
+if [ "$split_status" = 0 ] &&
+   grep -q '^session: 0198aaaa-bbbb-cccc-dddd-eeeeffff0000' "$split_err" &&
+   grep -q '^{"type":"thread.started","thread_id":"0198aaaa-bbbb-cccc-dddd-eeeeffff0000"}$' "$split_logfile"; then
+  ok "consult: a JSON event split across chunks survives interleaved stderr"
+else
+  bad "consult: a JSON event split across chunks survives interleaved stderr" \
+    "exit $split_status, session line: $(grep '^session:' "$split_err" | tr '\n' '|')"
+fi
+
+# The failure tail echoes log lines through the child-prefixer, and the log
+# contains this script's OWN attempt marker. Prefixing that would attach
+# `codex> ` to a wrapper-authored line and falsify the provenance rule.
+tail_err="${workdir}/tail-marker.err"
+FAKE_EXIT=1 "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$tail_err"
+tail_status=$?
+if [ "$tail_status" = 4 ] && ! grep -q '^codex> === codex-second-opinion attempt boundary' "$tail_err"; then
+  ok "review: the failure tail does not prefix this script's own attempt marker"
+else
+  bad "review: the failure tail does not prefix this script's own attempt marker" \
+    "exit $tail_status, marker lines: $(grep -c 'attempt boundary' "$tail_err")"
+fi
+
 # SKILL.md tells agents that on stderr an UNPREFIXED line is the wrapper
 # speaking, and that this is mechanical rather than positional -- the
 # wrapper's own warning:/note:/hint: lines are emitted after `running:` too,

@@ -159,10 +159,17 @@ export function isInside(candidate, roots) {
 // is. A NUL separator alone would not be enough either: paths cannot contain
 // NUL, but git's diff and status output (also hashed as parts) is not
 // guaranteed NUL-free.
+// The prefix counts BYTES (Buffer.byteLength), not `part.length`. A string's
+// .length is UTF-16 code units while hash.update() feeds it as UTF-8, so for
+// any non-ASCII part -- a path with an accent, a diff of a UTF-8 file -- the
+// declared length and the bytes actually consumed disagree. That mismatch
+// leaves the framing no longer self-describing and turns "is this still
+// injective?" into a question needing an argument rather than an invariant.
+// Counting bytes makes the length exactly the number of units that follow.
 export function sha256(parts) {
   const hash = createHash('sha256')
   for (const part of parts) {
-    hash.update(`${part.length}\0`)
+    hash.update(`${Buffer.byteLength(part)}\0`)
     hash.update(part)
   }
   return hash.digest('hex')

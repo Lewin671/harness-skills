@@ -686,3 +686,21 @@ test('an uppercase --continue id resumes rather than being discarded as expired'
   // discard a perfectly good continuation with exit 4.
   assert.equal(state.sessionId, '019fcd25-3b7d-7090-872f-1e1828c8e502')
 })
+
+test('Environment.command forwards argv0 to the spawn, not just stores it', () => {
+  // The existing codexArgv0 assertion only proves the value was CAPTURED.
+  // Deleting `argv0:` from the actual spawn calls left it green while
+  // breaking exactly the multicall/dispatcher installs it exists for, and no
+  // contract test could cover the gap either: the fake codex is a shebang
+  // script, and the kernel rebuilds a script interpreter's argv from the
+  // script path, so a caller-supplied argv0 is invisible to it (internals.md,
+  // "Codex binary trust boundary", point 8). /bin/sh is a real executable, so
+  // it does observe one -- which makes this the level the plumbing is
+  // testable at.
+  const environment = new Environment(createState('review'))
+  environment.cwd = '/'
+  const withArgv0 = environment.command('/bin/sh', ['-c', 'printf %s "$0"'], { argv0: 'pretend-codex' })
+  assert.equal(withArgv0.stdout, 'pretend-codex')
+  const without = environment.command('/bin/sh', ['-c', 'printf %s "$0"'])
+  assert.equal(without.stdout, '/bin/sh')
+})

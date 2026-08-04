@@ -113,6 +113,26 @@ function resolvePathSemantics(input) {
   return pending.length ? null : current
 }
 
+// Walks up for a `.git` entry -- a file counts, since a linked worktree or a
+// submodule checkout has a gitfile rather than a directory. Returns the
+// starting point when nothing is found, which keeps the caller's filter at
+// least as strict as before rather than opening it up.
+function enclosingRepositoryRoot(start) {
+  let current = start
+  for (;;) {
+    if (exists(join(current, '.git'))) return current
+    const parent = dirname(current)
+    if (parent === current) return start
+    current = parent
+  }
+}
+
+// Returns { logical, destination } pairs. The logical side is the path AS
+// SPELLED under root -- `<CODEX_HOME>/skills/x`, not the `/repo/x` it lands
+// on -- because a caller warning about a redirect has to name the entry doing
+// the redirecting: "skills" is a directory codex only reads, "cache" is one it
+// writes, and the destination alone cannot tell those apart (both can point at
+// the same place).
 function collectSessionDestinations(root, maxDepth = 3) {
   const destinations = []
   const visit = (logical, depth, ancestry) => {
@@ -136,9 +156,9 @@ function collectSessionDestinations(root, maxDepth = 3) {
       if (entry.isSymbolicLink()) target = resolveLinkChain(child)
       const real = physicalPath(target)
       const destination = real || target
-      destinations.push(destination)
+      destinations.push({ logical: child, destination })
       const ancestor = nearestExistingAncestor(destination)
-      if (ancestor) destinations.push(ancestor)
+      if (ancestor) destinations.push({ logical: child, destination: ancestor })
 
       const directory = isDirectory(child)
       if (!directory || depth === maxDepth) continue
@@ -280,7 +300,13 @@ export class Environment {
     // `git`, its `codex`, or the `node` an env-shebang launcher looks up --
     // all from the repository under review. Verified empirically: a
     // `/repo/bin/node` on an absolute repo-internal PATH entry ran.
-    this.excludeFromPath([this.cwd])
+    // The REPOSITORY ROOT, not merely cwd. `--repo /repo/sub` (or launching
+    // from a subdirectory) left an absolute /repo/bin entry on PATH for the
+    // git calls immediately below -- and git is precisely what discovers the
+    // rest of the boundary, so a repo-supplied git would be answering the
+    // question "where is this repository?". Found by walking up for a `.git`
+    // entry rather than by asking git, for the same reason.
+    this.excludeFromPath([enclosingRepositoryRoot(this.cwd)])
 
     const workTree = this.git(['rev-parse', '--is-inside-work-tree'])
     if (workTree.status !== 0 || workTree.stdout.trim() !== 'true') {
@@ -485,7 +511,7 @@ export class Environment {
             'hint: make it readable, or point CODEX_HOME somewhere else, outside the repository.')
         }
         try {
-          destinations.push(...collectSessionDestinations(sessions))
+          destinations.push(...collectSessionDestinations(sessions).map((entry) => entry.destination))
         } catch (error) {
           die(3,
             `error: could not enumerate the session directories under CODEX_HOME (${flat(error.message)}), so where codex would write cannot be established`,
@@ -525,12 +551,23 @@ export class Environment {
       } catch (error) {
         process.stderr.write(`warning: could not fully enumerate CODEX_HOME (${flat(error.message)}); entries below it were not checked against the repository\n`)
       }
-      const inside = [...new Set(sweep.filter((path) => path && isInside(path, this.repoRoots)))]
-      if (inside.length) {
-        process.stderr.write(`warning: ${inside.length} path(s) under CODEX_HOME resolve inside ${flat(this.worktreeRoot)}:\n`)
-        // Every path, not one example: the caller has to decide per entry
+      // Keyed by the LOGICAL entry, so the caller sees which CODEX_HOME
+      // directory redirects into the repo -- that is the thing they can judge
+      // read-only-versus-written. Reporting the destination alone named
+      // `/repo/x` and left them unable to tell `skills` from `cache`.
+      const inside = new Map()
+      for (const { logical, destination } of sweep) {
+        if (destination && isInside(destination, this.repoRoots) && !inside.has(logical)) {
+          inside.set(logical, destination)
+        }
+      }
+      if (inside.size) {
+        process.stderr.write(`warning: ${inside.size} entr(y/ies) under CODEX_HOME resolve inside ${flat(this.worktreeRoot)}:\n`)
+        // Every entry, not one example: the caller has to decide per entry
         // whether codex writes it, and cannot do that from a sample.
-        for (const path of inside) process.stderr.write(`warning:   ${flat(path)}\n`)
+        for (const [logical, destination] of inside) {
+          process.stderr.write(`warning:   ${flat(logical)} -> ${flat(destination)}\n`)
+        }
         process.stderr.write('warning: codex READS some of what lives under CODEX_HOME (skills, prompts) and WRITES others (sessions, archived_sessions, caches, .tmp).\n')
         process.stderr.write('hint: if every path listed above is a read-only kind, this run is fine as-is. If any is one codex writes, stop, point CODEX_HOME outside the repository, and rerun -- otherwise this run may write the tree it is reading.\n')
       }

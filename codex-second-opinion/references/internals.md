@@ -175,6 +175,13 @@ reads, so it refuses only what it can prove (`sessions/`) and discloses the
 rest. Anything stronger would either block a normal setup or require a
 name-by-name list of codex's internals that would silently rot.
 
+The disclosure names the **logical entry** and its destination
+(`<CODEX_HOME>/skills/x -> /repo/x`), not the destination alone. That is the
+whole point of the warning: the reader has to decide read-only-versus-written,
+and `/repo/x` does not say whether `skills` or `cache` pointed there — both can
+target the same path. Every matching entry is listed, not a sample, for the
+same reason.
+
 Both storage paths are then handed to the child in their **validated** form:
 `baseEnv.CODEX_HOME` and `baseEnv.TMPDIR` carry the resolved destinations, not
 the spellings they were validated from. Leaving the original strings meant codex
@@ -383,6 +390,17 @@ anywhere else.
    for a *native* multicall target without claiming to help the packaging
    codex actually ships as today.
 
+   That same kernel behaviour is why `argv0` cannot be contract-tested here:
+   the fake codex is a shebang script and can never observe a caller-supplied
+   `argv0`. A `FAKE_ARGV0_LOG` knob that logged `${0}` used to exist for this and
+   was removed — it recorded the script's own path no matter what the wrapper
+   passed, was never asserted on by any test, and read as coverage that did not
+   exist. The plumbing is pinned instead by a unit test that sends `argv0`
+   through `Environment.command` to `/bin/sh` (a real executable, which does
+   observe it), plus a mutant that deletes `argv0` from `run()` in
+   `lib/util.mjs`. The prior assertion checked only that `codexArgv0` had been
+   stored, and stayed green when the spawn stopped passing it.
+
 9. Absolute turned out not to mean safe. Every point above filters `PATH` down
    to its *absolute* entries — but the dev-tooling case point 5 and the
    bootstrap discussion both name as the motivation prepends an entry that is
@@ -395,11 +413,21 @@ anywhere else.
    entry executed. The motivating example was, in other words, the one case the
    filter did not cover.
 
-   It is closed in both halves of the entry point. The `#!/bin/sh` bootstrap
-   drops entries resolving under its own launch directory and under an explicit
-   `--repo` argument, comparing physical locations (`cd` + `pwd -P`, both
-   built-ins, so nothing has to be found on `PATH` to run the filter) rather
-   than spellings, so a symlink into the repository is caught too. An entry it
+   It is closed in both halves of the entry point, and in both cases the
+   directory that gets filtered against is the **repository root**, not the
+   launch directory or `--repo` value as given. Filtering against those alone
+   protected only that directory: launched from `/repo/sub`, or with `--repo
+   /repo/sub`, an absolute `/repo/bin` entry survived untouched. The root is
+   found by walking up for a `.git` entry — a file counts, since linked
+   worktrees and submodule checkouts use a gitfile — which deliberately does
+   not ask `git`, because choosing a trustworthy `PATH` is exactly what has to
+   happen before any binary is looked up on it. `Environment.initialize` does
+   the same walk before its first `git` call, since `git` is what discovers
+   the rest of the boundary.
+
+   The `#!/bin/sh` bootstrap compares physical locations (`cd` + `pwd -P`,
+   both built-ins, so nothing has to be found on `PATH` to run the filter)
+   rather than spellings, so a symlink into the repository is caught too. An entry it
    cannot enter at all is dropped silently — `cd` needs the same execute bit a
    `PATH` search does, so it could never have supplied a binary — while a
    repository-internal drop prints a `note:`. `Environment.excludeFromPath`
@@ -446,13 +474,26 @@ view is streamed to stderr and capped at 180 characters per line; the log keeps
 the untruncated bytes. The prompt or question never appears in the `running:`
 diagnostic.
 
-Each stream gets its **own** line buffer. A single shared one let a stderr
-chunk arriving between two halves of a split stdout event splice itself into
-the middle of that JSON line, so the line stopped parsing and the event
-vanished — silently, since `hasRecognizedEvent` is satisfied by any other
-well-formed event in the log. The events lost that way are exactly the ones
-this script draws conclusions from: model rejection, session id, model
-attribution.
+Each stream gets its **own** line buffer, and the log is appended a whole line
+at a time out of those buffers rather than raw chunk by raw chunk. Appending
+raw chunks let a stderr chunk arriving between two halves of a split stdout
+event splice itself into the middle of that JSON line, so the line stopped
+parsing and the event vanished — silently, since `hasRecognizedEvent` is
+satisfied by any other well-formed event in the log. The events lost that way
+are exactly the ones this script draws conclusions from: model rejection,
+session id, model attribution. Separating only the *echoed* view does not fix
+this: the log is what `jsonEvents()` parses, so the framing has to hold there.
+Byte content is still untruncated; only the interleaving granularity changes,
+from arbitrary chunk boundaries to line boundaries.
+
+Every echoed line of codex output carries a `codex> ` prefix and no line the
+wrapper writes about itself does, which is what lets a caller tell them apart
+mechanically. Position cannot: the wrapper's own `warning:`/`note:`/`hint:`
+lines are emitted throughout the run, *after* `running:` included (a
+stale-model fallback, an event-schema warning, a drift warning, a timeout
+hint), and a codex event can carry text identical to any of them. The failure
+tail skips the wrapper-written `ATTEMPT_MARKER` for the same reason —
+prefixing it would put `codex> ` on a wrapper-authored line.
 
 A failed log write is handled rather than thrown. `appendFileSync` throwing
 from inside a stream callback escapes both the awaited promise and the entry

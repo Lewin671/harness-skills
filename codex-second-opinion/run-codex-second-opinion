@@ -36,7 +36,29 @@ set -euf
 # repository is caught as readily as a literal path. Both are shell built-ins:
 # nothing has to be found on PATH to run this filter, which is the whole
 # reason the filter can run before PATH is trusted.
+# Both directories are widened to their REPOSITORY ROOT first. Filtering
+# against the launch directory alone protected only that directory: run from
+# /repo/sub, or with `--repo /repo/sub`, and an absolute /repo/bin entry
+# survived untouched and could still supply `node`. The root is found by
+# walking up for a `.git` entry -- a file as well as a directory, since a
+# worktree or submodule checkout uses a gitfile -- which needs no `git` binary,
+# and must not, because choosing a trustworthy PATH is the very thing that has
+# to happen before anything is looked up on it.
+repo_root_of() {
+  d=$1
+  while [ -n "$d" ]; do
+    if [ -e "$d/.git" ]; then printf '%s' "$d"; return 0; fi
+    case $d in
+      /) break ;;
+    esac
+    d=${d%/*}
+    [ -z "$d" ] && d=/
+  done
+  return 1
+}
+
 launch_dir=$(pwd -P)
+launch_dir=$(repo_root_of "$launch_dir") || launch_dir=$(pwd -P)
 
 repo_dir=
 prev=
@@ -48,6 +70,9 @@ for arg do
 done
 if [ -n "$repo_dir" ]; then
   repo_dir=$(cd -- "$repo_dir" 2>/dev/null && pwd -P) || repo_dir=
+  if [ -n "$repo_dir" ]; then
+    repo_dir=$(repo_root_of "$repo_dir") || repo_dir=$(cd -- "$repo_dir" && pwd -P)
+  fi
 fi
 
 inside_repo() {

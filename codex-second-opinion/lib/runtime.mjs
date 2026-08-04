@@ -229,14 +229,20 @@ export class Runtime {
   async execute(command, args, diagnostic) {
     process.stderr.write(`${flat(diagnostic)}\n`)
     appendFileSync(this.log, `${ATTEMPT_MARKER}\n`)
-    // One buffer PER STREAM, not one shared by both. stdout carries the JSONL
-    // event stream; stderr carries codex's own free text. Sharing a single
-    // buffer meant a stderr chunk arriving between two halves of a split
-    // stdout event spliced itself into the middle of that JSON line, so the
-    // line no longer parsed and the event vanished -- silently, because
-    // hasRecognizedEvent is satisfied by any other well-formed event in the
-    // log. The events lost that way are exactly the ones this script draws
-    // conclusions from: model rejection, session id, model attribution.
+    // One buffer PER STREAM, not one shared by both, and -- just as
+    // importantly -- the LOG is written a whole line at a time out of those
+    // buffers rather than raw chunk by raw chunk. stdout carries the JSONL
+    // event stream; stderr carries codex's own free text. Appending raw
+    // chunks let a stderr chunk arriving between two halves of a split stdout
+    // event splice itself into the middle of that JSON line *in the log
+    // file*, so the line no longer parsed and the event vanished -- silently,
+    // because hasRecognizedEvent is satisfied by any other well-formed event
+    // in the same log. The events lost that way are exactly the ones this
+    // script draws conclusions from: model rejection, session id, model
+    // attribution. Separating the echoed view alone did not fix that; the log
+    // is what jsonEvents() actually parses, so the framing has to hold there.
+    // Byte content is still untruncated -- only the interleaving granularity
+    // changes, from arbitrary chunk boundaries to line boundaries.
     const buffers = new Map([['stdout', ''], ['stderr', '']])
     // A failed write here used to throw straight out of an EventEmitter
     // callback -- outside the promise below and outside the entry point's
@@ -249,15 +255,17 @@ export class Runtime {
     const archive = (stream) => (chunk) => {
       if (archiveError) return
       try {
-        appendFileSync(this.log, chunk)
         let pending = buffers.get(stream) + chunk
+        let complete = ''
         for (;;) {
           const newline = pending.indexOf('\n')
           if (newline < 0) break
           const line = pending.slice(0, newline).replace(/\r$/, '')
           pending = pending.slice(newline + 1)
+          complete += `${line}\n`
           streamChildLine(line)
         }
+        if (complete) appendFileSync(this.log, complete)
         buffers.set(stream, pending)
       } catch (error) {
         archiveError = error
@@ -315,8 +323,12 @@ export class Runtime {
       // returning even though the direct child has already closed.
       if (this.timedOut || this.interruptedCode !== null) this.terminateChild('SIGKILL')
     }
+    // Whatever never terminated with a newline still belongs in the log, or a
+    // final unterminated event would be echoed but not recorded.
     for (const pending of buffers.values()) {
-      if (pending) streamChildLine(pending)
+      if (!pending) continue
+      streamChildLine(pending)
+      try { appendFileSync(this.log, `${pending}\n`) } catch { /* reported below if it also broke the stream writes */ }
     }
     this.removeSignalHandlers()
     if (this.interruptedCode !== null) {
@@ -355,7 +367,12 @@ export class Runtime {
   }
 
   tailLog() {
-    const lines = this.readLog().split(/\r?\n/).slice(-21).filter((line) => line !== '')
+    // ATTEMPT_MARKER is written by this script, not by codex, so echoing it
+    // through streamChildLine would attach the `codex> ` prefix to a
+    // wrapper-authored line and falsify the provenance rule SKILL.md states.
+    // It is also pure noise in a failure tail.
+    const lines = this.readLog().split(/\r?\n/).slice(-21)
+      .filter((line) => line !== '' && line !== ATTEMPT_MARKER)
     for (const line of lines) streamChildLine(line)
   }
 
