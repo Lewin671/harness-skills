@@ -495,8 +495,18 @@ export class Environment {
     const sessions = join(absoluteHome, 'sessions')
     if (isDirectory(absoluteHome) && exists(sessions)) {
       let sessionDestination
-      if (isSymlink(sessions)) sessionDestination = resolveLinkChain(sessions)
-      else sessionDestination = physicalPath(sessions)
+      if (isSymlink(sessions)) {
+        sessionDestination = resolveLinkChain(sessions)
+        // resolveLinkChain uses lexicallyResolve which collapses symlink/..
+        // before following the symlink — a target like /outside/hop/.. where
+        // hop -> /repo/child would resolve to /outside instead of /repo.
+        // physicalPath (realpathSync) follows the kernel's resolution order,
+        // so it catches the trick when the target exists.
+        const real = physicalPath(sessions)
+        if (real) destinations.push(real)
+      } else {
+        sessionDestination = physicalPath(sessions)
+      }
       if (!sessionDestination) {
         die(3,
           `error: ${flat(sessions)} exists but could not be entered, so where codex would write cannot be established`,
@@ -527,6 +537,8 @@ export class Environment {
     } else if (isSymlink(sessions)) {
       const target = resolveLinkChain(sessions)
       destinations.push(target)
+      const real = physicalPath(sessions)
+      if (real) destinations.push(real)
       const ancestor = nearestExistingAncestor(target)
       if (ancestor) destinations.push(ancestor)
     }
