@@ -83,6 +83,11 @@ Three rules keep the loop honest:
 - Continuation is verified: if the session expired, the script
   discards the fresh-thread answer and exits `4` instead of passing it
   off as a follow-up. Start a new consultation and restate context.
+  The error distinguishes this from event-format drift: if codex
+  reported a `thread.started` event but this script could not read a
+  session id out of it, that is reported as a likely schema change, not
+  as expiry — recheck [internals.md](./internals.md) against the
+  installed `codex-cli` version rather than assuming the session is gone.
 - If no session id reaches the stream, the answer is still valid —
   there is just nothing to continue; the next question starts fresh.
   Both lines are printed either way, reading `session: unavailable —

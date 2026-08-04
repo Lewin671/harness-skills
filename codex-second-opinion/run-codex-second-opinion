@@ -1,51 +1,52 @@
-#!/usr/bin/env node
+#!/bin/sh
+set -euf
 
-import { runConsult } from './lib/consult.mjs'
-import { runReview } from './lib/review.mjs'
-import { createState } from './lib/runtime.mjs'
-import { ExitError, flat, parseTimeout } from './lib/util.mjs'
+# run-codex-second-opinion.mjs (this script's sibling) does the real work,
+# but is launched here with an explicit `node` rather than executed
+# directly via its own #!/usr/bin/env node shebang: an env shebang
+# resolves `node` via the full, unfiltered PATH before a single line of
+# this project's own JavaScript -- including its PATH sanitization for
+# every child it spawns -- has run. A relative PATH entry there, with cwd
+# already inside the repository under review, could substitute a
+# repository-supplied `node` before any of that hardening exists. See
+# references/internals.md, "Codex binary trust boundary", point 7.
+#
+# /bin/sh itself needs no PATH search -- the shebang above names it by an
+# absolute, POSIX-guaranteed path -- so PATH can be filtered here, in
+# nothing but shell built-ins, before anything (including `node`) is
+# looked up by name. `-f` (noglob, part of `set -euf` above) matters here
+# specifically: an unquoted $PATH expansion undergoes pathname expansion as
+# well as the field-splitting IFS=: enables, so a component containing a
+# glob character (`/opt/*`, say) would otherwise expand to every matching
+# directory -- entries the literal PATH value never actually named --
+# before this loop ever gets to filter them. Verified empirically.
+safe_path=
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  case $dir in
+    /*) safe_path=${safe_path:+$safe_path:}$dir ;;
+  esac
+done
+IFS=$old_ifs
 
-const TOP_USAGE = `Usage: run-codex-second-opinion <review|consult> [ARGS]
+# An empty PATH is not "search nothing": POSIX command lookup treats an
+# empty PATH (and an empty component within one) as the current directory,
+# so exporting PATH= here would silently reopen the exact cwd-relative
+# lookup this bootstrap exists to close -- verified empirically
+# (`env -i PATH= /bin/sh -c 'exec node --version'` runs a `./node` placed in
+# cwd). Refuse instead of handing `node` a lookup rule that means "cwd".
+if [ -z "$safe_path" ]; then
+  echo "error: no absolute PATH entry remains after filtering; refusing rather than falling back to the current directory, which an empty PATH means under POSIX lookup rules." >&2
+  echo "hint: set PATH to include the absolute directory that contains node before running this script." >&2
+  exit 3
+fi
+PATH=$safe_path
+export PATH
 
-  review   run codex exec review over a code change
-  consult  ask a free-form question answered with the repo as context
+case $0 in
+  */*) script_dir=${0%/*} ;;
+  *) script_dir=. ;;
+esac
 
-Run run-codex-second-opinion <mode> --help for that mode's arguments.`
-
-function topUsage() {
-  process.stderr.write(`${TOP_USAGE}\n`)
-}
-
-async function main(argv) {
-  const [mode, ...args] = argv
-  if (mode === '-h' || mode === '--help') { topUsage(); return }
-  if (!mode) {
-    process.stderr.write('error: a mode is required\n')
-    topUsage()
-    process.exitCode = 3
-    return
-  }
-  if (mode !== 'review' && mode !== 'consult') {
-    process.stderr.write(`error: unknown mode: ${flat(mode)}\n`)
-    topUsage()
-    process.exitCode = 3
-    return
-  }
-
-  const state = createState(mode)
-  state.timeout = parseTimeout(process.env.CODEX_SECOND_OPINION_TIMEOUT || '3000', 'CODEX_SECOND_OPINION_TIMEOUT')
-  if (mode === 'review') await runReview(state, args)
-  else await runConsult(state, args)
-}
-
-try {
-  await main(process.argv.slice(2))
-} catch (error) {
-  if (error instanceof ExitError || (Number.isInteger(error?.code) && Array.isArray(error?.lines))) {
-    for (const line of error.lines) process.stderr.write(`${line}\n`)
-    process.exitCode = error.code
-  } else {
-    process.stderr.write(`error: internal failure: ${flat(error?.stack || error)}\n`)
-    process.exitCode = 3
-  }
-}
+exec node "$script_dir/run-codex-second-opinion.mjs" "$@"

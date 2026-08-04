@@ -33,6 +33,21 @@ const mutants = [
   ['UUID continuation remains strict', 'lib/consult.mjs', `if (!UUID.test(value)) {`, `if (false) {`],
   ['symlink components resolve before dot-dot', 'lib/environment.mjs', `if (part === '..') { current = dirname(current); continue }`, `if (part === '..') { continue }`],
   ['rejected-model detection stays scoped to structured events', 'lib/runtime.mjs', `if (event?.type !== 'error' && event?.type !== 'turn.failed') continue`, `if (false) continue`],
+  ['non-POSIX platforms are refused', 'lib/util.mjs', `if (platform !== 'darwin' && platform !== 'linux') {`, `if (false) {`],
+  ['a relative CODEX_BIN is refused', 'lib/environment.mjs', `if (raw && !isAbsolute(raw)) {`, `if (false) {`],
+  ['an unresolvable CODEX_BIN is refused, not silently left unpinned', 'lib/environment.mjs', `const resolved = resolveReal(raw)\n      if (!resolved) {`, `const resolved = resolveReal(raw)\n      if (false) {`],
+  ['an unresolvable codex binary is refused rather than PATH-searched blind', 'lib/environment.mjs', `if (!found) {`, `if (false) {`],
+  ['a PATH-resolved codex binary that fails physical resolution is refused', 'lib/environment.mjs', `const resolved = resolveReal(found)\n    if (!resolved) {`, `const resolved = resolveReal(found)\n    if (false) {`],
+  ['every spawned child sees an absolute-only PATH', 'lib/environment.mjs', `this.baseEnv.PATH = absolutePathEntries(this.baseEnv.PATH).join(delimiter)`, `void 0`],
+  ['a rejected PATH candidate cannot forge a marker line in its own error', 'lib/environment.mjs', `error: '\${flat(found)}' was found on PATH`, `error: '\${found}' was found on PATH`],
+  ['a resolved codex binary path cannot forge a marker line', 'lib/environment.mjs', `return resolved && !hasLineBreak(resolved) ? resolved : null`, `return resolved`],
+  ['the resolved codex binary is the one actually spawned', 'lib/environment.mjs', `this.codexBin = resolved\n    process.stderr.write(\`note: using codex binary: \${resolved}\\n\`)`, `process.stderr.write(\`note: using codex binary: \${resolved}\\n\`)`],
+  ['a CODEX_BIN symlink target is pinned, not just reported', 'lib/environment.mjs', `      this.codexBin = resolved\n      process.stderr.write(\`note: using codex binary: \${resolved}\\n\`)`, `      process.stderr.write(\`note: using codex binary: \${resolved}\\n\`)`],
+  ['a fully garbled --json stream is still flagged', 'lib/runtime.mjs', `return jsonEvents(log).some((event) => typeof event?.type === 'string')`, `return true`],
+  ['a thread.started event with no thread_id is told apart from no session at all', 'lib/runtime.mjs', `return jsonEvents(log).some((event) => event?.type === 'thread.started')`, `return false`],
+  ['the original codex invocation identity is preserved for argv0', 'lib/environment.mjs', `this.codexArgv0 = this.codexBin`, `this.codexArgv0 = undefined`],
+  ['a PATH entry is resolved in filesystem order before being probed', 'lib/environment.mjs', `const candidate = join(resolvePathSemantics(dir), name)`, `const candidate = join(dir, name)`],
+  ['a relative symlink target is not lexically collapsed before its own symlink components resolve', 'lib/environment.mjs', `pending = [...target.split(sep).filter(Boolean), ...pending]`, `pending = [...join(current, target).slice(parse(join(current, target)).root.length).split(sep).filter(Boolean), ...pending]`],
 ]
 
 function run(command, args, cwd) {

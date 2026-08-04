@@ -76,6 +76,13 @@ function jsonEvents(log) {
   return events
 }
 
+// A successful --json run should always yield at least one typed event
+// (thread.started, at minimum); zero across the whole log usually means
+// codex's JSONL event format drifted, not that nothing happened.
+export function hasRecognizedEvent(log) {
+  return jsonEvents(log).some((event) => typeof event?.type === 'string')
+}
+
 export function effectiveModel(log) {
   let model = ''
   for (const event of jsonEvents(log)) {
@@ -90,6 +97,17 @@ export function lastThreadId(log) {
     if (event?.type === 'thread.started' && typeof event.thread_id === 'string') id = event.thread_id
   }
   return id
+}
+
+// hasRecognizedEvent alone cannot catch a schema change that keeps `type`
+// strings intact but renames or moves `thread_id`: a run with only
+// item.started/item.completed events, and no thread.started at all, is
+// already an anticipated, legitimate shape (see consult.md's "no session"
+// case) -- but a thread.started event that carries no readable thread_id is
+// not, and emitResume (lib/consult.mjs) uses this to tell the two apart
+// before deciding whether a resumed session "expired" or the parser did.
+export function hasThreadStartedEvent(log) {
+  return jsonEvents(log).some((event) => event?.type === 'thread.started')
 }
 
 export class Runtime {
@@ -172,6 +190,11 @@ export class Runtime {
         detached: true,
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe'],
+        // command is codexBin, already resolved to a safe, dereferenced
+        // path (Environment.resolveCodexBin); argv0 keeps the identity a
+        // symlink-dispatching or multicall install may still expect to see
+        // itself invoked under -- see Environment.codexArgv0.
+        argv0: this.environment.codexArgv0,
       })
     } catch (error) {
       this.removeSignalHandlers()
@@ -304,10 +327,13 @@ export class Runtime {
       rmSync(this.out, { force: true })
       die(4)
     }
-    try {
-      if (statSync(this.log).size === 0) process.stderr.write(`warning: progress log ${this.log} is missing or empty; session and diagnostic details may be lost\n`)
-    } catch {
+    let logSize = -1
+    try { logSize = statSync(this.log).size } catch {}
+    if (logSize <= 0) {
       process.stderr.write(`warning: progress log ${this.log} is missing or empty; session and diagnostic details may be lost\n`)
+    } else if (!hasRecognizedEvent(this.readLog())) {
+      process.stderr.write(`warning: codex's --json event stream at ${this.log} has no line this script recognizes as a JSON event.\n`)
+      process.stderr.write('warning: this usually means the installed codex-cli changed its event format; model/session metadata reported below may be silently wrong -- recheck references/internals.md against the version in use.\n')
     }
     if (!this.state.model) {
       const model = effectiveModel(this.readLog())

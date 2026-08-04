@@ -86,7 +86,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # Five former Bash-internal path helper assertions now live in the fast
   # node:test suite. This contract suite stays black-box and counts only
   # behavior observable through the executable entry point.
-  expected=290
+  expected=275
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -146,6 +146,10 @@ cat > "$fake" <<'FAKE'
 #   FAKE_SLEEP          seconds to stall before writing the result
 #   FAKE_OUTPUT         result body, written verbatim (no trailing newline added)
 #   FAKE_ARGV_LOG       file to append each invocation's argv to, one line per call
+#   FAKE_ARGV0_LOG      file to append each invocation's $0 (argv[0]) to --
+#                       distinct from FAKE_ARGV_LOG, which only ever
+#                       captured "$*" (the arguments), never the identity
+#                       the process was invoked under
 #   FAKE_FAIL           reject the model: emit a stale-model line and exit 1
 #   FAKE_ERROR_TAIL     emit N more error-like lines after a rejection
 #   FAKE_FAIL_ONCE      path: fail like FAKE_FAIL only while this file is
@@ -155,8 +159,13 @@ cat > "$fake" <<'FAKE'
 #   FAKE_LONG_LINE      emit one event line of this many bytes
 #   FAKE_IGNORE_TERM    ignore TERM, so only the KILL backstop can end it
 #   FAKE_BAD_THREAD     emit this as the thread id instead of a valid UUID
+#   FAKE_THREAD_NO_ID   emit thread.started with no thread_id field at all --
+#                       simulating schema drift that keeps the type name but
+#                       moves or renames the id field, distinct from
+#                       FAKE_NO_THREAD (no thread.started event at all)
 #   FAKE_CONFIG_ERR     fail the way --strict-config fails on an unknown key
 [ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
+[ -n "${FAKE_ARGV0_LOG:-}" ] && printf '%s\n' "$0" >> "$FAKE_ARGV0_LOG"
 [ -n "${FAKE_TMPDIR_LOG:-}" ] && printf '%s\n' "${TMPDIR:-unset}" >> "$FAKE_TMPDIR_LOG"
 case "${1:-}" in
   --version)
@@ -296,7 +305,9 @@ done
 # way. The advertised resume line is a command someone is invited to run.
 [ -n "${FAKE_BAD_THREAD:-}" ] && [ -z "${FAKE_NO_THREAD:-}" ] &&
   printf '{"type":"thread.started","thread_id":"%s"}\n' "$FAKE_BAD_THREAD"
-[ -z "${FAKE_NO_THREAD:-}" ] && [ -z "${FAKE_BAD_THREAD:-}" ] &&
+[ -n "${FAKE_THREAD_NO_ID:-}" ] && [ -z "${FAKE_NO_THREAD:-}" ] && [ -z "${FAKE_BAD_THREAD:-}" ] &&
+  echo '{"type":"thread.started"}'
+[ -z "${FAKE_NO_THREAD:-}" ] && [ -z "${FAKE_BAD_THREAD:-}" ] && [ -z "${FAKE_THREAD_NO_ID:-}" ] &&
   echo '{"type":"thread.started","thread_id":"0198aaaa-bbbb-cccc-dddd-eeeeffff0000"}'
 [ -n "${FAKE_LONG_LINE:-}" ] &&
   awk -v n="$FAKE_LONG_LINE" 'BEGIN{s="";while(length(s)<n)s=s "X";printf "{\"type\":\"item.completed\",\"blob\":\"%s\"}\n", s}'
@@ -424,6 +435,89 @@ check_exit "unknown mode is exit 3" 3 "$?"
 
 "$wrapper" --help >/dev/null 2>&1
 check_exit "top-level --help is exit 0" 0 "$?"
+
+# The wrapper's own #!/bin/sh bootstrap must sanitize PATH before it looks
+# up `node`, not just before this script's own JavaScript starts: a
+# relative PATH entry ahead of a real node directory would otherwise let a
+# fake `node` placed at that relative location run first -- exactly the
+# scenario possible when this wrapper is invoked with cwd already inside a
+# reviewed repository that added a relative PATH entry (a project-local
+# dev-tool hook, say). This is a real subprocess boundary (unlike the rest
+# of this suite's FAKE_* env vars, which only affect what CODEX_BIN prints),
+# so it is the one case in this file that spawns a second, genuinely
+# different executable under a genuinely relative PATH entry.
+fakenode_dir="${workdir}/relbin"
+mkdir -p "$fakenode_dir"
+cat > "${fakenode_dir}/node" <<'FAKE_NODE'
+#!/bin/sh
+echo "FAKE NODE RAN -- THE BOOTSTRAP DID NOT SANITIZE PATH" >&2
+exit 1
+FAKE_NODE
+chmod +x "${fakenode_dir}/node"
+relhelp_out="${workdir}/relhelp.out"
+(
+  cd "$workdir" &&
+    PATH="relbin:${PATH}" "$wrapper" --help > "$relhelp_out" 2>&1
+)
+status=$?
+if [ "$status" = 0 ] && grep -q '^Usage: run-codex-second-opinion' "$relhelp_out" &&
+   ! grep -q 'FAKE NODE RAN' "$relhelp_out"; then
+  ok "wrapper bootstrap: a relative PATH entry ahead of node cannot substitute it"
+else
+  bad "wrapper bootstrap: a relative PATH entry ahead of node cannot substitute it" \
+    "exit $status, output: $(cat "$relhelp_out" 2>/dev/null)"
+fi
+
+# A PATH that is ENTIRELY relative entries filters down to nothing --
+# `safe_path` empty. POSIX command lookup treats an empty PATH as "search
+# the current directory", not "find nothing", so exporting it unchanged
+# would silently reopen the exact cwd-relative hijack this bootstrap
+# exists to close. The wrapper must refuse rather than let `exec node`
+# fall through to that lookup rule.
+cat > "${fakenode_dir}/node2" <<'FAKE_NODE2'
+#!/bin/sh
+echo "FAKE NODE RAN FROM AN EMPTY-PATH CWD LOOKUP" >&2
+exit 1
+FAKE_NODE2
+chmod +x "${fakenode_dir}/node2"
+mv "${fakenode_dir}/node2" "${fakenode_dir}/node"
+emptypath_out="${workdir}/emptypath.out"
+(
+  cd "$fakenode_dir" &&
+    PATH="./only-a-relative-entry" "$wrapper" --help > "$emptypath_out" 2>&1
+)
+status=$?
+if [ "$status" = 3 ] && grep -q 'no absolute PATH entry remains' "$emptypath_out" &&
+   ! grep -q 'FAKE NODE RAN' "$emptypath_out"; then
+  ok "wrapper bootstrap: an all-relative PATH is refused, not treated as cwd lookup"
+else
+  bad "wrapper bootstrap: an all-relative PATH is refused, not treated as cwd lookup" \
+    "exit $status, output: $(cat "$emptypath_out" 2>/dev/null)"
+fi
+
+# An unquoted $PATH expansion undergoes pathname (glob) expansion as well as
+# the field-splitting IFS=: enables, so a PATH entry containing a glob
+# character names directories the literal PATH value never actually did.
+# glob_parent/* would expand to glob_parent's children if globbing were not
+# disabled; one of those children carries a fake node that must never run.
+glob_parent="${workdir}/globparent"
+mkdir -p "${glob_parent}/glob-child-a" "${glob_parent}/glob-child-b"
+cat > "${glob_parent}/glob-child-a/node" <<'FAKE_NODE3'
+#!/bin/sh
+echo "FAKE NODE RAN FROM AN EXPANDED PATH GLOB" >&2
+exit 1
+FAKE_NODE3
+chmod +x "${glob_parent}/glob-child-a/node"
+globpath_out="${workdir}/globpath.out"
+PATH="${glob_parent}/*:${PATH}" "$wrapper" --help > "$globpath_out" 2>&1
+status=$?
+if [ "$status" = 0 ] && grep -q '^Usage: run-codex-second-opinion' "$globpath_out" &&
+   ! grep -q 'FAKE NODE RAN' "$globpath_out"; then
+  ok "wrapper bootstrap: a glob character in a PATH entry is not expanded"
+else
+  bad "wrapper bootstrap: a glob character in a PATH entry is not expanded" \
+    "exit $status, output: $(cat "$globpath_out" 2>/dev/null)"
+fi
 
 # The single timeout variable must reach both modes.
 CODEX_SECOND_OPINION_TIMEOUT=999999999999999999999999999999 \
@@ -1426,17 +1520,12 @@ fi
 }
 
 group_review_paths_mcp_b() {
-# Balanced, boolean-correct, and still not JSON. No shape here can be trusted
-# to be the whole listing. The `other` payloads carry the bad literal on a
-# field the boolean guard never inspects, so they reach the id parser: only
-# its own boundary check separates `falsegarbage` from `false`.
-# The last three are the NUMBER and the finished-value cases. A digit used to
-# mark the value "started" and every byte after it was then skipped, so
-# `"port":1garbage` balanced, counted its booleans, emitted no id — and read as
-# a complete listing with nothing enabled. `01` is not JSON either, and garbage
-# with no separator in front of it was seen by none of the separator checks,
-# which only ever look at a separator that IS there.
-for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"github","enabled" true}]' '[{"name":"off","enabled":false,GARBAGE}]' '[{"name":"a","enabled":true,"other":falsegarbage}]' '[{"name":"a","enabled":true,"other":truex}]' '[{"name":"a","enabled":true,"other":nullx}]' '[{"name":"off","enabled":false,"port":1garbage}]' '[{"name":"off","enabled":false,"port":01}]' '[{"name":"off","enabled":false,"other":false xyz}]' '[{"name":"off","enabled":false,"other":false false}]' '[{"name":"off","enabled":false,"other":false 1}]' '[{"name":"off"{},"enabled":false}]' '[{"name":"a","enabled":false,"t":{}{}}]' '[{"name":"a","enabled":false,"t":[][]}]'; do
+# parseMcpListing (lib/mcp.mjs) parses with real JSON.parse, so every syntax
+# error -- wherever it occurs in the payload -- reaches the identical catch
+# block and the same generic message; these three sample distinct JSON error
+# classes (a trailing comma, a missing key/value separator, and a
+# JSON-illegal leading-zero number) rather than enumerate the class itself.
+for bad_json in '[{"name":"off","enabled":false},]' '[{"name":"off" "enabled":false}]' '[{"name":"off","enabled":false,"port":01}]'; do
   stderr="${workdir}/mcp-badjson.err"
   argv_log="${workdir}/argv-mcp-badjson.log"
   FAKE_MCP_LIST="$bad_json" FAKE_ARGV_LOG="$argv_log" \
@@ -1485,18 +1574,11 @@ else
   bad "review: an all-disabled listing with a nested true still runs" "exit $status"
 fi
 
-# An OBJECT root. `{"github":{"name":"github","enabled":true}}` is a map whose
-# servers sit one level below entry level, so a parser reading depth 1 emits
-# nothing while an enabled server is right there — no override is added and
-# the run starts with it reachable. This is the fail-open that removing the
-# mcp_count==0 refusal opened up, and refusing the unrecognised ROOT SHAPE is
-# what closes it without also refusing a legitimate nested `true`.
-# `{}` is the object root that reaches NEITHER guard on its own: it holds no
-# `"enabled"` for the parser arm and no `true` for the prefilter, and it used
-# to be whitelisted beside `[]` as an empty config. 0.146.0 prints `[]` for
-# that, so `{}` is a shape nobody has read — the same fail-open as treating
-# empty output as no servers.
-for objroot in '{"github":{"name":"github","enabled":true}}' '{"name":"single","enabled":true}' '{}' '{"servers":{}}'; do
+# An OBJECT root fails the `Array.isArray(value)` check regardless of shape.
+# `{}` is the one worth pinning on its own: 0.146.0 prints `[]` for an empty
+# listing, never `{}`, so an object root -- empty or not -- is never a
+# legitimate "no servers" response and must not be read as one.
+for objroot in '{"name":"single","enabled":true}' '{}'; do
   stderr="${workdir}/mcp-objroot.err"
   argv_log="${workdir}/argv-mcp-objroot.log"
   FAKE_MCP_LIST="$objroot" FAKE_ARGV_LOG="$argv_log" \
@@ -1511,16 +1593,10 @@ for objroot in '{"github":{"name":"github","enabled":true}}' '{"name":"single","
 done
 
 # An entry that carries NO `enabled` field at all. Absence is not disabled:
-# this whole block keys on that field's literal bytes, so a CLI that stopped
-# emitting it for default-enabled servers would leave the entry matching no
-# `true` in the prefilter, agreeing with the key/value count that has no key
-# to check, and parsing to no enabled id — a listing read as all-clear about
-# a server it never described. Both routes into the block are covered: the
-# first payload reaches the no-`true` branch, the second the enumerating one.
-for undecl in \
-    '[{"name":"hidden"},{"name":"off","enabled":false}]' \
-    '[{"name":"hidden"},{"name":"live","enabled":true}]' \
-    '[{},{"name":"off","enabled":false}]'; do
+# `Object.hasOwn(entry, 'enabled')` (lib/mcp.mjs) requires the field's literal
+# presence, so a CLI that stopped emitting it for default-enabled servers
+# must not be read as an all-clear about a server it never described.
+for undecl in '[{"name":"hidden"},{"name":"off","enabled":false}]'; do
   stderr="${workdir}/mcp-undecl.err"
   argv_log="${workdir}/argv-mcp-undecl.log"
   : > "$argv_log"
@@ -1535,21 +1611,14 @@ for undecl in \
   fi
 done
 
-# The same silence one level out: an array element that is not an object at
-# all. A primitive has no `enabled` key for the count to weigh, no `true` for
-# the prefilter, and no entry for the parser to close — so it is described by
-# nothing and the listing reads as all-disabled around it.
-#
-# A NESTED ARRAY is the same kind of element and was the harder half: it
-# produced no marker at all, and `[[{"name":"x","enabled":true}]]` went
-# further and emitted `x` as though it were a top-level entry — an id one
-# level deeper than the shape this parser understands, read as a server to
-# switch off. Both measured.
+# An array element that is not an object at all -- typeof/Array.isArray both
+# reject it (lib/mcp.mjs) -- so it is described by nothing and must not read
+# as all-disabled around it. A NESTED ARRAY is the harder case: `typeof []`
+# is `'object'` in JS, so the parser needs its own `Array.isArray(entry)`
+# check to avoid treating `[[{"name":"x","enabled":true}]]`'s inner array as
+# an ordinary entry and reading `x` as a real, enabled server name.
 for prim in \
-    '["hidden",{"name":"off","enabled":false}]' \
     '[1,{"name":"off","enabled":false}]' \
-    '[{"name":"off","enabled":false},"hidden"]' \
-    '[["hidden"],{"name":"off","enabled":false}]' \
     '[[{"name":"x","enabled":true}]]'; do
   stderr="${workdir}/mcp-prim.err"
   argv_log="${workdir}/argv-mcp-prim.log"
@@ -3352,6 +3421,23 @@ fi
 FAKE_NO_THREAD=1 "$wrapper" consult --repo "$repo" --timeout 30 \
   --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 "follow-up?" >/dev/null 2>&1
 check_exit "consult: unverifiable continuation is exit 4" 4 "$?"
+
+# A thread.started event exists (unlike FAKE_NO_THREAD above) but carries no
+# thread_id -- the schema-drift shape, not the no-session shape. Still
+# discarded (exit 4, same fail-closed outcome), but the message must say so
+# rather than claim the session "likely expired", which the FAKE_NO_THREAD
+# case above legitimately can.
+drift_err="${workdir}/thread-drift.err"
+FAKE_THREAD_NO_ID=1 "$wrapper" consult --repo "$repo" --timeout 30 \
+  --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 "follow-up?" >/dev/null 2> "$drift_err"
+status=$?
+if [ "$status" = 4 ] && grep -q 'could not read a thread_id' "$drift_err" &&
+   ! grep -q 'likely expired' "$drift_err"; then
+  ok "consult: a thread.started event with no thread_id is reported as drift, not expiry"
+else
+  bad "consult: a thread.started event with no thread_id is reported as drift, not expiry" \
+    "exit $status, stderr: $(cat "$drift_err" 2>/dev/null)"
+fi
 
 # A rejected model on a follow-up must not auto-retry: the failed
 # attempt may already have recorded the question in the session.

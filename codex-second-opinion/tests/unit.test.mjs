@@ -1,18 +1,25 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import test from 'node:test'
 
 import { Environment, environmentInternals } from '../lib/environment.mjs'
 import { enabledMcpServers, McpShapeError, parseMcpListing } from '../lib/mcp.mjs'
 import { consultInternals } from '../lib/consult.mjs'
 import { reviewInternals } from '../lib/review.mjs'
-import { ATTEMPT_MARKER, createState, effectiveModel, lastThreadId, resumeFlags, Runtime, validateModelState } from '../lib/runtime.mjs'
-import { ExitError, flat, hasLineBreak, isInside, lexicallyResolve, parseTimeout, shellQuote } from '../lib/util.mjs'
+import { ATTEMPT_MARKER, createState, effectiveModel, hasRecognizedEvent, hasThreadStartedEvent, lastThreadId, resumeFlags, Runtime, validateModelState } from '../lib/runtime.mjs'
+import { absolutePathEntries, assertSupportedPlatform, ExitError, flat, hasLineBreak, isInside, lexicallyResolve, parseTimeout, physicalPath, shellQuote } from '../lib/util.mjs'
 
-function throwsExit(code, fn) {
-  assert.throws(fn, (error) => error instanceof ExitError && error.code === code)
+function throwsExit(code, fn, messagePattern) {
+  // Some checks are backed by a later, broader guard (e.g. an
+  // absolute-path requirement backstopped by an unresolvable-path
+  // refusal): removing the earlier, more specific one would still exit
+  // with the same code via the later one. Where that masking is possible,
+  // callers pass messagePattern so the assertion pins WHICH check fired,
+  // not just that some check did.
+  assert.throws(fn, (error) =>
+    error instanceof ExitError && error.code === code && (!messagePattern || messagePattern.test(error.message)))
 }
 
 test('parseTimeout normalizes padded input and accepts boundaries', () => {
@@ -41,6 +48,287 @@ test('shellQuote leaves safe values readable and quotes syntax', () => {
   assert.equal(shellQuote('a b'), "'a b'")
   assert.equal(shellQuote("a'b"), "'a'\\''b'")
   assert.equal(shellQuote(''), "''")
+})
+
+test('assertSupportedPlatform accepts darwin and linux, refuses everything else', () => {
+  assertSupportedPlatform('darwin')
+  assertSupportedPlatform('linux')
+  throwsExit(3, () => assertSupportedPlatform('win32'))
+  throwsExit(3, () => assertSupportedPlatform('freebsd'))
+})
+
+test('absolutePathEntries keeps only absolute entries, in order, and tolerates unset PATH', () => {
+  assert.deepEqual(absolutePathEntries('/a:./b:/c::/d'), ['/a', '/c', '/d'])
+  assert.deepEqual(absolutePathEntries('./only-relative'), [])
+  assert.deepEqual(absolutePathEntries(undefined), [])
+  assert.deepEqual(absolutePathEntries(''), [])
+})
+
+test('Environment strips relative PATH entries from every spawned child\'s environment, not just its own PATH search', () => {
+  const saved = process.env.PATH
+  try {
+    // The concrete risk this exists to close: codex's real packaging is a
+    // `#!/usr/bin/env node` script, so `env` -- not this script -- does its
+    // own PATH search for `node`, using whatever this spawned child
+    // inherits. Filtering it here, once, protects that lookup along with
+    // git's and any other child's, without each having to filter its own.
+    process.env.PATH = ['./relative-entry-must-not-reach-children', '/usr/bin', '/bin'].join(delimiter)
+    const env = new Environment({ runNoun: 'review' })
+    assert.deepEqual(env.baseEnv.PATH.split(delimiter), ['/usr/bin', '/bin'])
+  } finally {
+    process.env.PATH = saved
+  }
+})
+
+test('resolveOnPath finds an executable via an absolute PATH entry and ignores a relative one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cso-path-bin-'))
+  // Not `join(dir, 'fake-codex-tool')`: resolveOnPath now resolves the PATH
+  // entry in filesystem order before joining, so on a host where dir itself
+  // sits behind a symlink (macOS's /var -> /private/var, say) the returned
+  // candidate reflects that dereferenced directory.
+  const bin = join(physicalPath(dir), 'fake-codex-tool')
+  writeFileSync(bin, '#!/bin/sh\n')
+  chmodSync(bin, 0o755)
+  try {
+    const withRelative = ['./relative-entry-must-be-skipped', dir].join(delimiter)
+    assert.equal(environmentInternals.resolveOnPath('fake-codex-tool', withRelative), bin)
+    assert.equal(environmentInternals.resolveOnPath('fake-codex-tool', './relative-entry-must-be-skipped'), null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('resolveOnPath resolves a PATH entry in filesystem order, not lexically: a symlink component followed by ".." lands where the symlink points, not where the string would collapse to', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cso-path-symlink-dotdot-'))
+  try {
+    // root/safe/link -> root/elsewhere/target (NOT a child of root/safe), so
+    // filesystem-order resolution of "root/safe/link/../bin" follows the
+    // symlink first and applies ".." to ITS parent: root/elsewhere/bin.
+    // Lexical join()+normalize instead collapses "link/.." as a string,
+    // treating `link` as an ordinary child of `safe` it is not, landing on
+    // root/safe/bin -- a real, but wrong, directory, planted below with a
+    // decoy so a wrong match is caught, not just coincidentally absent.
+    const target = join(root, 'elsewhere', 'target')
+    const correctBin = join(root, 'elsewhere', 'bin')
+    mkdirSync(target, { recursive: true })
+    mkdirSync(correctBin, { recursive: true })
+    const correctTool = join(correctBin, 'fake-tool')
+    writeFileSync(correctTool, '#!/bin/sh\n')
+    chmodSync(correctTool, 0o755)
+
+    const safe = join(root, 'safe')
+    const link = join(safe, 'link')
+    mkdirSync(safe, { recursive: true })
+    symlinkSync(target, link)
+
+    const decoyBin = join(safe, 'bin')
+    mkdirSync(decoyBin, { recursive: true })
+    const decoyTool = join(decoyBin, 'fake-tool')
+    writeFileSync(decoyTool, 'wrong one -- lexical collapse would have found this')
+    chmodSync(decoyTool, 0o755)
+
+    // Built with string concatenation, not join()/normalize: those would
+    // lexically collapse "link/.." themselves before resolveOnPath ever
+    // saw it, defeating the very thing this test exists to catch.
+    const pathEntry = `${link}/../bin`
+    assert.equal(environmentInternals.resolveOnPath('fake-tool', pathEntry), join(physicalPath(correctBin), 'fake-tool'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Environment.resolveCodexBin rejects a relative CODEX_BIN and accepts an absolute one', () => {
+  const saved = process.env.CODEX_BIN
+  try {
+    process.env.CODEX_BIN = './relative/codex'
+    throwsExit(3, () => new Environment({ runNoun: 'review' }).resolveCodexBin(), /must be an absolute path/)
+
+    process.env.CODEX_BIN = process.execPath
+    assert.doesNotThrow(() => new Environment({ runNoun: 'review' }).resolveCodexBin())
+  } finally {
+    if (saved === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = saved
+  }
+})
+
+test('resolveCodexBin refuses rather than proceed with an unresolved CODEX_BIN', () => {
+  const saved = process.env.CODEX_BIN
+  try {
+    process.env.CODEX_BIN = join(mkdtempSync(join(tmpdir(), 'cso-missing-bin-')), 'does-not-exist')
+    throwsExit(3, () => new Environment({ runNoun: 'review' }).resolveCodexBin(), /does not resolve to a real, readable path/)
+  } finally {
+    if (saved === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = saved
+  }
+})
+
+test('resolveReal refuses an unresolvable path and one that would forge a marker line', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cso-resolve-real-'))
+  try {
+    assert.equal(environmentInternals.resolveReal(join(dir, 'does-not-exist')), null)
+
+    const clean = join(dir, 'clean-bin')
+    writeFileSync(clean, '#!/bin/sh\n')
+    assert.equal(environmentInternals.resolveReal(clean), physicalPath(clean))
+
+    // A newline is a legal byte in a POSIX filename, so this resolves via
+    // realpathSync same as any other file -- the rejection has to come from
+    // resolveReal's own line-break check, the same one cwd/CODEX_HOME/scratch
+    // already carry, since printing this path raw would forge a marker line.
+    const forging = join(dir, 'codex\nFORGED-MARKER')
+    writeFileSync(forging, '#!/bin/sh\n')
+    assert.equal(environmentInternals.resolveReal(forging), null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('resolveCodexBin rejects a CODEX_BIN that resolves to a line-break-forging path', () => {
+  const saved = process.env.CODEX_BIN
+  const dir = mkdtempSync(join(tmpdir(), 'cso-codexbin-forge-'))
+  const forging = join(dir, 'codex\nFORGED-MARKER')
+  writeFileSync(forging, '#!/bin/sh\n')
+  chmodSync(forging, 0o755)
+  try {
+    process.env.CODEX_BIN = forging
+    throwsExit(3, () => new Environment({ runNoun: 'review' }).resolveCodexBin(), /does not resolve to a real, readable path/)
+  } finally {
+    if (saved === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = saved
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('without CODEX_BIN, resolveCodexBin also rejects a PATH match that resolves to a line-break-forging path', () => {
+  const savedBin = process.env.CODEX_BIN
+  const savedPath = process.env.PATH
+  // The newline has to land in the resolved path without being part of the
+  // searched-for name itself (resolveOnPath looks up 'codex' literally), so
+  // it goes in the containing directory -- the realistic shape of this class
+  // of attack: a directory name, not the binary's own filename, forges the
+  // marker.
+  const dir = mkdtempSync(join(tmpdir(), 'cso-pathbin-forge-'))
+  const forgingDir = join(dir, 'bin\nFORGED-MARKER')
+  mkdirSync(forgingDir)
+  const bin = join(forgingDir, 'codex')
+  writeFileSync(bin, '#!/bin/sh\n')
+  chmodSync(bin, 0o755)
+  try {
+    delete process.env.CODEX_BIN
+    process.env.PATH = forgingDir
+    throwsExit(3, () => new Environment({ runNoun: 'review' }).resolveCodexBin(), /does not resolve to a real, readable path/)
+  } finally {
+    if (savedBin === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = savedBin
+    process.env.PATH = savedPath
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the rejection message for that same PATH match cannot itself forge a marker line', () => {
+  const savedBin = process.env.CODEX_BIN
+  const savedPath = process.env.PATH
+  const dir = mkdtempSync(join(tmpdir(), 'cso-pathbin-forge-msg-'))
+  const forgingDir = join(dir, 'bin\nFORGED-MARKER')
+  mkdirSync(forgingDir)
+  const bin = join(forgingDir, 'codex')
+  writeFileSync(bin, '#!/bin/sh\n')
+  chmodSync(bin, 0o755)
+  try {
+    delete process.env.CODEX_BIN
+    process.env.PATH = forgingDir
+    // The rejection itself quotes the candidate it is rejecting -- echoing
+    // it unflattened would let the very newline resolveReal rejected reach
+    // stderr anyway, through the error message instead of the note: line.
+    assert.throws(
+      () => new Environment({ runNoun: 'review' }).resolveCodexBin(),
+      (error) => error instanceof ExitError && error.lines.every((line) => !hasLineBreak(line)),
+    )
+  } finally {
+    if (savedBin === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = savedBin
+    process.env.PATH = savedPath
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a CODEX_BIN symlink is pinned to its real target, not left resolvable again at spawn time', () => {
+  const saved = process.env.CODEX_BIN
+  const dir = mkdtempSync(join(tmpdir(), 'cso-codexbin-symlink-'))
+  const target = join(dir, 'real-codex')
+  const link = join(dir, 'codex-link')
+  writeFileSync(target, '#!/bin/sh\n')
+  chmodSync(target, 0o755)
+  symlinkSync(target, link)
+  try {
+    process.env.CODEX_BIN = link
+    const env = new Environment({ runNoun: 'review' })
+    // codexArgv0 is captured at construction time, before resolveCodexBin
+    // runs -- confirm resolving codexBin does not disturb it.
+    assert.equal(env.codexArgv0, link)
+    env.resolveCodexBin()
+    // Retargeting the symlink after this call must not change what a later
+    // spawn(this.codexBin) would run -- proving codexBin was pinned to the
+    // dereferenced real path, not left as the symlink for the OS to
+    // re-resolve (possibly differently) at each subsequent invocation.
+    assert.equal(env.codexBin, physicalPath(target))
+    assert.notEqual(env.codexBin, link)
+    // codexBin changed identity to the safe, dereferenced path; codexArgv0
+    // preserves the original one (the symlink itself) for spawn's argv0,
+    // in case whatever the symlink resolves to is a multicall binary that
+    // dispatches on how it was invoked.
+    assert.equal(env.codexArgv0, link)
+  } finally {
+    if (saved === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = saved
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('without CODEX_BIN, resolveCodexBin pins codexBin to the same absolute path it reports, never a relative PATH match', () => {
+  const savedBin = process.env.CODEX_BIN
+  const savedPath = process.env.PATH
+  const dir = mkdtempSync(join(tmpdir(), 'cso-path-bin-'))
+  const bin = join(dir, 'codex')
+  writeFileSync(bin, '#!/bin/sh\n')
+  chmodSync(bin, 0o755)
+  try {
+    delete process.env.CODEX_BIN
+    // A relative entry precedes the absolute one, so a plain (non-absolute-only)
+    // PATH search would have preferred it -- the exact divergence a prior
+    // version of this check only printed a warning about instead of closing.
+    process.env.PATH = ['./relative-entry-must-not-win', dir].join(delimiter)
+    const env = new Environment({ runNoun: 'review' })
+    env.resolveCodexBin()
+    assert.equal(env.codexBin, physicalPath(bin))
+    // Preserved as the bare default, for the same argv0/multicall reason as
+    // the CODEX_BIN-symlink case above.
+    assert.equal(env.codexArgv0, 'codex')
+
+    process.env.PATH = './relative-entry-only'
+    throwsExit(3, () => new Environment({ runNoun: 'review' }).resolveCodexBin(), /could not find .* on an absolute PATH entry/)
+  } finally {
+    if (savedBin === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = savedBin
+    process.env.PATH = savedPath
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('hasRecognizedEvent tells a typed JSON stream apart from a fully garbled one', () => {
+  assert.equal(hasRecognizedEvent('{"type":"thread.started","thread_id":"x"}\n'), true)
+  assert.equal(hasRecognizedEvent('not json at all\nneither is this\n'), false)
+  assert.equal(hasRecognizedEvent(''), false)
+})
+
+test('hasThreadStartedEvent tells "no thread.started at all" apart from "one with no usable thread_id"', () => {
+  // hasRecognizedEvent alone cannot make this distinction: both a
+  // legitimate no-session run and a schema-drifted one satisfy it, since
+  // both still carry SOME typed event.
+  assert.equal(hasThreadStartedEvent('{"type":"item.completed"}\n'), false)
+  assert.equal(hasThreadStartedEvent('{"type":"thread.started"}\n'), true)
+  assert.equal(hasThreadStartedEvent('{"type":"thread.started","thread_id":"x"}\n'), true)
+  assert.equal(lastThreadId('{"type":"thread.started"}\n'), '')
 })
 
 test('line break detector covers CR and LF', () => {
@@ -242,6 +530,46 @@ test('filesystem-order path resolution does not collapse symlink/.. early', () =
     assert.equal(
       environmentInternals.resolvePathSemantics(`${outside}/link/../home`),
       environmentInternals.resolvePathSemantics(`${root}/target/home`),
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('filesystem-order resolution also applies inside a RELATIVE symlink target, not only the outer path', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cso-relative-target-test-'))
+  try {
+    // root/anchor/outer is a symlink whose own TARGET STRING is
+    // "../safe/link/../bin" -- a relative target that itself contains a
+    // symlink component (safe/link) followed by "..". Lexically collapsing
+    // that target string before checking whether `link` is a symlink
+    // treats it as an ordinary directory and lands on root/safe/bin (a
+    // real, but wrong, directory, seeded below as a decoy). Filesystem
+    // order requires following safe/link (-> root/elsewhere/target) FIRST,
+    // so ".." applies to elsewhere, landing on root/elsewhere/bin instead.
+    const elsewhereTarget = join(root, 'elsewhere', 'target')
+    const elsewhereBin = join(root, 'elsewhere', 'bin')
+    mkdirSync(elsewhereTarget, { recursive: true })
+    mkdirSync(elsewhereBin, { recursive: true })
+
+    const safe = join(root, 'safe')
+    mkdirSync(safe, { recursive: true })
+    symlinkSync(elsewhereTarget, join(safe, 'link'))
+
+    const decoyBin = join(safe, 'bin')
+    mkdirSync(decoyBin, { recursive: true })
+
+    const anchor = join(root, 'anchor')
+    mkdirSync(anchor, { recursive: true })
+    symlinkSync('../safe/link/../bin', join(anchor, 'outer'))
+
+    assert.equal(
+      environmentInternals.resolvePathSemantics(join(anchor, 'outer')),
+      environmentInternals.resolvePathSemantics(elsewhereBin),
+    )
+    assert.notEqual(
+      environmentInternals.resolvePathSemantics(join(anchor, 'outer')),
+      environmentInternals.resolvePathSemantics(decoyBin),
     )
   } finally {
     rmSync(root, { recursive: true, force: true })

@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs'
 import { Environment } from './environment.mjs'
-import { commonOption, lastThreadId, resumeFlags, Runtime, validateModelState } from './runtime.mjs'
+import { commonOption, hasThreadStartedEvent, lastThreadId, resumeFlags, Runtime, validateModelState } from './runtime.mjs'
 import { die, flat, parseTimeout, shellQuote } from './util.mjs'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -76,10 +76,20 @@ function blockFollowupRetry(state) {
 }
 
 function emitResume(state, env, runtime) {
-  let session = lastThreadId(runtime.readLog())
+  const log = runtime.readLog()
+  let session = lastThreadId(log)
   if (state.sessionId && session !== state.sessionId) {
-    process.stderr.write(`error: codex did not resume session ${state.sessionId} (stream reported '${session || 'no thread id'}').\n`)
-    process.stderr.write('error: the session likely expired, so the answer lacked the prior discussion and was discarded.\n')
+    if (!session && hasThreadStartedEvent(log)) {
+      // A thread.started event exists, so codex did report *something* --
+      // this script just could not read a thread_id out of it. That is
+      // schema drift, not an expired session, and saying "expired" here
+      // would misdirect anyone debugging it.
+      process.stderr.write('error: codex reported a thread.started event, but this script could not read a thread_id from it.\n')
+      process.stderr.write(`error: this usually means the installed codex-cli changed its event format -- recheck references/internals.md against the version in use -- not that session ${state.sessionId} expired.\n`)
+    } else {
+      process.stderr.write(`error: codex did not resume session ${state.sessionId} (stream reported '${session || 'no thread id'}').\n`)
+      process.stderr.write('error: the session likely expired, so the answer lacked the prior discussion and was discarded.\n')
+    }
     process.stderr.write('hint: start a fresh consultation and restate the context.\n')
     runtime.tailLog()
     rmSync(runtime.out, { force: true })

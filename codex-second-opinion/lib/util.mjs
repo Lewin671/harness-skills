@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
-import { dirname, isAbsolute, normalize, relative, resolve } from 'node:path'
+import { delimiter, dirname, isAbsolute, normalize, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 export class ExitError extends Error {
@@ -42,6 +42,36 @@ export function hasLineBreak(value) {
   return /[\r\n]/.test(String(value))
 }
 
+// Called once, before anything else runs. Process-group signal delivery
+// (Runtime.terminateChild's negative-pid kill), the POSIX permission-bit
+// checks throughout environment.mjs, and the symlink-chain resolution used
+// to place CODEX_HOME safely are all POSIX behavior that was verified only
+// on macOS/Linux -- an unverified platform degrades those guarantees
+// silently rather than failing loudly, so it is refused instead.
+// A relative PATH entry resolves against whatever this process's cwd is at
+// the moment something searches it -- the repository under review, for
+// nearly this whole run. resolveOnPath (environment.mjs) already skips such
+// entries in its own search, but that alone does not protect a *spawned*
+// child's own PATH search: codex's real-world packaging is a
+// `#!/usr/bin/env node` script, so `env` performs its own fresh PATH lookup
+// for `node`, after this process has already changed into the reviewed
+// repository, using whatever PATH that child inherits. Filtering PATH down
+// to absolute entries before it becomes part of any spawned child's
+// environment closes that regardless of what the child -- or something it
+// execs in turn -- searches for.
+export function absolutePathEntries(value) {
+  return String(value || '').split(delimiter).filter((dir) => dir && isAbsolute(dir))
+}
+
+export function assertSupportedPlatform(platform) {
+  if (platform !== 'darwin' && platform !== 'linux') {
+    die(3,
+      `error: this skill supports macOS and Linux only (detected: '${flat(platform)}').`,
+      'error: process-group cancellation and the filesystem-permission checks this script relies on for its safety boundary assume POSIX semantics that are unverified elsewhere.',
+      'hint: run it from a macOS or Linux host -- WSL works on Windows.')
+  }
+}
+
 export function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
@@ -50,6 +80,11 @@ export function run(command, args, options = {}) {
     input: options.input,
     maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
     stdio: options.stdio,
+    // Only meaningful when the caller resolved `command` to a different
+    // path than the identity a symlink-dispatching or multicall target
+    // expects to see itself invoked under (Environment.codexArgv0);
+    // undefined here is spawnSync's own default (argv[0] = command).
+    argv0: options.argv0,
   })
   if (result.error) {
     return { status: 127, stdout: '', stderr: result.error.message, error: result.error }

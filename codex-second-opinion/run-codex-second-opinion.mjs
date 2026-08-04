@@ -1,0 +1,50 @@
+import { runConsult } from './lib/consult.mjs'
+import { runReview } from './lib/review.mjs'
+import { createState } from './lib/runtime.mjs'
+import { assertSupportedPlatform, ExitError, flat, parseTimeout } from './lib/util.mjs'
+
+const TOP_USAGE = `Usage: run-codex-second-opinion <review|consult> [ARGS]
+
+  review   run codex exec review over a code change
+  consult  ask a free-form question answered with the repo as context
+
+Run run-codex-second-opinion <mode> --help for that mode's arguments.`
+
+function topUsage() {
+  process.stderr.write(`${TOP_USAGE}\n`)
+}
+
+async function main(argv) {
+  assertSupportedPlatform(process.platform)
+  const [mode, ...args] = argv
+  if (mode === '-h' || mode === '--help') { topUsage(); return }
+  if (!mode) {
+    process.stderr.write('error: a mode is required\n')
+    topUsage()
+    process.exitCode = 3
+    return
+  }
+  if (mode !== 'review' && mode !== 'consult') {
+    process.stderr.write(`error: unknown mode: ${flat(mode)}\n`)
+    topUsage()
+    process.exitCode = 3
+    return
+  }
+
+  const state = createState(mode)
+  state.timeout = parseTimeout(process.env.CODEX_SECOND_OPINION_TIMEOUT || '3000', 'CODEX_SECOND_OPINION_TIMEOUT')
+  if (mode === 'review') await runReview(state, args)
+  else await runConsult(state, args)
+}
+
+try {
+  await main(process.argv.slice(2))
+} catch (error) {
+  if (error instanceof ExitError || (Number.isInteger(error?.code) && Array.isArray(error?.lines))) {
+    for (const line of error.lines) process.stderr.write(`${line}\n`)
+    process.exitCode = error.code
+  } else {
+    process.stderr.write(`error: internal failure: ${flat(error?.stack || error)}\n`)
+    process.exitCode = 3
+  }
+}
