@@ -403,7 +403,9 @@ test('event parsing is restricted to the final attempt', () => {
 function runtimeWithLog(log) {
   const path = join(mkdtempSync(join(tmpdir(), 'cso-log-test-')), 'events.jsonl')
   writeFileSync(path, log)
-  return new Runtime(createState('review'), {}, { out: '/tmp/out', log: path })
+  const runtime = new Runtime(createState('review'), {}, { out: '/tmp/out', log: path })
+  runtime.stdoutEventBuffer = log
+  return runtime
 }
 
 test('rejectedModel fires on a top-level error event naming the model', () => {
@@ -662,20 +664,35 @@ test('hashed parts are framed, so one part cannot impersonate its neighbour', ()
 test('a rejected model is told apart from an unrelated "is not supported" error', () => {
   const state = createState('review')
   const runtime = new Runtime(state, {}, { out: '/dev/null', log: '/dev/null' })
-  const event = (message) => `${ATTEMPT_MARKER}\n${JSON.stringify({ type: 'error', message })}\n`
+  const event = (message) => `${JSON.stringify({ type: 'error', message })}\n`
 
-  runtime.readLog = () => event("The model 'gpt-9' is not supported when using Codex with a ChatGPT account")
+  runtime.stdoutEventBuffer = event("The model 'gpt-9' is not supported when using Codex with a ChatGPT account")
   assert.equal(runtime.rejectedModel(), true)
-  runtime.readLog = () => event('model_not_found')
+  runtime.stdoutEventBuffer = event('model_not_found')
   assert.equal(runtime.rejectedModel(), true)
-  runtime.readLog = () => event('reasoning.effort is invalid')
+  runtime.stdoutEventBuffer = event('reasoning.effort is invalid')
   assert.equal(runtime.rejectedModel(), true)
   // Unrelated capability errors must NOT spend a second invocation and then
   // claim the answer came from "your configured model".
-  runtime.readLog = () => event('Image input is not supported for this request')
+  runtime.stdoutEventBuffer = event('Image input is not supported for this request')
   assert.equal(runtime.rejectedModel(), false)
-  runtime.readLog = () => event('web_search is not supported by this provider')
+  runtime.stdoutEventBuffer = event('web_search is not supported by this provider')
   assert.equal(runtime.rejectedModel(), false)
+})
+
+test('event metadata is parsed from stdout only: stderr JSON in the combined log does not affect Runtime methods', () => {
+  // A valid JSON line on child stderr that looks like a model-rejection event
+  // must not trigger the stale-model fallback. Before this fix, both streams
+  // were archived to the same log file and jsonEvents() parsed every line
+  // indiscriminately, so stderr could forge thread.started, model attribution,
+  // and rejection events.
+  const stderrPoison = JSON.stringify({ type: 'error', message: 'model_not_found' })
+  const path = join(mkdtempSync(join(tmpdir(), 'cso-stderr-poison-')), 'events.jsonl')
+  writeFileSync(path, `${stderrPoison}\n`)
+  const runtime = new Runtime(createState('review'), {}, { out: '/tmp/out', log: path })
+  runtime.stdoutEventBuffer = ''
+  assert.equal(runtime.rejectedModel(), false)
+  assert.ok(runtime.readLog().includes('model_not_found'))
 })
 
 test('an uppercase --continue id resumes rather than being discarded as expired', () => {

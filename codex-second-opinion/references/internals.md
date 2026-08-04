@@ -486,6 +486,18 @@ this: the log is what `jsonEvents()` parses, so the framing has to hold there.
 Byte content is still untruncated; only the interleaving granularity changes,
 from arbitrary chunk boundaries to line boundaries.
 
+Event metadata — model attribution, session id, model-rejection detection —
+is parsed from an in-memory stdout-only buffer (`stdoutEventBuffer`), not from
+the combined log file. The log file still contains both streams for diagnostics,
+but `rejectedModel`, `effectiveModel`, `lastThreadId`, `hasRecognizedEvent`,
+and `hasThreadStartedEvent` all read from the stdout buffer. This prevents a
+valid JSON line on child stderr from impersonating a `thread.started` event
+(forging a session id), a model-attribution event, or a model-rejection error
+that would trigger the stale-default fallback. The buffer is cleared at the
+start of each `execute()` call, so it naturally contains only the current
+attempt's events without needing the textual `ATTEMPT_MARKER` segmentation the
+combined log uses.
+
 Every echoed line of codex output carries a `codex> ` prefix and no line the
 wrapper writes about itself does, which is what lets a caller tell them apart
 mechanically. Position cannot: the wrapper's own `warning:`/`note:`/`hint:`
@@ -724,9 +736,9 @@ Run the fast unit suite during normal development:
 ```
 
 It uses `node:test`, runs in-process, and covers parsing, schema validation,
-state machines, safety argument construction, event segmentation, fencing, and
-filesystem-order path resolution. The mutation runner verifies that these
-tests fail when critical guards are removed.
+state machines, safety argument construction, event segmentation, fencing,
+stdout-event-stream provenance, and filesystem-order path resolution. The
+mutation runner verifies that these tests fail when critical guards are removed.
 
 Read its scope precisely: **the mutation runner mutates named guards and runs
 `tests/unit.test.mjs` alone — it never invokes the contract suite.** So a guard

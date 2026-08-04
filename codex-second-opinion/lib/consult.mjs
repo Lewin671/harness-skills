@@ -82,7 +82,7 @@ function blockFollowupRetry(state) {
 }
 
 function emitResume(state, env, runtime) {
-  const log = runtime.readLog()
+  const log = runtime.readStdoutEvents()
   let session = lastThreadId(log)
   if (state.sessionId && session.toLowerCase() !== state.sessionId) {
     if (!session && hasThreadStartedEvent(log)) {

@@ -55,6 +55,7 @@ const mutants = [
   ['an unrelated "is not supported" error is not read as a stale model', 'lib/runtime.mjs', `return UNSUPPORTED_PATTERN.test(message) && MODEL_CONTEXT_PATTERN.test(message)`, `return UNSUPPORTED_PATTERN.test(message)`],
   ['a --continue id is normalized before it is compared', 'lib/consult.mjs', `state.sessionId = value.toLowerCase()`, `state.sessionId = value`],
   ['a relative symlink target is not lexically collapsed before its own symlink components resolve', 'lib/environment.mjs', `pending = [...target.split(sep).filter(Boolean), ...pending]`, `pending = [...join(current, target).slice(parse(join(current, target)).root.length).split(sep).filter(Boolean), ...pending]`],
+  ['event metadata is parsed from stdout events only, not the combined log', 'lib/runtime.mjs', `for (const event of jsonEvents(this.readStdoutEvents())) {`, `for (const event of jsonEvents(this.readLog())) {`],
 ]
 
 function run(command, args, cwd) {

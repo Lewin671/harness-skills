@@ -166,6 +166,7 @@ export class Runtime {
     this.timedOut = false
     this.interruptedCode = null
     this.signalHandlers = new Map()
+    this.stdoutEventBuffer = ''
   }
 
   // An accessor pair rather than a plain field, so every existing assignment
@@ -266,6 +267,7 @@ export class Runtime {
           streamChildLine(line)
         }
         if (complete) appendFileSync(this.log, complete)
+        if (stream === 'stdout' && complete) this.stdoutEventBuffer += complete
         buffers.set(stream, pending)
       } catch (error) {
         archiveError = error
@@ -273,6 +275,7 @@ export class Runtime {
       }
     }
 
+    this.stdoutEventBuffer = ''
     this.timedOut = false
     this.interruptedCode = null
     this.installSignalHandlers()
@@ -325,10 +328,11 @@ export class Runtime {
     }
     // Whatever never terminated with a newline still belongs in the log, or a
     // final unterminated event would be echoed but not recorded.
-    for (const pending of buffers.values()) {
+    for (const [stream, pending] of buffers.entries()) {
       if (!pending) continue
       streamChildLine(pending)
       try { appendFileSync(this.log, `${pending}\n`) } catch { /* reported below if it also broke the stream writes */ }
+      if (stream === 'stdout') this.stdoutEventBuffer += `${pending}\n`
     }
     this.removeSignalHandlers()
     if (this.interruptedCode !== null) {
@@ -366,6 +370,10 @@ export class Runtime {
     try { return readFileSync(this.log, 'utf8') } catch { return '' }
   }
 
+  readStdoutEvents() {
+    return this.stdoutEventBuffer
+  }
+
   tailLog() {
     // ATTEMPT_MARKER is written by this script, not by codex, so echoing it
     // through streamChildLine would attach the `codex> ` prefix to a
@@ -381,7 +389,7 @@ export class Runtime {
     // item can legitimately echo a reviewed file's own error-handling text
     // (a raised "X is not supported" message, say), and that text must not
     // be mistaken for Codex rejecting the model.
-    for (const event of jsonEvents(this.readLog())) {
+    for (const event of jsonEvents(this.readStdoutEvents())) {
       if (event?.type !== 'error' && event?.type !== 'turn.failed') continue
       const messages = [event.message, event.error?.message].filter((value) => typeof value === 'string')
       if (messages.some(namesRejectedModel)) return true
@@ -435,7 +443,7 @@ export class Runtime {
           die(4)
         }
         this.state.usedFallback = true
-        const model = effectiveModel(this.readLog())
+        const model = effectiveModel(this.readStdoutEvents())
         process.stderr.write(`note: the ${this.state.resultNoun} below came from your configured model${model ? ` (${model})` : ''}, not '${this.state.model}'.\n`)
       } else {
         process.stderr.write(`error: codex ${this.state.runNoun} failed; raw output at ${this.log}\n`)
@@ -458,12 +466,12 @@ export class Runtime {
     try { logSize = statSync(this.log).size } catch {}
     if (logSize <= 0) {
       process.stderr.write(`warning: progress log ${this.log} is missing or empty; session and diagnostic details may be lost\n`)
-    } else if (!hasRecognizedEvent(this.readLog())) {
+    } else if (!hasRecognizedEvent(this.readStdoutEvents())) {
       process.stderr.write(`warning: codex's --json event stream at ${this.log} has no line this script recognizes as a JSON event.\n`)
       process.stderr.write('warning: this usually means the installed codex-cli changed its event format; model/session metadata reported below may be silently wrong -- recheck references/internals.md against the version in use.\n')
     }
     if (!this.state.model) {
-      const model = effectiveModel(this.readLog())
+      const model = effectiveModel(this.readStdoutEvents())
       if (model) process.stderr.write(`note: inherited model in effect: ${model}\n`)
       else process.stderr.write('note: the model was inherited from your codex config; the event stream did not name it, so report it as inherited rather than naming a tier\n')
     }
