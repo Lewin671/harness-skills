@@ -75,8 +75,25 @@ lifecycle, storage placement and the git-precheck guarantees in full.
 
 ## Independence Contract
 
-Keep the first pass independent. Give Codex the artifacts, facts,
-constraints, candidate options in neutral order, and evaluation criteria.
+Keep the first pass independent. Only material from these sources belongs
+in the first prompt:
+
+- **User-stated requirements** — what the user asked for, in their words.
+- **Repository content** — file paths, documentation, code the question
+  is about. Name the files; do not summarise their content through
+  Claude's interpretation.
+- **Mechanically observed facts** — the scope flag, the branch name, the
+  commit SHA, the file count. Things a script could produce.
+- **Evaluation criteria** — what a useful answer looks like, what
+  dimensions to assess.
+
+Anything Claude inferred, diagnosed, suspected, ranked, or concluded is
+not one of those sources. If it entered the prompt it would seed Codex
+and destroy the independence this skill exists to provide — even when
+disguised as a "fact" or "constraint" (e.g. "the retry path must
+preserve ordering" is a constraint only if the user said so; if Claude
+inferred it, it is Claude's analysis).
+
 Those travel in the question body in consult mode, and through
 `--context` in review mode — a plain scope flag carries the diff and
 nothing else, so a review that needs to know the intended behaviour has
@@ -99,6 +116,29 @@ branch on how interesting the disagreement is:
 3. Editing code is a separate authorization. Proceed only if the user's
    current request already asked for the fix as well as the review;
    otherwise present and ask.
+
+## Command Synopsis
+
+```
+run-codex-second-opinion review --repo DIR [SCOPE] [OPTIONS]
+run-codex-second-opinion consult --repo DIR [OPTIONS] [--] QUESTION
+run-codex-second-opinion consult --repo DIR --continue ID [OPTIONS] [--] QUESTION
+```
+
+**Review scopes** (mutually exclusive; default `--uncommitted`):
+`--uncommitted` | `--base BRANCH` | `--commit SHA` | `--custom "TEXT"`
+
+**Common options** (both modes):
+`--model MODEL --effort LEVEL` (must be a pair) | `--inherit` |
+`--allow-mcp` | `--timeout SECONDS`
+
+**Review-only:** `--context "TEXT"` (cannot combine with `--custom`) |
+`--allow-git-filters`
+
+**Consult-only:** `--continue SESSION_UUID`
+
+Flags that the user has not explicitly approved: `--allow-mcp`,
+`--allow-git-filters`. Do not add them to overcome an exit `3`.
 
 ## Usage
 

@@ -54,8 +54,11 @@ That resumability is on-disk state: Codex keeps the conversation under
 `CODEX_HOME/sessions`, so a consultation's question and answer outlive
 the run.
 This is a real discussion loop: relay each answer, gather the user's
-(or Claude's own) counterpoints, and continue until the question is
-settled or the disagreement is crisply mapped.
+counterpoints, and continue until the question is settled or the
+disagreement is crisply mapped. Each continuation requires user
+authorization — do not launch a follow-up on Claude's own initiative,
+even to settle a disagreement (see the Independence Contract in
+SKILL.md).
 
 The first answer is the **independent first pass**. Once Claude's position
 or objections enter the session, subsequent answers are **deliberation**:
@@ -119,8 +122,9 @@ parse, unlike review mode's `[P<n>]` bullets. Relay it faithfully:
    needs-checking — and verify Codex's checkable claims against the
    repo before relaying them as fact.
 3. Flag disagreements between the two models explicitly rather than
-   averaging them away, and argue them to resolution in the session
-   when a decision depends on it.
+   averaging them away. If a decision depends on resolving a
+   disagreement, present both positions and ask the user whether to
+   continue the session — do not launch a follow-up autonomously.
 4. State the question asked and the model used, so it is reproducible.
 5. Label a fresh session's first answer **independent first pass** and
    resumed-session answers **deliberation**.
