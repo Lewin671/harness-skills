@@ -207,9 +207,16 @@ real time and stays small:
   model-controlled answer holds a look-alike.
 
 `log: <path>` names the untruncated stream; tail it rather than reading
-the whole file. In a merged stream, trust only the final marker of each
-kind: markers are repeated after the model-controlled body so text in
-that body cannot forge the authoritative path, session, or result line.
+the whole file.
+
+In a merged stream, "trust the final marker of each kind" holds for
+exactly four kinds — `report:`/`answer:`, `log:`, `session:` and
+`resume:`. Those are re-emitted after the model-controlled body, so text
+in that body cannot become the last one. It does **not** hold for
+`note:`, `warning:` or `hint:`: those are written *before* the run
+starts, so a later line of any of those three came out of the model's own
+output, not this script. Read them from the head of the stream, above the
+`running:` line.
 
 A `--json` stream with no recognizable event still warns, without
 gating stdout: the report or answer stands, but treat any fallback,

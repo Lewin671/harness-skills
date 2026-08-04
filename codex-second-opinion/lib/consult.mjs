@@ -1,4 +1,3 @@
-import { rmSync } from 'node:fs'
 import { Environment } from './environment.mjs'
 import { commonOption, hasThreadStartedEvent, lastThreadId, resumeFlags, Runtime, validateModelState } from './runtime.mjs'
 import { die, flat, parseTimeout, shellQuote } from './util.mjs'
@@ -33,7 +32,14 @@ function parseConsultArgs(state, args) {
         const suffix = /^[A-Za-z0-9-]+$/.test(value) ? `, got '${flat(value)}'` : ''
         die(3, `error: --continue needs the session UUID printed by the previous run${suffix}`)
       }
-      state.sessionId = value; i += 2; continue
+      // Normalized here, once, because the UUID pattern above accepts
+      // uppercase hex while codex reports the thread id in canonical
+      // lowercase. Storing the caller's spelling made emitResume's
+      // `session !== state.sessionId` compare two spellings of the SAME
+      // session, so a perfectly good continuation started with an uppercase
+      // id was always discarded as "the session likely expired" -- exit 4 on
+      // a session that had in fact resumed correctly.
+      state.sessionId = value.toLowerCase(); i += 2; continue
     }
     if (option === '--timeout') {
       if (args[i + 1] === undefined) die(3, 'error: --timeout needs a value')
@@ -78,7 +84,7 @@ function blockFollowupRetry(state) {
 function emitResume(state, env, runtime) {
   const log = runtime.readLog()
   let session = lastThreadId(log)
-  if (state.sessionId && session !== state.sessionId) {
+  if (state.sessionId && session.toLowerCase() !== state.sessionId) {
     if (!session && hasThreadStartedEvent(log)) {
       // A thread.started event exists, so codex did report *something* --
       // this script just could not read a thread_id out of it. That is
@@ -92,7 +98,7 @@ function emitResume(state, env, runtime) {
     }
     process.stderr.write('hint: start a fresh consultation and restate the context.\n')
     runtime.tailLog()
-    rmSync(runtime.out, { force: true })
+    runtime.discardResult()
     die(4)
   }
 
@@ -111,7 +117,10 @@ function emitResume(state, env, runtime) {
   const mcp = state.allowMcp ? ' --allow-mcp' : ''
   const timeout = state.timeout !== 3000 ? ` --timeout ${state.timeout}` : ''
   if (process.env.CODEX_HOME) {
-    process.stderr.write(`note: this consultation used CODEX_HOME=${shellQuote(process.env.CODEX_HOME)}; set it the same way before replaying the line below\n`)
+    // env.codexHome, not the raw variable: the run handed codex the resolved
+    // path, so that -- not the spelling it was derived from -- is the value a
+    // replay has to reproduce to find this session again.
+    process.stderr.write(`note: this consultation used CODEX_HOME=${shellQuote(env.codexHome)}; set it the same way before replaying the line below\n`)
   }
   process.stderr.write(`resume: --continue ${session}${resumeFlags(state)}${mcp}${timeout} --repo ${shellQuote(env.cwd)}\n`)
 }

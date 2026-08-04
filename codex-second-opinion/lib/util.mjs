@@ -80,6 +80,18 @@ export function run(command, args, options = {}) {
     input: options.input,
     maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
     stdio: options.stdio,
+    // Every preflight probe -- git, `codex features list`, `codex mcp list`
+    // -- runs through here, synchronously, BEFORE Runtime's watchdog timer
+    // exists. Without a deadline of their own, any one of them hanging
+    // (an unreachable network mount under the repo, a codex install that
+    // stalls on a config read) hangs the whole wrapper forever, which
+    // contradicts SKILL.md's "It will not hang forever". The caller passes
+    // the same --timeout budget the model invocation gets, so one flag
+    // bounds the entire run rather than only its last phase. A timeout
+    // surfaces as result.error below -- i.e. status 127 -- which every
+    // caller already treats as a failure and refuses on.
+    timeout: options.timeout,
+    killSignal: 'SIGKILL',
     // Only meaningful when the caller resolved `command` to a different
     // path than the identity a symlink-dispatching or multicall target
     // expects to see itself invoked under (Environment.codexArgv0);
@@ -130,8 +142,28 @@ export function isInside(candidate, roots) {
   })
 }
 
+// Each part is length-prefixed rather than simply concatenated. Plain
+// concatenation makes the digest ambiguous whenever a part's own bytes can
+// reproduce a neighbouring part's boundary: scopeFingerprint (lib/review.mjs)
+// pushes `<path>`, a one-character kind tag, and a value, per untracked
+// entry. Two working trees holding the same two untracked symlink NAMES but
+// different targets serialize identically --
+//
+//   A: d/x -> a            d/y -> bd/yLc
+//   B: d/x -> ad/yLb       d/y -> c
+//
+// both flatten to `d/xLad/yLbd/yLc`. The path set is unchanged, so status
+// output matches too, and the digest therefore agrees across a tree that
+// genuinely changed -- from the one function whose entire job is noticing
+// exactly that. SHA-256 is not what fails here; the serialization fed to it
+// is. A NUL separator alone would not be enough either: paths cannot contain
+// NUL, but git's diff and status output (also hashed as parts) is not
+// guaranteed NUL-free.
 export function sha256(parts) {
   const hash = createHash('sha256')
-  for (const part of parts) hash.update(part)
+  for (const part of parts) {
+    hash.update(`${part.length}\0`)
+    hash.update(part)
+  }
   return hash.digest('hex')
 }

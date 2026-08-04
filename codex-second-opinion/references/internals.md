@@ -90,6 +90,21 @@ probe, or an override that did not take effect all refuse the run. `--allow-mcp`
 is the only route that accepts an unverified or reachable MCP boundary, and it
 prints the residual external-side-effect warning.
 
+That verification is **point-in-time, not continuous**, and the gap is worth
+stating plainly: the listing and the re-check run in their own short-lived
+`codex mcp list` processes, and `exec` loads its configuration separately,
+afterwards. A server enabled in the user's config inside that window carries no
+`enabled=false` override, because the override list is built from the names the
+re-check saw. Closing this structurally would need either a deny-all switch or
+a configuration snapshot shared by verification and execution, and codex-cli
+`0.146.0` offers neither: `-c mcp_servers={}` **merges** rather than replaces,
+leaving an already-enabled server enabled (measured — with one enabled server
+in the config, `codex mcp list --json -c 'mcp_servers={}'` still reports it as
+enabled), and `exec` has no flag that pins a config the probes could share.
+Per-name overrides are therefore the strongest mechanism available, and the
+residual window is disclosed rather than papered over. Recheck this if codex
+gains a real deny-all.
+
 `--strict-config` makes renamed safety keys fail instead of being silently
 ignored. Its error text cannot distinguish a key supplied by this runner from
 an unknown key in the user's config, so the failure path explains both causes.
@@ -128,7 +143,35 @@ normalizing the whole string first and closes the `link/..` placement hole.
 The check also follows the `sessions` link and all directory/symlink
 destinations through the `YYYY/MM/DD` depth Codex writes. Dangling link targets
 are checked through their nearest existing ancestor. Unreadable or
-unenumerable state is refused, not treated as absent.
+unenumerable state is refused, not treated as absent — except a vanished
+directory (`ENOENT`), which is not a destination anything can be written
+through, and which codex's own scratch turns over often enough that refusing
+on it would be intermittent rather than protective.
+
+That walk is bounded (512 component steps, and a repeat-detection set for
+cycles) and **fails closed when the bound is hit**, returning "cannot
+establish" rather than the prefix it reached. Returning the prefix was a real
+fail-open: `..` means the prefix does not descend monotonically, so a spelling
+like `/outside/` + `x/../` × 260 + `<repo>/inside` parks it on `/outside` for
+every one of the 512 steps while the components that actually enter the
+repository are still queued — the check then approved `/outside` and handed
+codex a string the kernel resolves inside the repository.
+
+`sessions/` gets the deep walk, but it is not the only thing codex writes under
+`CODEX_HOME`: a real install also carries `archived_sessions`, `cache`, `.tmp`,
+`attachments`, `automations` and a global-state file. `CODEX_HOME` itself is
+therefore enumerated two levels deep as well, so a sibling entry symlinked into
+the repository fails closed the same way `sessions/` does. The narrower
+`sessions/` checks run first, so their more specific diagnostics still win.
+
+Both storage paths are then handed to the child in their **validated** form:
+`baseEnv.CODEX_HOME` and `baseEnv.TMPDIR` carry the resolved destinations, not
+the spellings they were validated from. Leaving the original strings meant codex
+re-walked them itself at spawn time, minutes later, so retargeting a symlink
+component in that window moved its writes somewhere the placement check never
+saw. This is the same reasoning that pins `codexBin` to a dereferenced path, and
+it narrows the same TOCTOU window rather than closing it — a pathname is still
+not a handle.
 
 `resolveOnPath` (`lib/environment.mjs`, "Codex binary trust boundary" below)
 reuses this same `resolvePathSemantics` walk for exactly the same reason: a
@@ -143,6 +186,18 @@ the real index is never used as their writable target. `GIT_NO_LAZY_FETCH=1`
 prevents promised-object fetches on Git versions that support it. Git older
 than 2.42 may still fetch a missing object, which remains a disclosed version
 bound rather than an overclaimed guarantee.
+
+Every preflight probe — git, `codex features list`, `codex mcp list` — runs
+synchronously, before `Runtime`'s watchdog timer exists, and so carries a
+deadline of its own: `--timeout` or 600 seconds, **whichever is larger**. Without
+one, "it will not hang forever" was only ever true of the model invocation; a
+git command stalling on an unreachable network mount hung the wrapper
+indefinitely. The 600-second floor matters because `--timeout` also means
+"abort a hung review", and a deliberately tiny value (the contract suite uses
+`--timeout 1` to exercise the watchdog) would otherwise kill every probe before
+it could answer and turn a fast-failing review into an environment error. A
+probe that exceeds its deadline is killed and reported as a failed probe, which
+every caller already refuses on.
 
 ## Codex binary trust boundary
 
@@ -317,6 +372,36 @@ anywhere else.
    for a *native* multicall target without claiming to help the packaging
    codex actually ships as today.
 
+9. Absolute turned out not to mean safe. Every point above filters `PATH` down
+   to its *absolute* entries — but the dev-tooling case point 5 and the
+   bootstrap discussion both name as the motivation prepends an entry that is
+   normally absolute **and inside the project**: direnv's `PATH_add bin`
+   exports `/repo/bin`, `layout node` exports `/repo/node_modules/.bin`. Such
+   an entry passed the absolute-only filter untouched and could supply this
+   run's `git`, its `codex`, or the `node` an env-shebang launcher resolves —
+   out of the repository under review, before any sandbox exists. Verified
+   empirically: a `/repo/bin/node` reached via an absolute repo-internal `PATH`
+   entry executed. The motivating example was, in other words, the one case the
+   filter did not cover.
+
+   It is closed in both halves of the entry point. The `#!/bin/sh` bootstrap
+   drops entries resolving under its own launch directory and under an explicit
+   `--repo` argument, comparing physical locations (`cd` + `pwd -P`, both
+   built-ins, so nothing has to be found on `PATH` to run the filter) rather
+   than spellings, so a symlink into the repository is caught too. An entry it
+   cannot enter at all is dropped silently — `cd` needs the same execute bit a
+   `PATH` search does, so it could never have supplied a binary — while a
+   repository-internal drop prints a `note:`. `Environment.excludeFromPath`
+   then repeats this on the Node side against `cwd` (before the first `git`
+   runs, since `git` is what discovers the rest of the boundary) and again
+   against the full `repoRoots` once sibling worktrees and the git storage
+   directories are known.
+
+   A filtered `PATH` can legitimately end up with no `node` on it. Reaching the
+   bootstrap's `exec` in that state produced the shell's own diagnostic and
+   status `127` — undocumented here, and unhelpful. It now refuses with exit
+   `3` and a hint naming the cause.
+
 There is no cryptographic or otherwise reliable way for this script to
 prove a resolved binary is genuinely Codex, and dereferencing once here
 does not fully close the underlying TOCTOU class either: `physicalPath`
@@ -342,19 +427,55 @@ resolved path is not where they expect Codex to live.
 
 Codex is started with `child_process.spawn` using `shell: false` and an argument
 array. `detached: true` gives the child a separate POSIX process group so a
-timeout or cancellation can terminate Codex and every command it spawned.
+timeout or cancellation can terminate Codex and the commands it spawned that
+remain in that group (see the boundary note at the end of this section).
 
 Stdout and stderr are archived to the JSONL log as they arrive. A line-buffered
 view is streamed to stderr and capped at 180 characters per line; the log keeps
 the untruncated bytes. The prompt or question never appears in the `running:`
 diagnostic.
 
+Each stream gets its **own** line buffer. A single shared one let a stderr
+chunk arriving between two halves of a split stdout event splice itself into
+the middle of that JSON line, so the line stopped parsing and the event
+vanished — silently, since `hasRecognizedEvent` is satisfied by any other
+well-formed event in the log. The events lost that way are exactly the ones
+this script draws conclusions from: model rejection, session id, model
+attribution.
+
+A failed log write is handled rather than thrown. `appendFileSync` throwing
+from inside a stream callback escapes both the awaited promise and the entry
+point's `try`/`catch`, so Node printed a raw stack trace and exited `1` — a
+code this skill does not document — while the *detached* Codex process group
+kept running with nothing left to reap it. The write failure is now recorded,
+the group is killed, the partial result discarded, and the run ends as an
+ordinary exit `4`. The entry point additionally installs
+`uncaughtException`/`unhandledRejection` handlers that kill the active group
+and exit `3`, so no future callback bug can reintroduce the orphan.
+
+Exit `4` and exit `5` remove the result file *and its private directory*;
+`createArtifacts` likewise cleans up any directory it made before a later step
+failed. The log directory is deliberately kept — the log is the artifact those
+exits tell the caller to read.
+
 The timeout uses a Node timer. At the deadline it sends `TERM` to the process
 group and follows with `KILL` after a one-second grace period. A dedicated
 boolean records that the timer fired, so a Codex process that independently
 exits `124` remains an ordinary Codex failure rather than a fabricated timeout.
-`INT`, `TERM`, and `HUP` are forwarded to the same group and preserve wrapper
-exit codes `130`, `143`, and `129`.
+`INT`, `TERM`, and `HUP` are each forwarded to the same group **as themselves**
+— the signal that arrived is the signal the group receives, not a rewritten
+`TERM` — and preserve wrapper exit codes `130`, `143`, and `129`. All three
+pairs are measured by the contract suite, the received signal as well as the
+exit code; for a long time only `TERM`/`143` was, and the implementation
+underneath quietly rewrote the other two to `TERM`, which an exit-code-only
+assertion cannot see.
+
+The group is the boundary, and it is the whole claim: a descendant that leaves
+it — anything calling `setsid`, or daemonizing — is out of reach of a
+negative-pid kill and survives both the watchdog and cancellation. Portable
+containment of a full process *tree* would need cgroups, a subreaper, or job
+objects, none of which this wrapper has. "Codex and the descendants that stay
+in its process group" is the guarantee; "every command it spawned" is not.
 
 Each attempt is separated in the log. Model and thread metadata are parsed as
 JSON only from the final attempt, preventing a rejected first attempt from
@@ -417,6 +538,20 @@ keeps the fingerprint's shape independent of a setting this script does not
 control, matching what the fingerprint paragraph below already assumes.
 `--commit` diffs two historical blobs — no working tree is read, so the
 probe does not apply.
+
+This too is a check, not an enforcement, and the distinction matters: the probe
+runs immediately before the guarded `status`/`diff`, but nothing freezes the
+repository in between. A `.gitattributes` edit or a `filter.<name>.*` config
+change landing in that window — another agent, a build step, a branch
+checkout — means the guarded command can still run a filter outside every
+sandbox. Git has no switch that suppresses clean/process filters while
+preserving the working-tree comparison this code needs: overriding a driver to
+a stub changes the canonicalized content Git compares, so the emptiness
+precheck and the drift fingerprint would both start answering a different
+question, and sandboxing the wrapper's own prechecks needs a sandbox it does
+not portably have. The post-run re-probe (below) can notice that the result
+became unmeasurable; it cannot un-run a filter. `--commit` is the only scope
+that avoids this outright, because it never compares working-tree content.
 
 `probeFilterRisk` never dies itself — it returns `{ error, applicable }` —
 because it is called from two places with different correct responses to
@@ -511,7 +646,17 @@ Run the fast unit suite during normal development:
 It uses `node:test`, runs in-process, and covers parsing, schema validation,
 state machines, safety argument construction, event segmentation, fencing, and
 filesystem-order path resolution. The mutation runner verifies that these
-tests fail when critical guards are removed:
+tests fail when critical guards are removed.
+
+Read its scope precisely: **the mutation runner mutates named guards and runs
+`tests/unit.test.mjs` alone — it never invokes the contract suite.** So a guard
+whose only coverage is black-box (the `CODEX_HOME` placement checks, the
+`TMPDIR` relocation, the throwaway `GIT_INDEX_FILE` copy, the clean/process
+filter guard, the bootstrap's own `PATH` filtering, signal forwarding) has
+regression coverage but *no mutation evidence*. Those live in
+`tests/run-contract-tests`, and when one is changed the honest check is to
+break it by hand and confirm that suite goes red — the mutation total says
+nothing about them.
 
 Defense-in-depth can mask a mutant: adding a broader fail-closed guard
 *after* an existing, narrower one (as `resolveCodexBin`'s round-3 fix did)

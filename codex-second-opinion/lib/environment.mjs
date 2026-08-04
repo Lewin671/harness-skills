@@ -27,6 +27,11 @@ import {
   run,
 } from './util.mjs'
 
+// No single git or codex preflight probe should ever legitimately need this
+// long; a probe that does has hung. Large enough that a cold `git status` on
+// a very large repository still finishes well inside it.
+const PREFLIGHT_FLOOR_SECONDS = 600
+
 const GIT_ENV_KEYS = [
   'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
   'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE',
@@ -61,6 +66,18 @@ function resolveLinkChain(input) {
 // collapses `link/..` before observing that `link` is a symlink, which is not
 // how open(2) walks it and can approve a CODEX_HOME that actually lands in the
 // repository.
+//
+// Returns null when the walk cannot be completed -- a step-budget overrun or a
+// symlink cycle -- rather than the prefix it got to. Returning the prefix was a
+// fail-OPEN: `..` means `current` does not descend monotonically, so a path
+// like `/outside/` + `x/../` * 260 + `<repo>/pwned` keeps the prefix parked on
+// `/outside` for every one of the 512 steps while the components that actually
+// descend into the repository are still queued in `pending`. The caller then
+// checked `/outside` -- outside the repo, approved -- and handed codex the
+// original string, which the kernel resolves to a destination inside the very
+// repository being reviewed. Verified empirically with a 530-component path.
+// Every caller now treats null as "cannot establish where this lands", which is
+// the same answer they already give for an unreadable path.
 function resolvePathSemantics(input) {
   const absolute = isAbsolute(input) ? input : resolve(input)
   let pending = absolute.slice(parse(absolute).root.length).split(sep).filter(Boolean)
@@ -73,7 +90,7 @@ function resolvePathSemantics(input) {
     const candidate = join(current, part)
     if (isSymlink(candidate)) {
       const key = `${candidate}\0${pending.join(sep)}`
-      if (seen.has(key)) return lexicallyResolve(candidate)
+      if (seen.has(key)) return null
       seen.add(key)
       const target = readlinkSync(candidate)
       if (isAbsolute(target)) {
@@ -93,7 +110,7 @@ function resolvePathSemantics(input) {
       current = candidate
     }
   }
-  return current
+  return pending.length ? null : current
 }
 
 function collectSessionDestinations(root, maxDepth = 3) {
@@ -104,6 +121,13 @@ function collectSessionDestinations(root, maxDepth = 3) {
     try {
       entries = readdirSync(logical, { withFileTypes: true })
     } catch (error) {
+      // A directory that is no longer there is not a destination codex can
+      // write through, so it is nothing to refuse over -- and codex's own
+      // scratch below CODEX_HOME turns over while this walk runs, which
+      // would otherwise make the refusal intermittent. Every other failure
+      // (unreadable, not a directory, I/O error) still refuses: those mean
+      // the destination exists and could not be inspected.
+      if (error.code === 'ENOENT') return
       throw new Error(`could not enumerate ${logical}: ${error.code || error.message}`)
     }
     for (const entry of entries) {
@@ -149,7 +173,14 @@ function resolveOnPath(name, pathValue) {
     // alone would collapse `link/..` as a string first and probe the wrong
     // directory, both for a match this function should have found and for
     // one it should not have.
-    const candidate = join(resolvePathSemantics(dir), name)
+    // A null here means the entry could not be walked at all (step-budget
+    // overrun or symlink cycle). Skip it rather than probing a guessed
+    // location: an entry whose destination cannot be established is exactly
+    // as untrustworthy as a relative one, and the loop simply moves on to
+    // the next entry the same way.
+    const resolvedDir = resolvePathSemantics(dir)
+    if (!resolvedDir) continue
+    const candidate = join(resolvedDir, name)
     try {
       accessSync(candidate, constants.X_OK)
       if (statSync(candidate).isFile()) return candidate
@@ -211,6 +242,16 @@ export class Environment {
       encoding: options.encoding,
       stdio: options.stdio,
       argv0: options.argv0,
+      // Preflight probes run before Runtime's watchdog exists, so they carry
+      // a deadline of their own; see run() in lib/util.mjs. It is --timeout
+      // or PREFLIGHT_FLOOR_SECONDS, whichever is LARGER, rather than
+      // --timeout alone: --timeout means "abort a hung review", and a caller
+      // passing a deliberately tiny one (the contract suite uses `--timeout
+      // 1` to exercise the watchdog) would otherwise have every git and codex
+      // probe killed before it could answer, turning a fast-failing review
+      // into an environment error. The floor is well above any legitimate
+      // probe while still bounding the unbounded case.
+      timeout: Math.max(this.state.timeout || 0, PREFLIGHT_FLOOR_SECONDS) * 1000,
     })
   }
 
@@ -229,6 +270,17 @@ export class Environment {
     if (hasLineBreak(this.cwd)) {
       die(3, 'error: the repository path contains a line break, which would forge marker lines in this script\'s output')
     }
+    // Before the first child is spawned -- git included, since git is what
+    // resolveRepositoryRoots below needs in order to learn the rest of the
+    // boundary. Filtering PATH to absolute entries only ever removed
+    // *relative* ones, but the dev-tooling case internals.md names as the
+    // motivation (direnv, asdf, mise) prepends an ABSOLUTE entry inside the
+    // project, e.g. `PATH_add bin` exporting `/repo/bin`. Such an entry
+    // survived the absolute-only filter untouched and could supply this run's
+    // `git`, its `codex`, or the `node` an env-shebang launcher looks up --
+    // all from the repository under review. Verified empirically: a
+    // `/repo/bin/node` on an absolute repo-internal PATH entry ran.
+    this.excludeFromPath([this.cwd])
 
     const workTree = this.git(['rev-parse', '--is-inside-work-tree'])
     if (workTree.status !== 0 || workTree.stdout.trim() !== 'true') {
@@ -236,11 +288,36 @@ export class Environment {
     }
 
     this.resolveRepositoryRoots()
+    // Again, now that the full boundary is known: sibling worktrees and the
+    // git storage directories were not yet discoverable at the first call.
+    this.excludeFromPath(this.repoRoots)
     this.resolveScratchAndCodexHome()
     this.baseEnv.GIT_NO_LAZY_FETCH = '1'
     this.resolveCodexBin()
     this.verifyFeatures()
     this.verifyMcp()
+  }
+
+  // Drops every PATH entry that lands inside one of `roots`, comparing on the
+  // entry's resolved destination rather than its spelling, so a symlink
+  // pointing into the repository is caught as readily as a literal repo path.
+  // An entry whose destination cannot be established at all is dropped too:
+  // this is a trust filter, and an unresolvable candidate has not earned it.
+  // Idempotent, so calling it again once more roots are known only ever
+  // narrows the set further.
+  excludeFromPath(roots) {
+    if (!roots.length) return
+    const kept = []
+    const dropped = []
+    for (const dir of absolutePathEntries(this.baseEnv.PATH)) {
+      const resolved = resolvePathSemantics(dir)
+      const destination = resolved ? physicalPath(resolved) || resolved : null
+      if (destination && !isInside(destination, roots)) kept.push(dir)
+      else dropped.push(dir)
+    }
+    if (!dropped.length) return
+    this.baseEnv.PATH = kept.join(delimiter)
+    process.stderr.write(`note: dropped ${dropped.length} PATH entry/entries that resolve inside the repository under review\n`)
   }
 
   resolveCodexBin() {
@@ -325,15 +402,30 @@ export class Environment {
       if (path) this.repoRoots.push(path)
     }
 
+    // Fail closed, exactly like the worktree enumeration above. Silently
+    // skipping a probe that failed -- or a path that would not resolve --
+    // left the git storage directories out of repoRoots while
+    // internals.md still promised they were part of the protected boundary,
+    // so a CODEX_HOME inside repository metadata could be approved on the
+    // strength of a list that was never complete. A partial boundary is not
+    // evidence that a path lies outside it.
     for (const args of [
       ['rev-parse', '--absolute-git-dir'],
       ['rev-parse', '--path-format=absolute', '--git-common-dir'],
     ]) {
       const result = this.git(args)
-      if (result.status === 0 && result.stdout.trim()) {
-        const path = physicalPath(result.stdout.trim())
-        if (path) this.repoRoots.push(path)
+      if (result.status !== 0 || !result.stdout.trim()) {
+        die(3,
+          `error: could not resolve the repository's git storage directory (\`git ${args.join(' ')}\`).`,
+          'hint: every git storage path has to be known before a scratch or CODEX_HOME path can be called outside the repository; refusing rather than checking a partial boundary.')
       }
+      const path = physicalPath(result.stdout.trim())
+      if (!path) {
+        die(3,
+          `error: the repository's git storage directory (${flat(result.stdout.trim())}) could not be resolved to a real path.`,
+          'hint: every git storage path has to be known before a scratch or CODEX_HOME path can be called outside the repository; refusing rather than checking a partial boundary.')
+      }
+      this.repoRoots.push(path)
     }
     this.repoRoots = [...new Set(this.repoRoots)]
   }
@@ -358,6 +450,12 @@ export class Environment {
 
     const homeInput = isAbsolute(codexHome) ? codexHome : join(this.cwd, codexHome)
     const absoluteHome = resolvePathSemantics(homeInput)
+    if (!absoluteHome) {
+      die(3,
+        `error: CODEX_HOME (${flat(codexHome)}) could not be walked to a destination (too many path components, or a symlink cycle).`,
+        'error: where codex would write cannot be established, so whether it lands inside the repository cannot be decided; refusing to start.',
+        'hint: point CODEX_HOME at a plain absolute path outside the repository.')
+    }
     const homeAncestor = nearestExistingAncestor(absoluteHome)
     const destinations = [absoluteHome]
     if (homeAncestor) destinations.push(homeAncestor)
@@ -401,6 +499,31 @@ export class Environment {
       if (ancestor) destinations.push(ancestor)
     }
 
+    // Deliberately AFTER the sessions block above, not before it. The dated
+    // session tree is the most likely place for a bad placement and has its
+    // own precise diagnostics ("that sessions directory could not be
+    // entered"); running this broader sweep first meant an unreadable
+    // sessions/ was reported by the generic CODEX_HOME message instead, which
+    // says less about what to fix. Narrow guard first, broad guard second.
+    //
+    // The sweep exists because sessions/ is not the only thing codex writes
+    // under CODEX_HOME: an install here also carries archived_sessions,
+    // cache, .tmp, attachments, automations, and a global-state JSON. Any one
+    // of those being a symlink into the repository would have passed a check
+    // that enumerated sessions/ alone, while internals.md claimed the
+    // placement check covered where codex writes. Two levels catches a
+    // redirected top-level directory and its immediate children without
+    // walking the whole (potentially very large) session archive.
+    if (isDirectory(absoluteHome)) {
+      try {
+        destinations.push(...collectSessionDestinations(absoluteHome, 2))
+      } catch (error) {
+        die(3,
+          `error: could not enumerate CODEX_HOME (${flat(error.message)}), so where codex would write cannot be established`,
+          `hint: make ${absoluteHome} readable, or point CODEX_HOME elsewhere, outside the repository.`)
+      }
+    }
+
     if (destinations.some((path) => path && isInside(path, this.repoRoots))) {
       die(3,
         `error: CODEX_HOME (${flat(codexHome)}) resolves inside ${flat(this.worktreeRoot)} or its git storage.`,
@@ -425,6 +548,21 @@ export class Environment {
       die(3, `error: cannot create the throwaway index or scratch files under ${flat(scratch)}`)
     }
     this.scratch = scratch
+
+    // Hand the child the paths that were actually validated, not the
+    // spellings they were validated from. Everything above resolves
+    // CODEX_HOME and TMPDIR through their symlinks and then checks the
+    // destination -- but leaving the original, still-indirect strings in
+    // baseEnv meant codex re-walked them itself at spawn time, which can be
+    // minutes later. Retargeting a symlink component in that window moved
+    // codex's writes somewhere the placement check never saw. This is the
+    // same reasoning that makes resolveCodexBin pin a dereferenced binary
+    // path instead of a symlink, applied to the two storage paths; it
+    // narrows the same TOCTOU window rather than claiming to close it,
+    // since a pathname is still not a handle.
+    this.baseEnv.CODEX_HOME = absoluteHome
+    this.baseEnv.TMPDIR = scratch
+    this.codexHome = absoluteHome
   }
 
   verifyFeatures() {
@@ -539,16 +677,24 @@ export class Environment {
   }
 
   createArtifacts(mode) {
+    // Tracked so a failure partway through does not leave the directories it
+    // already made behind: this runs before codex is reached, an exit here is
+    // a `3`, and SKILL.md says a `3` leaves no artifacts.
+    let outDir = null
+    let logDir = null
     try {
-      const outDir = mkdtempSync(join(this.scratch, `codex-${mode}-`))
-      const logDir = mkdtempSync(join(this.scratch, `codex-${mode}-log-`))
+      outDir = mkdtempSync(join(this.scratch, `codex-${mode}-`))
+      logDir = mkdtempSync(join(this.scratch, `codex-${mode}-log-`))
       const out = join(outDir, 'result.md')
       const log = join(logDir, 'events.jsonl')
       closeSync(openSync(out, 'wx', 0o600))
       closeSync(openSync(log, 'wx', 0o600))
       process.stderr.write(`log: ${log}\n`)
-      return { out, log }
+      return { out, outDir, log, logDir }
     } catch {
+      for (const directory of [outDir, logDir]) {
+        if (directory) rmSync(directory, { recursive: true, force: true })
+      }
       die(3, `error: cannot create scratch files under ${this.scratch}`)
     }
   }

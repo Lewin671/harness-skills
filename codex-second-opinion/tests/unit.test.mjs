@@ -9,7 +9,7 @@ import { enabledMcpServers, McpShapeError, parseMcpListing } from '../lib/mcp.mj
 import { consultInternals } from '../lib/consult.mjs'
 import { reviewInternals } from '../lib/review.mjs'
 import { ATTEMPT_MARKER, createState, effectiveModel, hasRecognizedEvent, hasThreadStartedEvent, lastThreadId, resumeFlags, Runtime, validateModelState } from '../lib/runtime.mjs'
-import { absolutePathEntries, assertSupportedPlatform, ExitError, flat, hasLineBreak, isInside, lexicallyResolve, parseTimeout, physicalPath, shellQuote } from '../lib/util.mjs'
+import { absolutePathEntries, assertSupportedPlatform, ExitError, flat, hasLineBreak, isInside, lexicallyResolve, parseTimeout, physicalPath, sha256, shellQuote } from '../lib/util.mjs'
 
 function throwsExit(code, fn, messagePattern) {
   // Some checks are backed by a later, broader guard (e.g. an
@@ -578,4 +578,111 @@ test('filesystem-order resolution also applies inside a RELATIVE symlink target,
 
 test('lexical resolution treats glob characters as ordinary path bytes', () => {
   assert.equal(lexicallyResolve('/tmp/*/../x'), '/tmp/x')
+})
+
+test('path resolution that exhausts its step budget returns null instead of the prefix it reached', () => {
+  // `..` means the prefix does NOT descend monotonically, so a budget overrun
+  // is not "we got most of the way there". 260 no-op `x/..` pairs park the
+  // prefix on /outside for all 512 steps while the components that actually
+  // descend into the repository are still queued -- returning the prefix
+  // reported "/outside", the caller approved it as outside the repo, and codex
+  // was handed the original string, which the kernel resolves INTO the repo.
+  const filler = Array.from({ length: 260 }, () => 'x/..').join('/')
+  const overrun = `/outside/${filler}/repo/inside`
+  assert.equal(environmentInternals.resolvePathSemantics(overrun), null)
+  // The prefix that a fail-open would have returned is a real, resolvable
+  // path, so "null" here is the refusal and not merely an unresolvable input.
+  assert.equal(environmentInternals.resolvePathSemantics('/outside'), '/outside')
+})
+
+test('a symlink cycle refuses instead of resolving to a link in the cycle', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cso-cycle-'))
+  try {
+    symlinkSync(join(root, 'b'), join(root, 'a'))
+    symlinkSync(join(root, 'a'), join(root, 'b'))
+    assert.equal(environmentInternals.resolvePathSemantics(join(root, 'a')), null)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('an unresolvable PATH entry is skipped rather than probed at a guessed location', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cso-path-budget-'))
+  try {
+    const bin = join(root, 'bin')
+    mkdirSync(bin, { recursive: true })
+    const tool = join(bin, 'fake-budget-tool')
+    writeFileSync(tool, '#!/bin/sh\n')
+    chmodSync(tool, 0o755)
+    const filler = Array.from({ length: 260 }, () => 'x/..').join('/')
+    // Same directory, reached two ways: directly, and through a spelling
+    // whose component count overruns the walk. The first must match, the
+    // second must not -- a fail-open would make them indistinguishable.
+    assert.equal(environmentInternals.resolveOnPath('fake-budget-tool', bin), join(physicalPath(bin), 'fake-budget-tool'))
+    assert.equal(environmentInternals.resolveOnPath('fake-budget-tool', `${bin}/${filler}`), null)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('every spawned child sees a PATH with no entry inside the repository under review', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cso-repo-path-'))
+  try {
+    const repo = join(root, 'repo')
+    const repoBin = join(repo, 'bin')
+    const outside = join(root, 'outside')
+    mkdirSync(repoBin, { recursive: true })
+    mkdirSync(outside, { recursive: true })
+    // A symlink from outside the repo INTO it: dropped on where it lands,
+    // not on how it is spelled, or the filter would be trivially evaded.
+    const sneaky = join(root, 'looks-outside')
+    symlinkSync(repoBin, sneaky)
+
+    const environment = new Environment(createState('review'))
+    environment.baseEnv.PATH = [outside, repoBin, sneaky].join(delimiter)
+    environment.excludeFromPath([physicalPath(repo)])
+
+    const kept = environment.baseEnv.PATH.split(delimiter)
+    assert.deepEqual(kept, [outside])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('hashed parts are framed, so one part cannot impersonate its neighbour', () => {
+  // The concrete collision: two working trees holding the same two untracked
+  // symlink NAMES but different targets. Unframed, both flatten to the same
+  // byte string, so the digest agrees across a tree that genuinely changed.
+  const treeA = ['d/x', 'L', 'a', 'd/y', 'L', 'bd/yLc']
+  const treeB = ['d/x', 'L', 'ad/yLb', 'd/y', 'L', 'c']
+  assert.equal(treeA.join(''), treeB.join(''))
+  assert.notEqual(sha256(treeA), sha256(treeB))
+})
+
+test('a rejected model is told apart from an unrelated "is not supported" error', () => {
+  const state = createState('review')
+  const runtime = new Runtime(state, {}, { out: '/dev/null', log: '/dev/null' })
+  const event = (message) => `${ATTEMPT_MARKER}\n${JSON.stringify({ type: 'error', message })}\n`
+
+  runtime.readLog = () => event("The model 'gpt-9' is not supported when using Codex with a ChatGPT account")
+  assert.equal(runtime.rejectedModel(), true)
+  runtime.readLog = () => event('model_not_found')
+  assert.equal(runtime.rejectedModel(), true)
+  runtime.readLog = () => event('reasoning.effort is invalid')
+  assert.equal(runtime.rejectedModel(), true)
+  // Unrelated capability errors must NOT spend a second invocation and then
+  // claim the answer came from "your configured model".
+  runtime.readLog = () => event('Image input is not supported for this request')
+  assert.equal(runtime.rejectedModel(), false)
+  runtime.readLog = () => event('web_search is not supported by this provider')
+  assert.equal(runtime.rejectedModel(), false)
+})
+
+test('an uppercase --continue id resumes rather than being discarded as expired', () => {
+  const state = createState('consult')
+  consultInternals.parseConsultArgs(state, ['--continue', '019FCD25-3B7D-7090-872F-1E1828C8E502', '--', 'q'])
+  // Codex reports the thread id in canonical lowercase. Storing the caller's
+  // spelling made emitResume compare two spellings of the SAME session and
+  // discard a perfectly good continuation with exit 4.
+  assert.equal(state.sessionId, '019fcd25-3b7d-7090-872f-1e1828c8e502')
 })

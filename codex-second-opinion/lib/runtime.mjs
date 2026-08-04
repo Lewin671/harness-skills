@@ -4,7 +4,22 @@ import { die, flat, hasLineBreak, shellQuote } from './util.mjs'
 
 export const ATTEMPT_MARKER = '=== codex-second-opinion attempt boundary ==='
 
-const REJECTED_MODEL_PATTERN = /reasoning\.effort|is not supported|unsupported_value|unknown model|model_not_found/i
+// Phrases that only ever describe a rejected model or reasoning tier.
+const REJECTED_MODEL_PATTERN = /reasoning[._]effort|unsupported_value|unknown model|model_not_found/i
+// "is not supported" on its own is not one of them: it is ordinary English
+// that a top-level error about an unsupported request feature, provider
+// capability, or account tier can carry just as easily. Treating any of those
+// as a stale pinned model spent a second full invocation and then attributed
+// the answer to "your configured model" in a note that was simply wrong. It
+// now only counts when the same message also names what this script would be
+// falling back over.
+const MODEL_CONTEXT_PATTERN = /\bmodels?\b|reasoning[._]effort|\beffort\b/i
+const UNSUPPORTED_PATTERN = /is not supported|not supported when/i
+
+function namesRejectedModel(message) {
+  if (REJECTED_MODEL_PATTERN.test(message)) return true
+  return UNSUPPORTED_PATTERN.test(message) && MODEL_CONTEXT_PATTERN.test(message)
+}
 
 export function createState(mode) {
   const envModel = process.env.CODEX_SECOND_OPINION_MODEL || ''
@@ -110,16 +125,42 @@ export function hasThreadStartedEvent(log) {
   return jsonEvents(log).some((event) => event?.type === 'thread.started')
 }
 
+// The codex child of whichever Runtime currently has one running. Module
+// scope rather than an instance field because the entry point's
+// uncaughtException/unhandledRejection net has no reference to the Runtime,
+// and a detached process group with nobody left to signal it is precisely
+// what that net exists to prevent.
+let activeChild = null
+
+export function terminateActiveChild(signal) {
+  if (!activeChild?.pid) return
+  try { process.kill(-activeChild.pid, signal) } catch {
+    try { activeChild.kill(signal) } catch {}
+  }
+}
+
 export class Runtime {
   constructor(state, environment, artifacts) {
     this.state = state
     this.environment = environment
     this.out = artifacts.out
+    this.outDir = artifacts.outDir
     this.log = artifacts.log
     this.currentChild = null
     this.timedOut = false
     this.interruptedCode = null
     this.signalHandlers = new Map()
+  }
+
+  // An accessor pair rather than a plain field, so every existing assignment
+  // site keeps the module-level `activeChild` in step without any of them
+  // having to remember to. Missing one would be silent: the process group
+  // would simply survive a crash.
+  get currentChild() { return this.child }
+
+  set currentChild(child) {
+    this.child = child
+    activeChild = child
   }
 
   safetyArgs(model, effort) {
@@ -141,7 +182,13 @@ export class Runtime {
     for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
       const handler = () => {
         this.interruptedCode = code
-        this.terminateChild('SIGTERM')
+        // Forward the signal that actually arrived, rather than rewriting all
+        // three to TERM. A child can and does distinguish them -- INT is the
+        // interactive interrupt, HUP says the terminal went away, TERM is a
+        // plain request to stop -- and codex may well run different cleanup
+        // for each. Sending TERM for an INT also made internals.md's word
+        // "forwarded" untrue. KILL still follows if the group ignores it.
+        this.terminateChild(signal)
         setTimeout(() => this.terminateChild('SIGKILL'), 2000).unref()
         process.exitCode = code
       }
@@ -166,16 +213,39 @@ export class Runtime {
   async execute(command, args, diagnostic) {
     process.stderr.write(`${flat(diagnostic)}\n`)
     appendFileSync(this.log, `${ATTEMPT_MARKER}\n`)
-    let pending = ''
-    const archive = (chunk) => {
-      appendFileSync(this.log, chunk)
-      pending += chunk
-      for (;;) {
-        const newline = pending.indexOf('\n')
-        if (newline < 0) break
-        const line = pending.slice(0, newline).replace(/\r$/, '')
-        pending = pending.slice(newline + 1)
-        process.stderr.write(`${line.length > 180 ? `${line.slice(0, 180)}...` : line}\n`)
+    // One buffer PER STREAM, not one shared by both. stdout carries the JSONL
+    // event stream; stderr carries codex's own free text. Sharing a single
+    // buffer meant a stderr chunk arriving between two halves of a split
+    // stdout event spliced itself into the middle of that JSON line, so the
+    // line no longer parsed and the event vanished -- silently, because
+    // hasRecognizedEvent is satisfied by any other well-formed event in the
+    // log. The events lost that way are exactly the ones this script draws
+    // conclusions from: model rejection, session id, model attribution.
+    const buffers = new Map([['stdout', ''], ['stderr', '']])
+    // A failed write here used to throw straight out of an EventEmitter
+    // callback -- outside the promise below and outside the entry point's
+    // try/catch -- so Node printed a raw stack trace, exited 1 (a code this
+    // skill does not document), and left the DETACHED codex process group
+    // running with nothing left to reap it. Reproduced by pointing the log at
+    // an unwritable path. It is now recorded, the child is torn down, and the
+    // run ends through the ordinary refusal path.
+    let archiveError = null
+    const archive = (stream) => (chunk) => {
+      if (archiveError) return
+      try {
+        appendFileSync(this.log, chunk)
+        let pending = buffers.get(stream) + chunk
+        for (;;) {
+          const newline = pending.indexOf('\n')
+          if (newline < 0) break
+          const line = pending.slice(0, newline).replace(/\r$/, '')
+          pending = pending.slice(newline + 1)
+          process.stderr.write(`${line.length > 180 ? `${line.slice(0, 180)}...` : line}\n`)
+        }
+        buffers.set(stream, pending)
+      } catch (error) {
+        archiveError = error
+        this.terminateChild('SIGTERM')
       }
     }
 
@@ -203,8 +273,8 @@ export class Runtime {
     this.currentChild = child
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
-    child.stdout.on('data', archive)
-    child.stderr.on('data', archive)
+    child.stdout.on('data', archive('stdout'))
+    child.stderr.on('data', archive('stderr'))
 
     let timeoutTimer = null
     let killTimer = null
@@ -229,15 +299,39 @@ export class Runtime {
       // returning even though the direct child has already closed.
       if (this.timedOut || this.interruptedCode !== null) this.terminateChild('SIGKILL')
     }
-    if (pending) process.stderr.write(`${pending.length > 180 ? `${pending.slice(0, 180)}...` : pending}\n`)
+    for (const pending of buffers.values()) {
+      if (pending) process.stderr.write(`${pending.length > 180 ? `${pending.slice(0, 180)}...` : pending}\n`)
+    }
     this.removeSignalHandlers()
     if (this.interruptedCode !== null) {
       this.terminateChild('SIGKILL')
       this.currentChild = null
       die(this.interruptedCode)
     }
+    if (archiveError) {
+      // Before currentChild is cleared, so the group-wide kill still has a
+      // pid to aim at: the direct child closing its pipes does not mean the
+      // commands codex spawned are gone.
+      this.terminateChild('SIGKILL')
+      this.currentChild = null
+      this.discardResult()
+      die(4,
+        `error: could not write the progress log at ${this.log} (${flat(archiveError.message)}).`,
+        `error: the ${this.state.runNoun} was stopped, because a log this script cannot append to can no longer be trusted to hold the attempt it reports on.`,
+        'hint: check free space and that TMPDIR still exists, then rerun.')
+    }
     this.currentChild = null
     return result
+  }
+
+  // Removes the result file AND the private directory holding it. Exit 4 and
+  // exit 5 both mean no usable result exists, and leaving the mkdtemp
+  // directory behind littered TMPDIR with an empty `codex-<mode>-*` per
+  // failed run. The log directory is deliberately not touched: the log is the
+  // artifact those exits tell the caller to go read.
+  discardResult() {
+    rmSync(this.out, { force: true })
+    if (this.outDir) rmSync(this.outDir, { recursive: true, force: true })
   }
 
   readLog() {
@@ -257,7 +351,7 @@ export class Runtime {
     for (const event of jsonEvents(this.readLog())) {
       if (event?.type !== 'error' && event?.type !== 'turn.failed') continue
       const messages = [event.message, event.error?.message].filter((value) => typeof value === 'string')
-      if (messages.some((message) => REJECTED_MODEL_PATTERN.test(message))) return true
+      if (messages.some(namesRejectedModel)) return true
     }
     return false
   }
@@ -272,7 +366,7 @@ export class Runtime {
     process.stderr.write(`error: ${this.state.runNoun} exceeded ${this.state.timeout}s and was terminated\n`)
     process.stderr.write(`hint: raise --timeout, or check the log for where it stalled: ${this.log}\n`)
     this.tailLog()
-    rmSync(this.out, { force: true })
+    this.discardResult()
     die(5)
   }
 
@@ -286,7 +380,7 @@ export class Runtime {
       if (rejected && blockRetry()) {
         this.strictConfigHint()
         this.tailLog()
-        rmSync(this.out, { force: true })
+        this.discardResult()
         die(4)
       }
       if (this.state.pinned && rejected) {
@@ -304,7 +398,7 @@ export class Runtime {
           process.stderr.write(`error: codex ${this.state.runNoun} failed on both the pinned defaults and your config; raw output at ${this.log}\n`)
           this.strictConfigHint()
           this.tailLog()
-          rmSync(this.out, { force: true })
+          this.discardResult()
           die(4)
         }
         this.state.usedFallback = true
@@ -314,7 +408,7 @@ export class Runtime {
         process.stderr.write(`error: codex ${this.state.runNoun} failed; raw output at ${this.log}\n`)
         this.strictConfigHint()
         this.tailLog()
-        rmSync(this.out, { force: true })
+        this.discardResult()
         die(4)
       }
     }
@@ -324,7 +418,7 @@ export class Runtime {
     if (!output.trim()) {
       process.stderr.write(`error: codex produced no ${this.state.resultNoun}; raw output at ${this.log}\n`)
       this.tailLog()
-      rmSync(this.out, { force: true })
+      this.discardResult()
       die(4)
     }
     let logSize = -1

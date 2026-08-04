@@ -20,15 +20,74 @@ set -euf
 # glob character (`/opt/*`, say) would otherwise expand to every matching
 # directory -- entries the literal PATH value never actually named --
 # before this loop ever gets to filter them. Verified empirically.
+# Absolute is necessary but NOT sufficient. The dev-tooling case this
+# bootstrap exists for -- direnv, asdf, mise -- prepends an entry that is
+# usually absolute and *inside the project*: `PATH_add bin` exports
+# `/repo/bin`, and `layout node` exports `/repo/node_modules/.bin`. Such an
+# entry sailed through an absolute-only filter and could then supply the very
+# `node` this script is about to exec, from the repository under review,
+# before a line of the project's own JavaScript runs. Verified empirically: a
+# `/repo/bin/node` on an absolute repo-internal PATH entry was executed.
+#
+# So entries under the launch directory are dropped too, as are entries under
+# an explicit `--repo` target when one is given -- an agent may run this from
+# elsewhere and point it at the repository. Each candidate is compared by its
+# PHYSICAL location (`cd` + `pwd -P` in a subshell), so a symlink into the
+# repository is caught as readily as a literal path. Both are shell built-ins:
+# nothing has to be found on PATH to run this filter, which is the whole
+# reason the filter can run before PATH is trusted.
+launch_dir=$(pwd -P)
+
+repo_dir=
+prev=
+for arg do
+  case $prev in
+    --repo) repo_dir=$arg ;;
+  esac
+  prev=$arg
+done
+if [ -n "$repo_dir" ]; then
+  repo_dir=$(cd -- "$repo_dir" 2>/dev/null && pwd -P) || repo_dir=
+fi
+
+inside_repo() {
+  case $1 in
+    "$launch_dir"|"$launch_dir"/*) return 0 ;;
+  esac
+  if [ -n "$repo_dir" ]; then
+    case $1 in
+      "$repo_dir"|"$repo_dir"/*) return 0 ;;
+    esac
+  fi
+  return 1
+}
+
 safe_path=
+dropped=0
 old_ifs=$IFS
 IFS=:
 for dir in $PATH; do
   case $dir in
-    /*) safe_path=${safe_path:+$safe_path:}$dir ;;
+    /*) ;;
+    *) continue ;;
   esac
+  # An entry that cannot be entered is dropped silently: `cd` needs the same
+  # execute bit a PATH search does, so such an entry could never have supplied
+  # a binary anyway, and a stale `~/bin` on PATH is too ordinary to warn about.
+  # Only a repository-internal entry -- the thing this filter exists to catch
+  # -- is worth a line on stderr.
+  real_dir=$(cd -- "$dir" 2>/dev/null && pwd -P) || continue
+  if inside_repo "$real_dir"; then
+    dropped=$((dropped + 1))
+    continue
+  fi
+  safe_path=${safe_path:+$safe_path:}$dir
 done
 IFS=$old_ifs
+
+if [ "$dropped" -gt 0 ]; then
+  echo "note: dropped $dropped PATH entry/entries that resolve inside the repository under review" >&2
+fi
 
 # An empty PATH is not "search nothing": POSIX command lookup treats an
 # empty PATH (and an empty component within one) as the current directory,
@@ -43,6 +102,17 @@ if [ -z "$safe_path" ]; then
 fi
 PATH=$safe_path
 export PATH
+
+# Without this, a filtered PATH that simply has no `node` on it reaches the
+# `exec` below and dies with the shell's own diagnostic and status 127 -- a
+# code this skill does not document, from a message that does not say what to
+# do about it. `command -v` is a built-in, so it needs nothing on PATH itself.
+if ! command -v node >/dev/null 2>&1; then
+  echo "error: no 'node' found on the PATH that remains after repository-internal entries were removed." >&2
+  echo "error: this script needs Node.js 18 or newer to run." >&2
+  echo "hint: install Node.js, or put the absolute directory containing it on PATH from outside the repository under review." >&2
+  exit 3
+fi
 
 case $0 in
   */*) script_dir=${0%/*} ;;

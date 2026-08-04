@@ -86,7 +86,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # Five former Bash-internal path helper assertions now live in the fast
   # node:test suite. This contract suite stays black-box and counts only
   # behavior observable through the executable entry point.
-  expected=275
+  expected=282
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -266,6 +266,17 @@ if [ -n "${FAKE_SLEEP:-}" ]; then
       sleep "$(( FAKE_SLEEP * 2 ))" >/dev/null 2>&1 &
       printf '%s' "$!" > "$FAKE_CHILD_PID_FILE"
     fi
+  fi
+  # Records WHICH signal actually arrived, not merely that the run ended.
+  # The wrapper used to rewrite INT and HUP into TERM before forwarding them,
+  # so a child could never tell an interactive interrupt from a lost terminal
+  # from a plain stop request -- and the suite, which only ever measured the
+  # resulting exit code, could not tell either.
+  if [ -n "${FAKE_SIGNAL_LOG:-}" ]; then
+    for s in TERM INT HUP; do
+      # shellcheck disable=SC2064
+      trap "printf '%s' $s > '$FAKE_SIGNAL_LOG'; exit 0" "$s"
+    done
   fi
   [ -n "${FAKE_IGNORE_TERM:-}" ] && trap '' TERM
   sleep "$FAKE_SLEEP"
@@ -517,6 +528,67 @@ if [ "$status" = 0 ] && grep -q '^Usage: run-codex-second-opinion' "$globpath_ou
 else
   bad "wrapper bootstrap: a glob character in a PATH entry is not expanded" \
     "exit $status, output: $(cat "$globpath_out" 2>/dev/null)"
+fi
+
+# Absolute is not the same as safe. The dev-tool hooks named as the reason
+# the bootstrap exists (direnv, asdf, mise) prepend an entry that is normally
+# ABSOLUTE and inside the project -- `PATH_add bin` exports `/repo/bin`. Such
+# an entry passed an absolute-only filter untouched and could then supply the
+# very `node` the bootstrap is about to exec, out of the repository under
+# review, before a line of this project's JavaScript runs. The two tests above
+# only ever covered relative entries, so this hole was wide open beneath them.
+absrepo="${workdir}/absrepo"
+mkdir -p "${absrepo}/bin"
+git init -q "$absrepo" 2>/dev/null || true
+cat > "${absrepo}/bin/node" <<'FAKE_NODE4'
+#!/bin/sh
+echo "FAKE NODE RAN FROM AN ABSOLUTE REPO-INTERNAL PATH ENTRY" >&2
+exit 1
+FAKE_NODE4
+chmod +x "${absrepo}/bin/node"
+absrepo_out="${workdir}/absrepo.out"
+(
+  cd "$absrepo" &&
+    PATH="${absrepo}/bin:${PATH}" "$wrapper" --help > "$absrepo_out" 2>&1
+)
+status=$?
+if [ "$status" = 0 ] && grep -q '^Usage: run-codex-second-opinion' "$absrepo_out" &&
+   ! grep -q 'FAKE NODE RAN' "$absrepo_out"; then
+  ok "wrapper bootstrap: an absolute PATH entry inside the repo cannot substitute node"
+else
+  bad "wrapper bootstrap: an absolute PATH entry inside the repo cannot substitute node" \
+    "exit $status, output: $(cat "$absrepo_out" 2>/dev/null)"
+fi
+
+# Same hole, reached the other way: launched from OUTSIDE the repository, with
+# --repo naming it. The launch directory alone is not the boundary.
+absrepo_arg_out="${workdir}/absrepo-arg.out"
+(
+  cd "$workdir" &&
+    PATH="${absrepo}/bin:${PATH}" "$wrapper" review --repo "$absrepo" --help > "$absrepo_arg_out" 2>&1
+)
+status=$?
+if [ "$status" = 0 ] && ! grep -q 'FAKE NODE RAN' "$absrepo_arg_out"; then
+  ok "wrapper bootstrap: --repo's own bin directory cannot substitute node either"
+else
+  bad "wrapper bootstrap: --repo's own bin directory cannot substitute node either" \
+    "exit $status, output: $(cat "$absrepo_arg_out" 2>/dev/null)"
+fi
+
+# Filtering can legitimately leave a PATH with no node on it at all. Reaching
+# `exec` in that state produced the shell's own diagnostic and status 127 -- a
+# code this skill does not document and a message that says nothing about what
+# to do. It must be the documented environment-error code instead.
+nonode_dir="${workdir}/nonode"
+mkdir -p "$nonode_dir"
+nonode_out="${workdir}/nonode.out"
+PATH="$nonode_dir" "$wrapper" --help > "$nonode_out" 2>&1
+status=$?
+if [ "$status" = 3 ] && grep -q "no 'node' found" "$nonode_out"; then
+  ok "wrapper bootstrap: a PATH with no node is exit 3, not the shell's 127"
+else
+  bad "wrapper bootstrap: a PATH with no node is exit 3, not the shell's 127" \
+    "exit $status, output: $(cat "$nonode_out" 2>/dev/null)"
 fi
 
 # The single timeout variable must reach both modes.
@@ -2451,6 +2523,40 @@ else
 fi
 rm -rf "$home_in_repo"
 
+# sessions/ is not the only thing codex writes under CODEX_HOME: a real
+# install also carries archived_sessions, cache, .tmp, attachments and a
+# global-state file. The placement check enumerated sessions/ ALONE, so a
+# sibling entry symlinked into the repository sailed through while the
+# documentation claimed the check covered where codex writes.
+nonsession_home="${workdir}/nonsession-home"
+rm -rf "$nonsession_home"
+mkdir -p "${nonsession_home}/sessions"
+ln -s "$dirty" "${nonsession_home}/archived_sessions"
+stderr="${workdir}/nonsession-home.err"
+argv_log="${workdir}/argv-nonsession-home.log"
+rm -f "$argv_log"
+CODEX_HOME="$nonsession_home" FAKE_ARGV_LOG="$argv_log" \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 3 ] && grep -q 'CODEX_HOME.*resolves inside' "$stderr" &&
+   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a non-session CODEX_HOME entry pointing into the repo fails closed"
+else
+  bad "review: a non-session CODEX_HOME entry pointing into the repo fails closed" \
+    "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
+rm -rf "$nonsession_home"
+
+# A CODEX_HOME entirely outside the repository, with the same shape, must
+# still RUN -- otherwise the check above would pass for the wrong reason and
+# every ordinary codex install would be refused.
+ok_home="${workdir}/nonsession-ok-home"
+rm -rf "$ok_home"
+mkdir -p "${ok_home}/sessions" "${ok_home}/archived_sessions"
+CODEX_HOME="$ok_home" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+check_exit "review: an ordinary CODEX_HOME with sibling directories still runs" 0 "$?"
+rm -rf "$ok_home"
+
 # Git storage that lives OUTSIDE the checkout. `--separate-git-dir` puts the
 # real .git elsewhere and leaves a gitfile behind, so no worktree ROOT
 # contains it.
@@ -3109,6 +3215,42 @@ else
   bad "review: TERM is forwarded into codex's process group and reaps it" \
     "started=$sig_seen exit=$sig_status child=${sig_child:-none} child_alive=$sig_child_alive survivors=$(pgrep -f "$fake" | tr '\n' ' ')"
 fi
+
+# INT and HUP: the exit code AND the signal the child actually saw. Only the
+# TERM/143 path was ever measured, while internals.md asserted all three --
+# and the implementation rewrote every one of them to TERM, so "forwarded"
+# was untrue for two of the three and nothing could observe it.
+for pair in "INT 130" "HUP 129"; do
+  sig_name="${pair% *}"
+  sig_want="${pair#* }"
+  sig_log="${workdir}/sig-received-${sig_name}"
+  sig_ready="${workdir}/sig-ready-${sig_name}"
+  rm -f "$sig_log" "$sig_ready"
+  FAKE_SLEEP=60 FAKE_CHILD_PID_FILE="$sig_ready" FAKE_SIGNAL_LOG="$sig_log" \
+    "$wrapper" review --repo "$dirty" --timeout 600 >/dev/null 2>&1 &
+  sig_pid=$!
+  sig_seen=0
+  for _ in $(seq 1 60); do
+    if [ -s "$sig_ready" ]; then sig_seen=1; break; fi
+    sleep 0.4
+  done
+  kill -"$sig_name" "$sig_pid" 2>/dev/null
+  wait "$sig_pid"; sig_status=$?
+  sleep 1
+  sig_got="$(cat "$sig_log" 2>/dev/null || true)"
+  sig_orphan="$(cat "$sig_ready" 2>/dev/null || true)"
+  sig_orphan_alive=0
+  if [ -n "$sig_orphan" ] && kill -0 "$sig_orphan" 2>/dev/null; then
+    sig_orphan_alive=1; kill -KILL "$sig_orphan" 2>/dev/null || true
+  fi
+  if [ "$sig_seen" = 1 ] && [ "$sig_status" = "$sig_want" ] &&
+     [ "$sig_got" = "$sig_name" ] && [ "$sig_orphan_alive" = 0 ]; then
+    ok "review: $sig_name reaches codex as $sig_name and exits $sig_want"
+  else
+    bad "review: $sig_name reaches codex as $sig_name and exits $sig_want" \
+      "started=$sig_seen exit=$sig_status received=${sig_got:-none} orphan_alive=$sig_orphan_alive"
+  fi
+done
 
 # =======================================================================
 # consult mode
