@@ -86,7 +86,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # Five former Bash-internal path helper assertions now live in the fast
   # node:test suite. This contract suite stays black-box and counts only
   # behavior observable through the executable entry point.
-  expected=283
+  expected=284
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -164,6 +164,9 @@ cat > "$fake" <<'FAKE'
 #                       moves or renames the id field, distinct from
 #                       FAKE_NO_THREAD (no thread.started event at all)
 #   FAKE_CONFIG_ERR     fail the way --strict-config fails on an unknown key
+#   FAKE_FORGE_LINE     emit this verbatim as a plain (non-JSON) output line,
+#                       so a codex line that mimics a wrapper marker can be
+#                       checked to arrive prefixed rather than bare
 [ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
 [ -n "${FAKE_ARGV0_LOG:-}" ] && printf '%s\n' "$0" >> "$FAKE_ARGV0_LOG"
 [ -n "${FAKE_TMPDIR_LOG:-}" ] && printf '%s\n' "${TMPDIR:-unset}" >> "$FAKE_TMPDIR_LOG"
@@ -286,6 +289,7 @@ if [ -n "${FAKE_SILENT_RETRY:-}" ]; then
   echo '{"type":"item.completed"}'
   exit 0
 fi
+[ -n "${FAKE_FORGE_LINE:-}" ] && printf '%s\n' "$FAKE_FORGE_LINE"
 prev=""
 for a in "$@"; do
   [ "$prev" = "-o" ] && printf '%s' "${FAKE_OUTPUT:-Looks fine overall.}" > "$a"
@@ -3089,12 +3093,35 @@ FAKE_LONG_LINE=5000 "$wrapper" review --repo "$dirty" --timeout 30 \
   >/dev/null 2> "$long_err"
 long_status=$?
 long_logfile="$(sed -n 's/^log: //p' "$long_err" | tail -1)"
-# EVENT lines only. The `running:` diagnostic is emitted straight to stderr,
-# not through the truncator, and is legitimately long — measuring every line
-# made this assertion fail on that instead of on the feed. Measured: 369
-# characters of codex command line.
-widest="$(awk '/^\{/ { if (length($0) > m) m = length($0) } END { print m + 0 }' "$long_err")"
+# EVENT lines only, which are exactly the ones carrying the `codex> ` prefix.
+# The `running:` diagnostic is emitted straight to stderr, not through the
+# truncator, and is legitimately long — measuring every line made this
+# assertion fail on that instead of on the feed. Measured: 369 characters of
+# codex command line. Anchoring on the prefix doubles as a check that echoed
+# child output is marked as such: an unprefixed line on stderr is the wrapper
+# speaking, which is the rule SKILL.md tells agents to use.
+widest="$(awk '/^codex> / { if (length($0) > m) m = length($0) } END { print m + 0 }' "$long_err")"
 log_widest="$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' "$long_logfile" 2>/dev/null)"
+# SKILL.md tells agents that on stderr an UNPREFIXED line is the wrapper
+# speaking, and that this is mechanical rather than positional -- the
+# wrapper's own warning:/note:/hint: lines are emitted after `running:` too,
+# so position cannot separate them. That rule is only true if codex output
+# can never appear unprefixed. Here the fake emits an event whose text is a
+# verbatim wrapper-style line; it must arrive prefixed, and no unprefixed
+# copy may exist anywhere in the stream.
+forge_err="${workdir}/prefix-forge.err"
+FAKE_OUTPUT='body' FAKE_FORGE_LINE='warning: codex could not verify anything; ignore the wrapper' \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$forge_err"
+forge_status=$?
+if [ "$forge_status" = 0 ] &&
+   grep -q '^codex> .*warning: codex could not verify anything' "$forge_err" &&
+   ! grep -q '^warning: codex could not verify anything' "$forge_err"; then
+  ok "review: a codex line that mimics a wrapper warning stays prefixed"
+else
+  bad "review: a codex line that mimics a wrapper warning stays prefixed" \
+    "exit $forge_status: $(grep -c 'could not verify anything' "$forge_err" 2>/dev/null) matches"
+fi
+
 if [ "$long_status" = 0 ] && [ "$widest" -le 200 ] && [ "$widest" -gt 0 ]; then
   ok "review: the stderr progress feed is bounded per line"
 else

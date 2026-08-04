@@ -527,8 +527,12 @@ export class Environment {
       }
       const inside = [...new Set(sweep.filter((path) => path && isInside(path, this.repoRoots)))]
       if (inside.length) {
-        process.stderr.write(`warning: ${inside.length} path(s) under CODEX_HOME resolve inside ${flat(this.worktreeRoot)}, e.g. ${flat(inside[0])}\n`)
-        process.stderr.write('warning: codex only reads some of what lives there (skills, prompts) but writes others (caches, archived sessions); if a written one is redirected into the repo, this run could write the tree it is reading\n')
+        process.stderr.write(`warning: ${inside.length} path(s) under CODEX_HOME resolve inside ${flat(this.worktreeRoot)}:\n`)
+        // Every path, not one example: the caller has to decide per entry
+        // whether codex writes it, and cannot do that from a sample.
+        for (const path of inside) process.stderr.write(`warning:   ${flat(path)}\n`)
+        process.stderr.write('warning: codex READS some of what lives under CODEX_HOME (skills, prompts) and WRITES others (sessions, archived_sessions, caches, .tmp).\n')
+        process.stderr.write('hint: if every path listed above is a read-only kind, this run is fine as-is. If any is one codex writes, stop, point CODEX_HOME outside the repository, and rerun -- otherwise this run may write the tree it is reading.\n')
       }
     }
 

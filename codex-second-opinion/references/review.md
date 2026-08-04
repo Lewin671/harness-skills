@@ -92,8 +92,22 @@ Full review comments:
 Anchor on the `- [P<n>]` bullets, not on the heading above them — it
 varies with the number of findings ("Review comment:" for one, "Full
 review comments:" for several). Priority runs `P0` (most severe: a
-release blocker or critical failure) down to `P3`. Zero findings reads
-as a plain sentence with no bullets at all, not an empty list.
+release blocker or critical failure) down to `P3`.
+
+**No bullets is not, by itself, a clean review.** The wrapper accepts any
+non-empty result, so a genuine zero-finding report and a response
+mangled by model or CLI-format drift look identical to a parser that
+only counts bullets — and turning the second into "Codex found nothing"
+is the same false all-clear that exit-code gating produces, which is why
+this skill exists. Decide it on the prose, not the absence of structure:
+
+- No bullets **and** the text affirmatively says there is nothing to
+  report → zero findings. Say so.
+- No bullets and the text does not say that → **unparseable**. Relay it
+  verbatim, say the expected `[P<n>]` structure was missing, and do not
+  characterise it as clean or as a pass.
+
+Either way, never report a verdict the output does not actually state.
 
 ## Reporting Duties
 

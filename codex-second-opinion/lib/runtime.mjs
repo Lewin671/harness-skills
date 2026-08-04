@@ -4,6 +4,22 @@ import { die, flat, hasLineBreak, shellQuote } from './util.mjs'
 
 export const ATTEMPT_MARKER = '=== codex-second-opinion attempt boundary ==='
 
+// Every line of codex-controlled text this script echoes to stderr carries
+// this prefix; no line this script writes about itself ever does. Positional
+// rules cannot separate the two -- the streamed event feed is interleaved
+// with the wrapper's own `warning:`/`note:`/`hint:` lines throughout the run
+// (a stale-model fallback warning, an event-schema warning, a drift warning
+// and a timeout hint are all emitted after `running:`), and a codex event can
+// carry text that looks exactly like any of them. Prefixing the echoed side
+// makes the distinction mechanical instead: on stderr, an unprefixed line is
+// the wrapper speaking.
+export const CHILD_LINE_PREFIX = 'codex> '
+
+function streamChildLine(line) {
+  const text = line.length > 180 ? `${line.slice(0, 180)}...` : line
+  process.stderr.write(`${CHILD_LINE_PREFIX}${text}\n`)
+}
+
 // Phrases that only ever describe a rejected model or reasoning tier.
 const REJECTED_MODEL_PATTERN = /reasoning[._]effort|unsupported_value|unknown model|model_not_found/i
 // "is not supported" on its own is not one of them: it is ordinary English
@@ -240,7 +256,7 @@ export class Runtime {
           if (newline < 0) break
           const line = pending.slice(0, newline).replace(/\r$/, '')
           pending = pending.slice(newline + 1)
-          process.stderr.write(`${line.length > 180 ? `${line.slice(0, 180)}...` : line}\n`)
+          streamChildLine(line)
         }
         buffers.set(stream, pending)
       } catch (error) {
@@ -300,7 +316,7 @@ export class Runtime {
       if (this.timedOut || this.interruptedCode !== null) this.terminateChild('SIGKILL')
     }
     for (const pending of buffers.values()) {
-      if (pending) process.stderr.write(`${pending.length > 180 ? `${pending.slice(0, 180)}...` : pending}\n`)
+      if (pending) streamChildLine(pending)
     }
     this.removeSignalHandlers()
     if (this.interruptedCode !== null) {
@@ -340,7 +356,7 @@ export class Runtime {
 
   tailLog() {
     const lines = this.readLog().split(/\r?\n/).slice(-21).filter((line) => line !== '')
-    for (const line of lines) process.stderr.write(`${line.length > 180 ? `${line.slice(0, 180)}...` : line}\n`)
+    for (const line of lines) streamChildLine(line)
   }
 
   rejectedModel() {

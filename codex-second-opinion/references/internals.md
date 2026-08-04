@@ -10,6 +10,7 @@ Codex changes its feature, MCP, config, or JSONL interfaces.
 - [Repository and storage checks](#repository-and-storage-checks)
 - [Process lifecycle](#process-lifecycle)
 - [Review mode](#review-mode)
+- [Model policy](#model-policy)
 - [Consult mode](#consult-mode)
 - [Tests](#tests)
 
@@ -507,9 +508,37 @@ attribution, the inherited-model note, session resumability) should be
 treated as unconfirmed until this doc is rechecked against the installed
 `codex-cli` version.
 
+## Model policy
+
+Model and effort are a closed three-way choice, validated before anything is
+spawned: no flags (the pinned defaults), an explicit `--model M --effort L`
+pair, or `--inherit`. `--model` without `--effort` and `--effort` without
+`--model` are both refused, because naming either turns off the stale-default
+fallback and the pinned half of the pair is not a tier every model accepts.
+Each flag may appear at most once — repeating one would make the effective
+setting depend on argument order — and `--inherit` combines with neither.
+
+`CODEX_SECOND_OPINION_MODEL` and `CODEX_SECOND_OPINION_EFFORT` replace the
+pinned pair wholesale, for every run in that environment. They must be set
+**together or not at all**: setting one half pairs a caller's value with this
+script's other half, which is exactly the combination the `--model`/`--effort`
+rules exist to refuse, so a half-set environment refuses the run. When a
+fallback fires on a pair that came from these variables, the warning says so
+explicitly rather than calling the defaults stale — they are not this script's
+defaults.
+
 A pinned default rejected as unsupported retries once with inherited Codex
 settings. Explicit pairs never retry. A consult follow-up never retries because
 the rejected question may already have entered the persisted session.
+
+Detecting "the model was rejected" reads only top-level `error`/`turn.failed`
+events, and requires either a phrase that can only describe a model or effort
+(`model_not_found`, `unsupported_value`, `unknown model`, `reasoning.effort`)
+or an `is not supported` message that *also* names a model or effort. Bare
+`is not supported` is ordinary English an unrelated capability error carries
+just as easily; treating it as a stale model spent a second full invocation and
+then attributed the answer to "your configured model" in a note that was simply
+wrong.
 
 ## Review mode
 
