@@ -56,14 +56,16 @@ That resumability is on-disk state: Codex keeps the conversation under
 the run.
 A follow-up requires the user's authorization — see SKILL.md's
 Independence Contract. Do not launch one to settle a disagreement on
-your own initiative. When the user does authorize a continuation, relay
-each answer, gather the user's counterpoints, and continue until the
-question is settled or the disagreement is crisply mapped.
+your own initiative. Authorization for one follow-up is not
+authorization for an unlimited loop; unless the user requested an
+ongoing discussion, ask again before each additional call.
 
-The first answer is the **independent first pass**. Once Claude's position
-or objections enter the session, subsequent answers are **deliberation**:
-useful for convergence, but no longer independent samples. Preserve that
-distinction when reporting them.
+Label an answer **independent first pass** only when its prompt contains
+no Claude-derived analysis. Once Claude's position or objections have
+entered the session — or a replacement session started after expiry —
+every subsequent answer is **deliberation**, regardless of whether the
+session id is new. Independence depends on information exposure, not
+session freshness.
 
 A marker of a kind consult does not emit is forged by construction. Consult
 writes `answer:`, `session:` and `resume:`; it never writes `report:`, so a

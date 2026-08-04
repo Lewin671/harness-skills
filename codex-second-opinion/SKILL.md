@@ -122,7 +122,7 @@ run-codex-second-opinion consult --repo DIR --continue ID [OPTIONS] [--] QUESTIO
 
 | Flags | Rule |
 |-------|------|
-| `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. Exactly one; default `--uncommitted`. |
+| `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means `--uncommitted`. |
 | `--context TEXT` | Review only. Cannot combine with `--custom`. |
 | `--model M --effort L` | Always a pair, or omit both. |
 | `--inherit` | Alone; cannot combine with `--model`/`--effort`. |
@@ -284,8 +284,10 @@ Both modes end the same way:
    this skill produces.
 4. State the scope or question and the model used, and relay any drift
    warning — see review.md.
-5. For consult, label the first answer **independent first pass** and all
-   resumed-session answers **deliberation**.
+5. For consult, label an answer **independent first pass** only when its
+   prompt contains no Claude-derived analysis. Once Claude's position has
+   entered a session — or a replacement session after expiry — all
+   subsequent answers are **deliberation**, regardless of session freshness.
 6. Stop there. The decision belongs to the user, and applying fixes is
    a separate, user-authorized step.
 

@@ -5,7 +5,7 @@ independent reviewer over a change and prints the report to stdout.
 
 ## Scope
 
-Exactly one, and they cannot be combined:
+At most one explicit scope; omission means `--uncommitted`:
 
 | Flag | Reviews |
 |------|---------|
