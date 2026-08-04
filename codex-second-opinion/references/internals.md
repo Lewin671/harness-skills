@@ -157,12 +157,22 @@ every one of the 512 steps while the components that actually enter the
 repository are still queued — the check then approved `/outside` and handed
 codex a string the kernel resolves inside the repository.
 
-`sessions/` gets the deep walk, but it is not the only thing codex writes under
-`CODEX_HOME`: a real install also carries `archived_sessions`, `cache`, `.tmp`,
-`attachments`, `automations` and a global-state file. `CODEX_HOME` itself is
-therefore enumerated two levels deep as well, so a sibling entry symlinked into
-the repository fails closed the same way `sessions/` does. The narrower
-`sessions/` checks run first, so their more specific diagnostics still win.
+`sessions/` gets the deep walk and a hard refusal, because codex demonstrably
+writes there on every run. It is not the only thing it writes under
+`CODEX_HOME` — a real install also carries `archived_sessions`, `cache`,
+`.tmp`, `attachments` and `automations` — so `CODEX_HOME` is additionally swept
+two levels deep and any entry resolving inside the repository is **named in a
+warning**, not refused.
+
+The asymmetry is deliberate and was corrected after a measured false positive.
+`CODEX_HOME` also holds directories codex only *reads* — `skills/`,
+`prompts/` — and pointing those at something inside a repository is completely
+ordinary: this machine has `~/.codex/skills/obsidian-authoring` linked into
+this very repository, and refusing on the whole subtree made every review of it
+impossible. This script cannot tell which entries codex writes and which it
+reads, so it refuses only what it can prove (`sessions/`) and discloses the
+rest. Anything stronger would either block a normal setup or require a
+name-by-name list of codex's internals that would silently rot.
 
 Both storage paths are then handed to the child in their **validated** form:
 `baseEnv.CODEX_HOME` and `baseEnv.TMPDIR` carry the resolved destinations, not

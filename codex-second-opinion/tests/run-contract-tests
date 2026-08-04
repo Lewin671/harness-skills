@@ -86,7 +86,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # Five former Bash-internal path helper assertions now live in the fast
   # node:test suite. This contract suite stays black-box and counts only
   # behavior observable through the executable entry point.
-  expected=282
+  expected=283
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -2538,23 +2538,42 @@ rm -f "$argv_log"
 CODEX_HOME="$nonsession_home" FAKE_ARGV_LOG="$argv_log" \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
 status=$?
-if [ "$status" = 3 ] && grep -q 'CODEX_HOME.*resolves inside' "$stderr" &&
-   ! grep -q '^exec review' "$argv_log" 2>/dev/null; then
-  ok "review: a non-session CODEX_HOME entry pointing into the repo fails closed"
+if [ "$status" = 0 ] && grep -q 'under CODEX_HOME resolve inside' "$stderr" &&
+   grep -q '^exec review' "$argv_log" 2>/dev/null; then
+  ok "review: a non-session CODEX_HOME entry pointing into the repo is disclosed"
 else
-  bad "review: a non-session CODEX_HOME entry pointing into the repo fails closed" \
+  bad "review: a non-session CODEX_HOME entry pointing into the repo is disclosed" \
     "exit $status: $(tr '\n' '|' < "$stderr")"
 fi
 rm -rf "$nonsession_home"
 
+# ...and is a WARNING, not a refusal, precisely because linking a READ-ONLY
+# codex directory to something inside a repository is ordinary. Refusing here
+# made every review of this very repo impossible: ~/.codex/skills holds links
+# into it. sessions/ stays a refusal; this must not.
+skills_home="${workdir}/skills-home"
+rm -rf "$skills_home"
+mkdir -p "${skills_home}/sessions" "${skills_home}/skills"
+ln -s "$dirty" "${skills_home}/skills/linked-skill"
+CODEX_HOME="$skills_home" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
+check_exit "review: a linked skill directory under CODEX_HOME does not block the run" 0 "$?"
+rm -rf "$skills_home"
+
 # A CODEX_HOME entirely outside the repository, with the same shape, must
-# still RUN -- otherwise the check above would pass for the wrong reason and
-# every ordinary codex install would be refused.
+# still run AND stay quiet -- otherwise the disclosure above would be noise
+# rather than a signal.
 ok_home="${workdir}/nonsession-ok-home"
 rm -rf "$ok_home"
 mkdir -p "${ok_home}/sessions" "${ok_home}/archived_sessions"
-CODEX_HOME="$ok_home" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2>&1
-check_exit "review: an ordinary CODEX_HOME with sibling directories still runs" 0 "$?"
+stderr="${workdir}/nonsession-ok.err"
+CODEX_HOME="$ok_home" "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
+status=$?
+if [ "$status" = 0 ] && ! grep -q 'under CODEX_HOME resolve inside' "$stderr"; then
+  ok "review: an ordinary CODEX_HOME with sibling directories runs without the warning"
+else
+  bad "review: an ordinary CODEX_HOME with sibling directories runs without the warning" \
+    "exit $status: $(tr '\n' '|' < "$stderr")"
+fi
 rm -rf "$ok_home"
 
 # Git storage that lives OUTSIDE the checkout. `--separate-git-dir` puts the

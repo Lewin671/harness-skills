@@ -499,36 +499,37 @@ export class Environment {
       if (ancestor) destinations.push(ancestor)
     }
 
-    // Deliberately AFTER the sessions block above, not before it. The dated
-    // session tree is the most likely place for a bad placement and has its
-    // own precise diagnostics ("that sessions directory could not be
-    // entered"); running this broader sweep first meant an unreadable
-    // sessions/ was reported by the generic CODEX_HOME message instead, which
-    // says less about what to fix. Narrow guard first, broad guard second.
-    //
-    // The sweep exists because sessions/ is not the only thing codex writes
-    // under CODEX_HOME: an install here also carries archived_sessions,
-    // cache, .tmp, attachments, automations, and a global-state JSON. Any one
-    // of those being a symlink into the repository would have passed a check
-    // that enumerated sessions/ alone, while internals.md claimed the
-    // placement check covered where codex writes. Two levels catches a
-    // redirected top-level directory and its immediate children without
-    // walking the whole (potentially very large) session archive.
-    if (isDirectory(absoluteHome)) {
-      try {
-        destinations.push(...collectSessionDestinations(absoluteHome, 2))
-      } catch (error) {
-        die(3,
-          `error: could not enumerate CODEX_HOME (${flat(error.message)}), so where codex would write cannot be established`,
-          `hint: make ${absoluteHome} readable, or point CODEX_HOME elsewhere, outside the repository.`)
-      }
-    }
-
     if (destinations.some((path) => path && isInside(path, this.repoRoots))) {
       die(3,
         `error: CODEX_HOME (${flat(codexHome)}) resolves inside ${flat(this.worktreeRoot)} or its git storage.`,
         `error: codex writes every session under CODEX_HOME/sessions, so this ${this.state.runNoun} would write the repository it is reading; refusing to start.`,
         'hint: point CODEX_HOME outside the repository for this run.')
+    }
+
+    // sessions/ is a refusal because codex demonstrably writes there on every
+    // single run. The rest of CODEX_HOME is a WARNING, and the difference is
+    // deliberate: an install also carries archived_sessions, cache, .tmp,
+    // attachments and automations, which codex does write -- but it equally
+    // carries skills/ and prompts/, which it only READS, and linking those to
+    // a directory inside a repository is a completely ordinary thing to do.
+    // Measured: this machine has ~/.codex/skills/obsidian-authoring pointing
+    // into this very repository, and refusing on the whole subtree made every
+    // review of it impossible. Since this script cannot tell which of those
+    // entries codex writes, it reports what it found and lets the caller
+    // judge, rather than either refusing a normal setup or staying silent
+    // about a genuinely redirected state directory.
+    if (isDirectory(absoluteHome)) {
+      let sweep = []
+      try {
+        sweep = collectSessionDestinations(absoluteHome, 2)
+      } catch (error) {
+        process.stderr.write(`warning: could not fully enumerate CODEX_HOME (${flat(error.message)}); entries below it were not checked against the repository\n`)
+      }
+      const inside = [...new Set(sweep.filter((path) => path && isInside(path, this.repoRoots)))]
+      if (inside.length) {
+        process.stderr.write(`warning: ${inside.length} path(s) under CODEX_HOME resolve inside ${flat(this.worktreeRoot)}, e.g. ${flat(inside[0])}\n`)
+        process.stderr.write('warning: codex only reads some of what lives there (skills, prompts) but writes others (caches, archived sessions); if a written one is redirected into the repo, this run could write the tree it is reading\n')
+      }
     }
 
     if (isInside(scratch, this.repoRoots)) {
