@@ -224,7 +224,7 @@ saw. This is the same reasoning that pins `codexBin` to a dereferenced path, and
 it narrows the same TOCTOU window rather than closing it — a pathname is still
 not a handle.
 
-`resolveOnPath` (`lib/environment.mjs`, "Codex binary trust boundary" below)
+`resolveOnPath` (`lib/path-safety.mjs`, "Codex binary trust boundary" below)
 reuses this same `resolvePathSemantics` walk for exactly the same reason: a
 `PATH` entry containing `..` after a symlink component needs the symlink
 followed before `..` is applied, or a `join()`-then-normalize approach can
@@ -281,7 +281,7 @@ script's own output. Either failure makes `resolveReal` return `null`.
 
 - `CODEX_BIN` set: `resolveReal(raw)` must succeed, and that resolved path
   — not the original `raw` string — becomes `codexBin`.
-- `CODEX_BIN` unset: `resolveOnPath` (`lib/environment.mjs`) searches only
+- `CODEX_BIN` unset: `resolveOnPath` (`lib/path-safety.mjs`) searches only
   absolute `PATH` entries, in order, skipping relative ones outright; its
   result is then also passed through `resolveReal` before becoming
   `codexBin`. If no absolute `PATH` entry matches, the run refuses (exit

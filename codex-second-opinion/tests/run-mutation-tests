@@ -59,6 +59,8 @@ const mutants = [
   ['dangerous Node startup variables are cleared from every child environment', 'lib/environment.mjs', `for (const key of ['NODE_OPTIONS', 'NODE_PATH', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS']) {\n      delete this.baseEnv[key]\n    }`, `void 0`],
   ['a CODEX_BIN inside the repository under review is refused', 'lib/environment.mjs', `if (isInside(resolved, this.repoRoots)) {\n        die(3,\n          \`error: CODEX_BIN (\${flat(raw)}) resolves to \${flat(resolved)}, which is inside the repository under review.\`,`, `if (false) {\n        die(3,\n          \`error: CODEX_BIN (\${flat(raw)}) resolves to \${flat(resolved)}, which is inside the repository under review.\`,`],
   ['streaming file hash returns null on a nonexistent path', 'lib/util.mjs', `fd = openSync(path, 'r')`, `fd = openSync(path + '__does_not_exist__', 'r')`],
+  ['a PATH-resolved codex binary inside the repo is also refused', 'lib/environment.mjs', `if (isInside(resolved, this.repoRoots)) {\n      die(3,\n        \`error: '\${flat(found)}' was found on PATH but resolves to \${flat(resolved)}, which is inside the repository under review.\`,`, `if (false) {\n      die(3,\n        \`error: '\${flat(found)}' was found on PATH but resolves to \${flat(resolved)}, which is inside the repository under review.\`,`],
+  ['file hash reads in chunks, not all at once', 'lib/util.mjs', `const CHUNK = 2 * 1024 * 1024`, `const CHUNK = 0`],
 ]
 
 function run(command, args, cwd) {

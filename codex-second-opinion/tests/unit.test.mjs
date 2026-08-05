@@ -768,17 +768,41 @@ test('resolveCodexBin rejects an outside symlink to CODEX_BIN that resolves insi
   }
 })
 
+test('resolveCodexBin rejects a PATH-resolved binary that resolves inside the repo', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cso-pathrepo-'))
+  const repoDir = join(dir, 'repo')
+  mkdirSync(join(repoDir, '.git'), { recursive: true })
+  const binDir = join(repoDir, 'bin')
+  mkdirSync(binDir)
+  const bin = join(binDir, 'codex')
+  writeFileSync(bin, '#!/bin/sh\n')
+  chmodSync(bin, 0o755)
+  const realRepoDir = physicalPath(repoDir)
+  const realBinDir = physicalPath(binDir)
+  const savedBin = process.env.CODEX_BIN
+  const savedPath = process.env.PATH
+  try {
+    delete process.env.CODEX_BIN
+    process.env.PATH = [realBinDir, '/usr/bin', '/bin'].join(delimiter)
+    const env = new Environment(createState('review'))
+    env.cwd = realRepoDir
+    env.repoRoots = [realRepoDir]
+    throwsExit(3, () => env.resolveCodexBin(), /inside the repository/)
+  } finally {
+    if (savedBin === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = savedBin
+    process.env.PATH = savedPath
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('sha256File hashes a file in bounded memory and matches a known digest', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cso-hashfile-'))
   const file = join(dir, 'data.bin')
-  // 5MB -- exceeds the 2MB chunk size, so tests multi-chunk path
-  const content = Buffer.alloc(5 * 1024 * 1024, 0x42)
-  writeFileSync(file, content)
+  // 5MB of 0x42 -- exceeds the 2MB chunk size, so tests multi-chunk path
+  writeFileSync(file, Buffer.alloc(5 * 1024 * 1024, 0x42))
   try {
-    const fromFile = sha256File(file)
-    assert.ok(typeof fromFile === 'string' && fromFile.length === 64)
-    // The same file hashed twice must produce the same digest
-    assert.equal(sha256File(file), fromFile)
+    assert.equal(sha256File(file), '9ab1f039f8d32f96707e3ef8174e4739018b7546fb139b337426f18144aae8d3')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
