@@ -1,8 +1,8 @@
-import { accessSync, constants, lstatSync, readFileSync, readlinkSync } from 'node:fs'
+import { lstatSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { Environment } from './environment.mjs'
 import { commonOption, Runtime, validateModelState } from './runtime.mjs'
-import { die, flat, parseTimeout, sha256, shellQuote } from './util.mjs'
+import { die, flat, parseTimeout, sha256, sha256File, shellQuote } from './util.mjs'
 
 const CONTEXT_FENCE = 'CALLER-BACKGROUND'
 
@@ -255,8 +255,9 @@ function scopeFingerprint(review, env) {
       const stat = lstatSync(path)
       if (stat.isSymbolicLink()) parts.push(relativePath, 'L', readlinkSync(path))
       else if (stat.isFile()) {
-        accessSync(path, constants.R_OK)
-        parts.push(relativePath, 'F', sha256([readFileSync(path)]))
+        const digest = sha256File(path)
+        if (digest === null) return ''
+        parts.push(relativePath, 'F', digest)
       } else return ''
     } catch { return '' }
   }

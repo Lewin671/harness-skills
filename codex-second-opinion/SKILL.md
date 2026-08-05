@@ -67,11 +67,10 @@ secrets included — whatever scope you pass. Do not point this skill at a
 repository holding material that must not reach the model provider;
 narrowing scope does not create that boundary.
 
-A run that reaches Codex leaves an event log (path always printed), a
-result file (kept on `0`, removed on `4`/`5`), and possibly a Codex
-session on disk — for **both** modes, so a review's prompt, diff and
-findings persist too. `references/internals.md` covers artifact
-lifecycle, storage placement and the git-precheck guarantees in full.
+A run leaves an event log, a result file (kept on `0`, removed on
+`4`/`5`), and possibly a Codex session on disk.
+`references/internals.md` covers artifact lifecycle, storage placement
+and the git-precheck guarantees in full.
 
 ## Independence Contract
 
@@ -87,11 +86,9 @@ one of these sources:
 
 Do **not** include anything derived from Claude's own analysis:
 suspected defects, inferred constraints, hypothesised risks, preferred
-approaches, or rankings. If you cannot tell whether a "constraint" is
-something the user said or something you inferred, omit it. In review
-mode, context travels through `--context` — a plain scope flag carries
-the diff and nothing else, so a review that needs the intended behaviour
-has to say so there. In consult mode, everything goes in the question.
+approaches, or rankings. When in doubt, omit it. In review mode,
+context travels through `--context`; in consult mode, everything goes
+in the question.
 
 If the user explicitly wants a Claude claim challenged, include the
 claim but label the run as a cross-check rather than a blind opinion.
@@ -184,54 +181,15 @@ overshoots and wastes the difference.
 
 ### Is it still running, or hung?
 
-The script streams a bounded progress feed to stderr — one truncated
-line per Codex event — so the background task's output file grows in
-real time and stays small:
+The script streams progress to stderr. `codex> ` prefixed lines are
+Codex output; unprefixed lines are the wrapper. The result arrives on
+**stdout**. Key markers: `report:`/`answer:` (done), `session:`/`resume:`
+(consult continuation), `log:` (event log path). The last of each kind
+in a merged stream is authoritative.
 
-- New `codex> ...item.started` / `item.completed` lines → working;
-  Codex is reading files and running commands.
-- Nothing new for several minutes → likely stalled on the model side.
-  It will not hang forever: `--timeout` (default 3000s, 1-86400; 0 is
-  rejected rather than disabling the watchdog)
-  kills the whole process group and exits `5`.
-- `report:` (review) or `answer:` (consult) line → finished; the
-  result is on stdout.
-- `session: <ID>` line (consult) → the id of the resumable session.
-- `resume: --continue <ID> ...` line (consult) → the flags a follow-up
-  must repeat, model settings included. Use this line rather than
-  reassembling the command from the id.
-
-  Consult always prints **both** — `unavailable — ...` when there is no
-  session — so the wrapper's line is last of each kind even when the
-  model-controlled answer holds a look-alike.
-
-`log: <path>` names the untruncated stream; tail it rather than reading
-the whole file.
-
-Telling the wrapper's own lines from Codex's is mechanical, not
-positional: **every line of Codex output echoed to stderr is prefixed
-`codex> `, and no line the wrapper writes about itself ever is.** So on
-stderr, an unprefixed line is the wrapper speaking. Do not use position
-for this — the wrapper's `warning:`, `note:` and `hint:` lines are
-emitted throughout the run, including after `running:` (a stale-model
-fallback, an event-schema warning, a drift warning, a timeout hint), and
-a Codex event can carry text that looks exactly like any of them.
-
-Codex's actual result arrives on **stdout**, never stderr. `report:` /
-`answer:`, `log:`, `session:` and `resume:` are additionally re-emitted
-after that body, so in a merged stream the last of each kind is the
-authoritative one.
-
-**Relay every unprefixed `warning:` line**, not just the drift one — the
-wrapper emits them for a stale-model fallback, a disabled-MCP override
-that could not be confirmed, a `CODEX_HOME` entry resolving into the
-repo, an unreadable working tree, and event-format drift. Each one
-qualifies the result you are about to report.
-
-A `--json` stream with no recognizable event still warns, without
-gating stdout: the report or answer stands, but treat any fallback,
-model, or session note in that run as unconfirmed and recheck
-internals.md against the installed codex-cli version.
+**Relay every unprefixed `warning:` line** — each qualifies the result.
+See [references/internals.md](./references/internals.md) for the
+complete event/log troubleshooting rules.
 
 ## Model
 

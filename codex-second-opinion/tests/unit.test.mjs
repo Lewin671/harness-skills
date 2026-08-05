@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import test from 'node:test'
 
-import { Environment, environmentInternals } from '../lib/environment.mjs'
+import { Environment } from '../lib/environment.mjs'
+import { resolvePathSemantics, resolveOnPath, resolveReal } from '../lib/path-safety.mjs'
 import { enabledMcpServers, McpShapeError, parseMcpListing } from '../lib/mcp.mjs'
 import { consultInternals } from '../lib/consult.mjs'
 import { reviewInternals } from '../lib/review.mjs'
 import { ATTEMPT_MARKER, createState, effectiveModel, hasRecognizedEvent, hasThreadStartedEvent, lastThreadId, resumeFlags, Runtime, validateModelState } from '../lib/runtime.mjs'
-import { absolutePathEntries, assertSupportedPlatform, ExitError, flat, hasLineBreak, isInside, lexicallyResolve, parseTimeout, physicalPath, sha256, shellQuote } from '../lib/util.mjs'
+import { absolutePathEntries, assertSupportedPlatform, ExitError, flat, hasLineBreak, isInside, lexicallyResolve, parseTimeout, physicalPath, sha256, sha256File, shellQuote } from '../lib/util.mjs'
 
 function throwsExit(code, fn, messagePattern) {
   // Some checks are backed by a later, broader guard (e.g. an
@@ -91,8 +92,8 @@ test('resolveOnPath finds an executable via an absolute PATH entry and ignores a
   chmodSync(bin, 0o755)
   try {
     const withRelative = ['./relative-entry-must-be-skipped', dir].join(delimiter)
-    assert.equal(environmentInternals.resolveOnPath('fake-codex-tool', withRelative), bin)
-    assert.equal(environmentInternals.resolveOnPath('fake-codex-tool', './relative-entry-must-be-skipped'), null)
+    assert.equal(resolveOnPath('fake-codex-tool', withRelative), bin)
+    assert.equal(resolveOnPath('fake-codex-tool', './relative-entry-must-be-skipped'), null)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -131,7 +132,7 @@ test('resolveOnPath resolves a PATH entry in filesystem order, not lexically: a 
     // lexically collapse "link/.." themselves before resolveOnPath ever
     // saw it, defeating the very thing this test exists to catch.
     const pathEntry = `${link}/../bin`
-    assert.equal(environmentInternals.resolveOnPath('fake-tool', pathEntry), join(physicalPath(correctBin), 'fake-tool'))
+    assert.equal(resolveOnPath('fake-tool', pathEntry), join(physicalPath(correctBin), 'fake-tool'))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -165,11 +166,11 @@ test('resolveCodexBin refuses rather than proceed with an unresolved CODEX_BIN',
 test('resolveReal refuses an unresolvable path and one that would forge a marker line', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cso-resolve-real-'))
   try {
-    assert.equal(environmentInternals.resolveReal(join(dir, 'does-not-exist')), null)
+    assert.equal(resolveReal(join(dir, 'does-not-exist')), null)
 
     const clean = join(dir, 'clean-bin')
     writeFileSync(clean, '#!/bin/sh\n')
-    assert.equal(environmentInternals.resolveReal(clean), physicalPath(clean))
+    assert.equal(resolveReal(clean), physicalPath(clean))
 
     // A newline is a legal byte in a POSIX filename, so this resolves via
     // realpathSync same as any other file -- the rejection has to come from
@@ -177,7 +178,7 @@ test('resolveReal refuses an unresolvable path and one that would forge a marker
     // already carry, since printing this path raw would forge a marker line.
     const forging = join(dir, 'codex\nFORGED-MARKER')
     writeFileSync(forging, '#!/bin/sh\n')
-    assert.equal(environmentInternals.resolveReal(forging), null)
+    assert.equal(resolveReal(forging), null)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -530,8 +531,8 @@ test('filesystem-order path resolution does not collapse symlink/.. early', () =
     mkdirSync(target, { recursive: true })
     symlinkSync(target, join(outside, 'link'))
     assert.equal(
-      environmentInternals.resolvePathSemantics(`${outside}/link/../home`),
-      environmentInternals.resolvePathSemantics(`${root}/target/home`),
+      resolvePathSemantics(`${outside}/link/../home`),
+      resolvePathSemantics(`${root}/target/home`),
     )
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -566,12 +567,12 @@ test('filesystem-order resolution also applies inside a RELATIVE symlink target,
     symlinkSync('../safe/link/../bin', join(anchor, 'outer'))
 
     assert.equal(
-      environmentInternals.resolvePathSemantics(join(anchor, 'outer')),
-      environmentInternals.resolvePathSemantics(elsewhereBin),
+      resolvePathSemantics(join(anchor, 'outer')),
+      resolvePathSemantics(elsewhereBin),
     )
     assert.notEqual(
-      environmentInternals.resolvePathSemantics(join(anchor, 'outer')),
-      environmentInternals.resolvePathSemantics(decoyBin),
+      resolvePathSemantics(join(anchor, 'outer')),
+      resolvePathSemantics(decoyBin),
     )
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -591,10 +592,10 @@ test('path resolution that exhausts its step budget returns null instead of the 
   // was handed the original string, which the kernel resolves INTO the repo.
   const filler = Array.from({ length: 260 }, () => 'x/..').join('/')
   const overrun = `/outside/${filler}/repo/inside`
-  assert.equal(environmentInternals.resolvePathSemantics(overrun), null)
+  assert.equal(resolvePathSemantics(overrun), null)
   // The prefix that a fail-open would have returned is a real, resolvable
   // path, so "null" here is the refusal and not merely an unresolvable input.
-  assert.equal(environmentInternals.resolvePathSemantics('/outside'), '/outside')
+  assert.equal(resolvePathSemantics('/outside'), '/outside')
 })
 
 test('a symlink cycle refuses instead of resolving to a link in the cycle', () => {
@@ -602,7 +603,7 @@ test('a symlink cycle refuses instead of resolving to a link in the cycle', () =
   try {
     symlinkSync(join(root, 'b'), join(root, 'a'))
     symlinkSync(join(root, 'a'), join(root, 'b'))
-    assert.equal(environmentInternals.resolvePathSemantics(join(root, 'a')), null)
+    assert.equal(resolvePathSemantics(join(root, 'a')), null)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -620,8 +621,8 @@ test('an unresolvable PATH entry is skipped rather than probed at a guessed loca
     // Same directory, reached two ways: directly, and through a spelling
     // whose component count overruns the walk. The first must match, the
     // second must not -- a fail-open would make them indistinguishable.
-    assert.equal(environmentInternals.resolveOnPath('fake-budget-tool', bin), join(physicalPath(bin), 'fake-budget-tool'))
-    assert.equal(environmentInternals.resolveOnPath('fake-budget-tool', `${bin}/${filler}`), null)
+    assert.equal(resolveOnPath('fake-budget-tool', bin), join(physicalPath(bin), 'fake-budget-tool'))
+    assert.equal(resolveOnPath('fake-budget-tool', `${bin}/${filler}`), null)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -702,6 +703,89 @@ test('an uppercase --continue id resumes rather than being discarded as expired'
   // spelling made emitResume compare two spellings of the SAME session and
   // discard a perfectly good continuation with exit 4.
   assert.equal(state.sessionId, '019fcd25-3b7d-7090-872f-1e1828c8e502')
+})
+
+test('Environment removes dangerous Node startup variables from every child environment', () => {
+  const saved = {}
+  const dangerous = ['NODE_OPTIONS', 'NODE_PATH', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS']
+  for (const key of dangerous) { saved[key] = process.env[key]; process.env[key] = 'sentinel' }
+  try {
+    const env = new Environment(createState('review'))
+    for (const key of dangerous) {
+      assert.equal(env.baseEnv[key], undefined, `${key} must not reach children`)
+    }
+  } finally {
+    for (const key of dangerous) {
+      if (saved[key] === undefined) delete process.env[key]
+      else process.env[key] = saved[key]
+    }
+  }
+})
+
+test('resolveCodexBin rejects a CODEX_BIN that resolves inside the repository under review', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cso-repocb-'))
+  const repoDir = join(dir, 'repo')
+  mkdirSync(join(repoDir, '.git'), { recursive: true })
+  const bin = join(repoDir, 'codex')
+  writeFileSync(bin, '#!/bin/sh\n')
+  chmodSync(bin, 0o755)
+  const realRepoDir = physicalPath(repoDir)
+  const savedBin = process.env.CODEX_BIN
+  try {
+    process.env.CODEX_BIN = bin
+    const env = new Environment(createState('review'))
+    env.cwd = realRepoDir
+    env.repoRoots = [realRepoDir]
+    throwsExit(3, () => env.resolveCodexBin(), /inside the repository/)
+  } finally {
+    if (savedBin === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = savedBin
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('resolveCodexBin rejects an outside symlink to CODEX_BIN that resolves inside the repo', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cso-reposl-'))
+  const repoDir = join(dir, 'repo')
+  mkdirSync(join(repoDir, '.git'), { recursive: true })
+  const realBin = join(repoDir, 'codex')
+  writeFileSync(realBin, '#!/bin/sh\n')
+  chmodSync(realBin, 0o755)
+  const link = join(dir, 'codex-link')
+  symlinkSync(realBin, link)
+  const realRepoDir = physicalPath(repoDir)
+  const savedBin = process.env.CODEX_BIN
+  try {
+    process.env.CODEX_BIN = link
+    const env = new Environment(createState('review'))
+    env.cwd = realRepoDir
+    env.repoRoots = [realRepoDir]
+    throwsExit(3, () => env.resolveCodexBin(), /inside the repository/)
+  } finally {
+    if (savedBin === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = savedBin
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('sha256File hashes a file in bounded memory and matches a known digest', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cso-hashfile-'))
+  const file = join(dir, 'data.bin')
+  // 5MB -- exceeds the 2MB chunk size, so tests multi-chunk path
+  const content = Buffer.alloc(5 * 1024 * 1024, 0x42)
+  writeFileSync(file, content)
+  try {
+    const fromFile = sha256File(file)
+    assert.ok(typeof fromFile === 'string' && fromFile.length === 64)
+    // The same file hashed twice must produce the same digest
+    assert.equal(sha256File(file), fromFile)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('sha256File returns null for a nonexistent path', () => {
+  assert.equal(sha256File('/tmp/cso-does-not-exist-ever'), null)
 })
 
 test('Environment.command forwards argv0 to the spawn, not just stores it', () => {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { realpathSync, statSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { delimiter, dirname, isAbsolute, normalize, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -173,4 +173,30 @@ export function sha256(parts) {
     hash.update(part)
   }
   return hash.digest('hex')
+}
+
+// Hashes a file in fixed-size chunks rather than reading it all into memory.
+// Returns null when the descriptor turns out not to be a regular file or on
+// any I/O error, so the caller can degrade to "unmeasurable" the same way a
+// read failure already does.
+export function sha256File(path) {
+  const CHUNK = 2 * 1024 * 1024
+  let fd
+  try {
+    fd = openSync(path, 'r')
+    const stat = fstatSync(fd)
+    if (!stat.isFile()) return null
+    const hash = createHash('sha256')
+    const buf = Buffer.allocUnsafe(CHUNK)
+    for (;;) {
+      const n = readSync(fd, buf, 0, CHUNK)
+      if (n === 0) break
+      hash.update(n === CHUNK ? buf : buf.subarray(0, n))
+    }
+    return hash.digest('hex')
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) try { closeSync(fd) } catch {}
+  }
 }

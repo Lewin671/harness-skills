@@ -6,6 +6,7 @@ Codex changes its feature, MCP, config, or JSONL interfaces.
 ## Contents
 
 - [Architecture](#architecture)
+- [Trusted launch boundary](#trusted-launch-boundary)
 - [Safety boundary](#safety-boundary)
 - [Repository and storage checks](#repository-and-storage-checks)
 - [Process lifecycle](#process-lifecycle)
@@ -18,9 +19,9 @@ Codex changes its feature, MCP, config, or JSONL interfaces.
 
 `run-codex-second-opinion` is a two-file entry point, not a single script:
 
-- `run-codex-second-opinion` — a `#!/bin/sh` bootstrap. Its only job is to
-  sanitize `PATH` to absolute entries (see "Codex binary trust boundary",
-  point 7) before handing off to `node`; it contains no application logic.
+- `run-codex-second-opinion` — a `#!/bin/sh` bootstrap. It sanitizes `PATH`
+  to absolute, non-repository entries, clears dangerous Node startup variables,
+  enforces Node 18+, and hands off to `node`; it contains no application logic.
 - `run-codex-second-opinion.mjs` — the actual Node.js entry point, launched
   by the bootstrap as `node run-codex-second-opinion.mjs "$@"`. It requires
   Node.js 18 or newer and uses only the standard library: no install step,
@@ -39,8 +40,12 @@ guarantee that may not actually hold.
 
 The runtime is split by responsibility:
 
-- `lib/util.mjs` — exit errors, quoting, timeout parsing, paths, hashing,
-  synchronous command probes, and the platform gate.
+- `lib/util.mjs` — exit errors, quoting, timeout parsing, paths, hashing
+  (including bounded-memory file hashing), synchronous command probes, and the
+  platform gate.
+- `lib/path-safety.mjs` — stateless filesystem/path helpers: filesystem-order
+  path resolution, CODEX_HOME subtree walking, safe PATH search, and binary
+  resolution.
 - `lib/mcp.mjs` — strict JSON parsing and schema validation for standalone MCP
   listings.
 - `lib/environment.mjs` — repository discovery, scratch and `CODEX_HOME`
@@ -53,6 +58,34 @@ The runtime is split by responsibility:
 State is explicit: mode parsers fill one state object, `Environment` owns
 preflight facts, and `Runtime` owns one invocation's process and artifacts.
 Modules do not communicate through sourced-shell globals.
+
+## Trusted launch boundary
+
+The launcher distrusts:
+
+- **Repository-resolved PATH entries** — filtered out in both the `#!/bin/sh`
+  bootstrap (physical-location comparison, before `node` is looked up) and the
+  Node side (`Environment.excludeFromPath`, before `git` or `codex` is
+  spawned). Entries are compared against the repository root, not merely the
+  launch directory.
+- **Node preload/write variables** — `NODE_OPTIONS`, `NODE_PATH`,
+  `NODE_V8_COVERAGE`, `NODE_COMPILE_CACHE`, and `NODE_REDIRECT_WARNINGS` are
+  cleared in the bootstrap (before `node` starts) and deleted from `baseEnv`
+  (before any child is spawned). These cover code-loading (`--require`,
+  `--import`, module resolution) and file-writing (coverage, cache, warning
+  redirect) channels that a repository-influenced environment (direnv, asdf,
+  mise) could set.
+- **Repository-local Codex binaries** — a `CODEX_BIN` or PATH-resolved
+  candidate that resolves inside any protected repository root (worktrees, git
+  storage directories) is refused.
+
+It still assumes the already-running shell, operating-system loader, external
+toolchain directories, TLS/proxy configuration, and concurrently writable
+external filesystem paths are trusted. Dynamic-loader variables (`LD_PRELOAD`,
+`DYLD_*`) can affect `/bin/sh` before the bootstrap executes and are outside
+this script's reach. This boundary prevents the reviewed repository from
+injecting code through the Node-specific channels this launcher controls; it
+does not defend against an entirely hostile process environment.
 
 ## Safety boundary
 
@@ -268,178 +301,13 @@ value as an explicit argument rather than reading `process.env.PATH`
 again, so there is one definition of "safe PATH entries"
 (`absolutePathEntries`, `lib/util.mjs`), not two that could drift apart.
 
-Six review rounds shaped this into its current form, each closing a gap
-the previous round's fix left open:
+The current design was shaped by nine iterative review rounds, each closing a
+gap the previous fix left open. See
+[security-history.md](./security-history.md) for the full forensic trail.
 
-1. `resolveOnPath`'s result was printed as a `note:` line while the bare
-   string `'codex'` stayed the actual spawn target for the unset-`CODEX_BIN`
-   case; a relative `PATH` entry ahead of the resolved absolute one would
-   still win the real search Node performs, so the note could name a
-   safe-looking binary while a repository-controlled one actually ran.
-   Assigning the resolved value to `codexBin` closed that.
-2. The `CODEX_BIN`-set branch pinned `codexBin` to `raw` while printing its
-   resolved form — so a `raw` symlink left the note showing one target
-   while `codexBin` itself still named the symlink. `verifyFeatures`/
-   `verifyMcp` and the actual review/consult exec each independently ask
-   the OS to resolve that symlink again, at different times (the real exec
-   can start minutes later); retargeting it in between would run a
-   different binary than the one the earlier checks and note described.
-   Passing the resolved value through and assigning *that* to `codexBin` —
-   for both branches — removed the remaining symlink indirection.
-3. A resolution failure (dangling symlink, permission error, a transient
-   failure from something mid-swap) fell back to leaving `codexBin` as the
-   unresolved, still-mutable original string instead of refusing — the
-   exact unpinned state point 2 exists to eliminate, just reached through
-   its failure path instead of its success path. Both branches now refuse
-   (exit `3`) on a resolution failure rather than treat it as "safe enough
-   to proceed with the raw name instead."
-4. The resolved path was printed and assigned verbatim, with no check for
-   an embedded `\r`/`\n` — the same class of gap `cwd`/`CODEX_HOME`/
-   `scratch` are already checked for elsewhere in this file, just not yet
-   applied here. `resolveReal`'s `hasLineBreak` check closed it, and folding
-   both checks into one function shared by both branches (rather than
-   duplicating them a second time) is what made point 3 and this point a
-   single shared fix instead of four separate ones.
-5. `resolveOnPath` and `CODEX_BIN`'s own resolution only ever protected
-   *this script's* choice of which binary to name. They said nothing about
-   what that binary's own process does next: an `env`-shebang launcher (the
-   real shape codex ships in) performs a second, independent PATH search,
-   inside the spawned child, using whatever `PATH` this script handed it —
-   still the original, unfiltered one, relative entries included, evaluated
-   with cwd already inside the reviewed repository. `baseEnv.PATH` being
-   filtered to absolute entries closed that; every point above secured *how
-   this script names* the binary, this one secures *what that binary's own
-   process can resolve* once it runs.
-6. The rejection message for a PATH candidate that failed `resolveReal`
-   interpolated the rejected candidate itself, unflattened — so a
-   line-break-forging candidate could still forge a marker line through its
-   own rejection notice, on the one path where the line-break check was
-   the reason for the rejection in the first place. `flat(found)` in that
-   message closed it; the parallel `CODEX_BIN`-branch message already used
-   `flat(raw)`, so this was catching up an inconsistency, not a new idea.
-
-Point 5 raised a further question. `run-codex-second-opinion` — the file a
-caller actually invokes — was itself a `#!/usr/bin/env node` script. A
-relative `PATH` entry ahead of a real `node` resolves *that* shebang before
-`Environment` is ever constructed — before any line of this project's own
-JavaScript, including `baseEnv.PATH` filtering, has run. This was first
-judged out of scope, on the reasoning that it requires the *launching*
-environment to already have a relative `PATH` entry, a precondition none of
-the other points needed. That reasoning did not survive a second review
-round: the launching environment is routinely the reviewed repository
-itself — an agent invoking this skill from inside the very project it is
-about to review is the ordinary case, not an edge case — and project-local
-dev-tooling (direnv, asdf, mise, and similar) commonly prepends a
-project-relative `PATH` entry on `cd` into a repository. A repository able
-to make that happen is exactly the adversarial-repository threat model
-every other point in this section already defends against; this was a gap
-in it, not a different problem outside it.
-
-No code added *inside* a `#!/usr/bin/env node` script can retroactively
-change how its own interpreter was already chosen, and hardcoding an
-absolute `node` path into the shebang would break on every install that
-does not happen to put `node` there (nvm, Homebrew, a system package
-manager, volta, fnm, ... — there is no portable choice, and `AGENTS.md`
-rules out hardcoding a machine-specific path regardless). The fix instead
-splits the entry point in two, as the Architecture section above
-describes: `run-codex-second-opinion` is now a `#!/bin/sh` bootstrap, and
-`/bin/sh` needs no `PATH` search of its own — the shebang names it by an
-absolute, POSIX-guaranteed path, so it starts running before `PATH` matters
-at all. It filters `PATH` down to absolute entries using nothing but shell
-built-ins (a `for`/`case` loop and parameter expansion — no external
-command, so nothing else has to be found on `PATH` first either), then
-`exec`s `node run-codex-second-opinion.mjs "$@"` — the `node` that bare
-`exec` resolves is now looked up under the already-filtered `PATH`, closing
-the gap the same way `baseEnv.PATH` closes it for codex's own child
-process. If every original `PATH` entry was relative, filtering leaves an
-empty string — and an empty `PATH` is not "search nothing" under POSIX
-command lookup, it means "search the current directory," reopening the
-exact hijack this bootstrap exists to close (verified empirically: `env -i
-PATH= /bin/sh -c 'exec node --version'` runs a `./node` placed in cwd). The
-bootstrap refuses (exit `3`) rather than export that empty value. Splitting
-that same `PATH` also needed `set -f` (part of the `set -euf` at the top of
-the script): an unquoted `$PATH` expansion undergoes pathname (glob)
-expansion as well as the field-splitting `IFS=:` enables, so an entry like
-`/opt/*` would otherwise expand to every matching child directory of
-`/opt` — names the literal `PATH` value never actually contained — before
-the loop's own absolute/relative filter ever saw them (verified
-empirically: `IFS=: ; PATH="/x/*:/usr/bin" ; for d in $PATH; do ...`
-enumerates `/x`'s children when `/x/*` matches something). `set -f`
-disables that expansion for the whole script, which needs no globbing
-anywhere else.
-8. Dereferencing `codexBin` to a real path (point 2) changes *which file*
-   gets executed, on purpose. It also changes what a program that branches
-   on its own `argv[0]` — a multicall binary, or a symlink-dispatching shim,
-   both established Unix patterns — would see itself invoked as, which was
-   not on purpose and could turn a working install (`command -v codex`
-   succeeds) into a broken one this script itself caused. `codexArgv0`
-   (`Environment`, captured at construction, before any resolution) keeps
-   the pre-resolution identity — the literal `CODEX_BIN` value, or the bare
-   `'codex'` default — and every spawn of `codexBin` (`verifyFeatures`,
-   `verifyMcp`, and the actual review/consult exec) passes it as `argv0`, so
-   the file that runs is the safe, resolved one while the identity it sees
-   itself invoked under is unchanged. This is a real but narrow fix: `argv0`
-   only affects a *natively executed* target's own `argv[0]`. A shebang
-   script's interpreter does not receive it — the kernel reconstructs the
-   interpreter's argv from the script's own file path when handling `#!`,
-   independent of what the exec caller set as `argv0` (verified empirically:
-   `spawn(scriptPath, [], {argv0: 'x'})` against a `#!/bin/bash` script still
-   reports `${0}` as `scriptPath`, never `'x'`). The installed `codex.js`
-   (`#!/usr/bin/env node`) is exactly such a script, and inspection of it
-   found no `argv[0]`-based branching regardless, so this closes a real gap
-   for a *native* multicall target without claiming to help the packaging
-   codex actually ships as today.
-
-   That same kernel behaviour is why `argv0` cannot be contract-tested here:
-   the fake codex is a shebang script and can never observe a caller-supplied
-   `argv0`. A `FAKE_ARGV0_LOG` knob that logged `${0}` used to exist for this and
-   was removed — it recorded the script's own path no matter what the wrapper
-   passed, was never asserted on by any test, and read as coverage that did not
-   exist. The plumbing is pinned instead by a unit test that sends `argv0`
-   through `Environment.command` to `/bin/sh` (a real executable, which does
-   observe it), plus a mutant that deletes `argv0` from `run()` in
-   `lib/util.mjs`. The prior assertion checked only that `codexArgv0` had been
-   stored, and stayed green when the spawn stopped passing it.
-
-9. Absolute turned out not to mean safe. Every point above filters `PATH` down
-   to its *absolute* entries — but the dev-tooling case point 5 and the
-   bootstrap discussion both name as the motivation prepends an entry that is
-   normally absolute **and inside the project**: direnv's `PATH_add bin`
-   exports `/repo/bin`, `layout node` exports `/repo/node_modules/.bin`. Such
-   an entry passed the absolute-only filter untouched and could supply this
-   run's `git`, its `codex`, or the `node` an env-shebang launcher resolves —
-   out of the repository under review, before any sandbox exists. Verified
-   empirically: a `/repo/bin/node` reached via an absolute repo-internal `PATH`
-   entry executed. The motivating example was, in other words, the one case the
-   filter did not cover.
-
-   It is closed in both halves of the entry point, and in both cases the
-   directory that gets filtered against is the **repository root**, not the
-   launch directory or `--repo` value as given. Filtering against those alone
-   protected only that directory: launched from `/repo/sub`, or with `--repo
-   /repo/sub`, an absolute `/repo/bin` entry survived untouched. The root is
-   found by walking up for a `.git` entry — a file counts, since linked
-   worktrees and submodule checkouts use a gitfile — which deliberately does
-   not ask `git`, because choosing a trustworthy `PATH` is exactly what has to
-   happen before any binary is looked up on it. `Environment.initialize` does
-   the same walk before its first `git` call, since `git` is what discovers
-   the rest of the boundary.
-
-   The `#!/bin/sh` bootstrap compares physical locations (`cd` + `pwd -P`,
-   both built-ins, so nothing has to be found on `PATH` to run the filter)
-   rather than spellings, so a symlink into the repository is caught too. An entry it
-   cannot enter at all is dropped silently — `cd` needs the same execute bit a
-   `PATH` search does, so it could never have supplied a binary — while a
-   repository-internal drop prints a `note:`. `Environment.excludeFromPath`
-   then repeats this on the Node side against `cwd` (before the first `git`
-   runs, since `git` is what discovers the rest of the boundary) and again
-   against the full `repoRoots` once sibling worktrees and the git storage
-   directories are known.
-
-   A filtered `PATH` can legitimately end up with no `node` on it. Reaching the
-   bootstrap's `exec` in that state produced the shell's own diagnostic and
-   status `127` — undocumented here, and unhelpful. It now refuses with exit
-   `3` and a hint naming the cause.
+A binary that resolves inside any protected repository root (current/sibling
+worktrees, git storage directories) is refused — a binary inside the reviewed
+repository can be controlled by it.
 
 There is no cryptographic or otherwise reliable way for this script to
 prove a resolved binary is genuinely Codex, and dereferencing once here

@@ -148,9 +148,24 @@ if ! command -v node >/dev/null 2>&1; then
   exit 3
 fi
 
+# Neutralize Node startup variables that can preload code or write files
+# before the .mjs entry point's own baseEnv sanitization takes effect.
+# Dynamic-loader variables (LD_PRELOAD, DYLD_*) can affect /bin/sh itself
+# and are outside this script's reach; this closes the Node-specific channels.
+unset NODE_OPTIONS NODE_PATH NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS 2>/dev/null || true
+
+# Resolve node once and reuse the resolved path for both the version check
+# and the final exec, so the same binary is tested and run.
+node_bin=$(command -v node)
+if ! "$node_bin" -e 'process.exit(Number(process.versions.node.split(".")[0]) < 18 ? 1 : 0)' 2>/dev/null; then
+  echo "error: Node.js 18 or newer is required; the 'node' on PATH is too old or broken." >&2
+  echo "hint: install a current Node.js, or put its directory on PATH." >&2
+  exit 3
+fi
+
 case $0 in
   */*) script_dir=${0%/*} ;;
   *) script_dir=. ;;
 esac
 
-exec node "$script_dir/run-codex-second-opinion.mjs" "$@"
+exec "$node_bin" "$script_dir/run-codex-second-opinion.mjs" "$@"
