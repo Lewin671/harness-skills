@@ -23,6 +23,10 @@ Get an independent second opinion from OpenAI's Codex, from inside
 Claude Code. The value is model diversity: a reviewer or adviser that
 did not write the code and does not share Claude's blind spots.
 
+> **Loading this skill does NOT start Codex.** Run the script below
+> via the **Bash tool**. Do not claim Codex is running until Bash
+> output shows the `running:` line — a preflight failure is not that.
+
 Two modes, one local boundary:
 
 - **review** — a prioritised defect list for a code change, via
