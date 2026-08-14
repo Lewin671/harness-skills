@@ -454,16 +454,36 @@ test('an empty result exits 4', () => {
   assert.match(result.stderr, /produced no report/)
 })
 
-test('consult extracts the session id and prints a resume descriptor', () => {
+test('consult prints a resume line that is a complete runnable command', () => {
   const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
   const result = run(['consult', '--', 'What do you think?'], { FAKE_THREAD_ID: id })
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, /the fake result body/)
   assert.match(result.stderr, new RegExp(`^session: ${id}$`, 'm'))
   const resume = /^resume: (.*)$/m.exec(result.stderr)[1]
-  assert.ok(resume.startsWith(`--continue ${id}`), resume)
+  assert.ok(resume.includes('run-codex-second-opinion.mjs'), resume)
+  assert.ok(resume.includes(` consult --continue ${id}`), resume)
   assert.ok(resume.includes('--model gpt-5.6-sol --effort high'), resume)
   assert.ok(resume.includes('--repo '), resume)
+
+  // the printed line, plus the question, must run as-is
+  const argvLog = join(mkdtempSync(join(root, 'argv-')), 'argv.log')
+  const follow = spawnSync('/bin/sh', ['-c', `${resume} -- "follow-up"`], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 60000,
+    env: {
+      PATH: process.env.PATH,
+      HOME: join(root, 'home'),
+      TMPDIR: root,
+      CODEX_BIN: codexBin,
+      FAKE_ARGV_LOG: argvLog,
+      FAKE_THREAD_ID: id,
+    },
+  })
+  assert.equal(follow.status, 0, follow.stderr)
+  const followArgv = readFileSync(argvLog, 'utf8')
+  assert.ok(followArgv.includes(`exec resume ${id}`), followArgv)
 })
 
 test('a resumed consult passes exec resume and verifies continuation', () => {

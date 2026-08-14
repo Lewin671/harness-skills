@@ -23,7 +23,10 @@ clone, overlays changed tracked files (plus non-ignored untracked files
 for `--uncommitted`), preserves the index separately, verifies the source
 and copied bytes, and prints `snapshot: ready`. Edits to the source
 repository are safe after that marker. The temporary clone is removed
-after the run. Unresolved merges and live changes inside submodules fail
+after the run. An unchanged submodule appears in the snapshot as an
+empty directory — a review that needs its content should use
+`--commit`, which reads the live repository. Unresolved merges and live
+changes inside submodules fail
 closed. So do embedded repositories, changed symlinks that resolve
 outside the clone, and any symlink that resolves back into the live
 source repository; make those paths repository-local, or review an
@@ -37,7 +40,15 @@ prompt rather than supplementing it — say what to look at inside the
 text itself. Narrowing to a path is such a concern: for "review only
 `foo.py`'s uncommitted changes", use `--custom` naming the paths and
 the comparison base — accepting that `--custom` has no empty-scope
-precheck and reads the live repository.
+precheck and reads the live repository. Say what to compare, what to
+read, and what to produce:
+
+```bash
+--custom "Review only the uncommitted changes to src/foo.py. If git
+  status shows it as tracked, review git diff HEAD -- src/foo.py; if
+  it is untracked, review the whole file as new code. Report defects
+  priority-ordered. Do not review unrelated code."
+```
 
 Keep an independent first review unseeded: provide the change and its
 intended behaviour without Claude's suspected findings. If the user

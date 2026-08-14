@@ -37,21 +37,19 @@ parsed as options.
 ## Multi-Turn Discussion
 
 Every successful run prints two lines to stderr: `session: <ID>`, and a
-`resume: --continue <ID> --model M --effort L [...] --repo <PATH>`
-descriptor. That descriptor is the **argument tail**, not a runnable
-command: prepend the script path and `consult`, append the question:
+`resume:` line holding the complete follow-up command — script path,
+`consult`, session, model flags, repo — except for the question itself:
 
 ```bash
-run-codex-second-opinion.mjs consult <the resume: line, minus "resume:"> \
-  -- "the follow-up question"
+<the resume: line, minus "resume:"> -- "the follow-up question"
 ```
 
-Copy the tail verbatim rather than rebuilding it from the id alone —
+Copy the line verbatim rather than rebuilding it from the id alone —
 the model flags do not travel with the session, and a follow-up without
 them can switch the discussion to different defaults mid-conversation.
 This does not contradict SKILL.md's "pass no model flags" rule: that
 rule governs *fresh* runs, where flags select a model; in a copied
-tail they pin the one that already answered. Codex resumes with
+line they pin the one that already answered. Codex resumes with
 everything it already read and said, so follow-ups need only the new
 material.
 

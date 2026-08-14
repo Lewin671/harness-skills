@@ -5,6 +5,7 @@
 // The process/environment layer lives in lib/runtime.mjs.
 
 import { writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import {
   createArtifacts,
@@ -356,7 +357,10 @@ async function emitResume(policy, env, run, artifacts) {
   }
   process.stderr.write(`session: ${session}\n`)
   const timeout = policy.timeout !== 3000 ? ` --timeout ${policy.timeout}` : ''
-  process.stderr.write(`resume: --continue ${session} --model ${shellQuote(policy.model)} --effort ${shellQuote(policy.effort)}${timeout} --repo ${shellQuote(env.cwd)}\n`)
+  // A complete follow-up command except for the question, so the caller
+  // appends `-- "..."` and runs it instead of reassembling an argument tail.
+  const script = shellQuote(fileURLToPath(import.meta.url))
+  process.stderr.write(`resume: ${script} consult --continue ${session} --model ${shellQuote(policy.model)} --effort ${shellQuote(policy.effort)}${timeout} --repo ${shellQuote(env.cwd)}\n`)
 }
 
 async function runConsult(args) {

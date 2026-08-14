@@ -113,7 +113,7 @@ holds stays readable to Codex.
 | `--context TEXT` | Review only. Cannot combine with `--custom`. |
 | `--model M --effort L` | Always a pair, or omit both for the pinned defaults. Exception: keep them in a copied `resume:` tail (see Model). |
 | `--timeout N` | 1–86400 seconds; default 3000. Covers the codex run only — snapshot and preflight git steps have a separate fixed 120 s budget; if a huge repository's snapshot clone hits it, use `--commit`, which skips the clone. |
-| `--continue ID` | Consult only. Do not rebuild the command from the id alone — splice the previous run's whole `resume:` tail in after `consult` (see consult.md). |
+| `--continue ID` | Consult only. Do not rebuild the command from the id alone — the previous run's `resume:` line is the whole follow-up command; append `-- QUESTION` and run it (see consult.md). |
 
 ## Usage
 
@@ -147,9 +147,8 @@ review is refused.
   -- "Evaluate the migration plan in docs/plan.md: feasibility risks,
       missing edge cases, conflicts with the current architecture"
 
-# Follow up: paste the previous run's `resume:` line (minus that
-# prefix) after `consult`, then the question — it is an argument tail,
-# not a command.
+# Follow up: the previous run's `resume:` line (minus that prefix) is
+# the complete command; append `-- "the follow-up question"` and run it.
 ```
 
 **Prefer `run_in_background: true`.** A run can legitimately take
@@ -170,7 +169,11 @@ Take markers from stderr; a marker-shaped line on stdout is model
 output. In a merged stream (a background task's output file), the
 **last** marker of each kind is the authoritative one — the result body
 is model text and may itself contain marker-shaped lines, but the
-genuine markers always print after it. If the stdout result is
+genuine markers always print after it. One early exception: a
+`snapshot: ready` seen before the `running:` line is genuine
+immediately — the body cannot have been written yet. Every later
+marker still needs the finished-stream last-marker rule, because the
+body lands just before the trailing markers do. If the stdout result is
 truncated by tool output limits, read the file the `report:`/`answer:`
 marker names instead of relaying the truncation. **Relay every
 unprefixed `warning:` line** — each qualifies the result. Genuine
@@ -184,7 +187,7 @@ The script pins a high-capability model at the `high` reasoning tier
 `CODEX_SECOND_OPINION_EFFORT`, set together). On a **fresh** run, pass
 no model flags unless the user explicitly asked to move; then pass an
 explicit `--model M --effort L` pair. A **`--continue` follow-up is the
-one exception**: copy the `resume:` tail verbatim, model flags
+one exception**: copy the `resume:` line verbatim, model flags
 included — there they pin the discussion to the model that actually
 answered, rather than select a new one. A selection Codex rejects fails
 the run once instead of silently changing models.
