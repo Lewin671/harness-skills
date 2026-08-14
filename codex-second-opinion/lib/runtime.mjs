@@ -56,6 +56,10 @@ export function createState(mode) {
     inheritSet: 0,
     usedFallback: false,
     allowMcp: false,
+    // Set only by Environment.detectEphemeralSupport, and only for review.
+    // Never a user flag: consult's whole continuation feature depends on the
+    // session file this suppresses, and review has no use for one.
+    ephemeral: false,
     repo: '.',
     timeout: null,
     sessionId: '',
@@ -186,6 +190,15 @@ export class Runtime {
       '--disable', 'hooks', '--disable', 'apps', '--disable', 'plugins',
       '-c', 'notify=[]',
       '--strict-config',
+      // Removes a write channel instead of checking where it points. Codex
+      // writes this run's transcript under CODEX_HOME/sessions on every
+      // ordinary invocation, which is why resolveScratchAndCodexHome refuses
+      // a CODEX_HOME that lands in the repository. Review never reads that
+      // transcript back -- it has no --continue -- so for review the file is
+      // a pure by-product, and not writing it beats placing it correctly.
+      // Gated on state.ephemeral, which only Environment.detectEphemeralSupport
+      // sets, and only after confirming the installed codex accepts the flag.
+      ...(this.state.ephemeral ? ['--ephemeral'] : []),
       ...this.environment.mcpArgs,
       '--json',
     ]

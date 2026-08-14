@@ -71,10 +71,11 @@ secrets included — whatever scope you pass. Do not point this skill at a
 repository holding material that must not reach the model provider;
 narrowing scope does not create that boundary.
 
-A run leaves an event log, a result file (kept on `0`, removed on
-`4`/`5`), and possibly a Codex session on disk.
-`references/internals.md` covers artifact lifecycle, storage placement
-and the git-precheck guarantees in full.
+A run leaves an event log and a result file (kept on `0`, removed on
+`4`/`5`). Consult also leaves a Codex session on disk — what `--continue`
+resumes. Review suppresses it, or says in a `note:` that the installed
+codex could not. `references/internals.md` covers artifact lifecycle,
+storage placement and the git-precheck guarantees in full.
 
 ## Independence Contract
 

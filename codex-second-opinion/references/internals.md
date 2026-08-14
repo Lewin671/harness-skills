@@ -6,6 +6,7 @@ Codex changes its feature, MCP, config, or JSONL interfaces.
 ## Contents
 
 - [Architecture](#architecture)
+- [Session persistence](#session-persistence)
 - [Trusted launch boundary](#trusted-launch-boundary)
 - [Safety boundary](#safety-boundary)
 - [Repository and storage checks](#repository-and-storage-checks)
@@ -97,6 +98,8 @@ Every model invocation carries the same arguments, assembled in one method:
 - `--strict-config`
 - one verified `mcp_servers.<id>.enabled=false` override per enabled standalone
   server, unless `--allow-mcp` was explicitly approved
+- `--ephemeral`, **review only**, and only once the installed codex has been
+  probed and shown to accept it (see "Session persistence" below)
 - `--json` and `-o <result>`
 
 The sandbox covers model-generated local commands. Hooks, apps, plugins,
@@ -131,7 +134,8 @@ afterwards. A server enabled in the user's config inside that window carries no
 `enabled=false` override, because the override list is built from the names the
 re-check saw. Closing this structurally would need either a deny-all switch or
 a configuration snapshot shared by verification and execution, and codex-cli
-`0.146.0` offers neither: `-c mcp_servers={}` **merges** rather than replaces,
+`0.146.0` offers neither (`--ignore-user-config` was evaluated on `0.147.0` and
+rejected — see "Session persistence" above): `-c mcp_servers={}` **merges** rather than replaces,
 leaving an already-enabled server enabled (measured — with one enabled server
 in the config, `codex mcp list --json -c 'mcp_servers={}'` still reports it as
 enabled), and `exec` has no flag that pins a config the probes could share.
@@ -167,8 +171,52 @@ evidence that a path is outside the repository.
 Scratch output is resolved physically. A repo-local `TMPDIR` is moved to the
 physical `/tmp`, exported to the Codex child, and checked again. The result and
 event log are created as private files outside the repository and intentionally
-kept; their final paths are reported. Codex keeps the third artifact, its
-session, below `CODEX_HOME/sessions`.
+kept; their final paths are reported. A third artifact — Codex's own session,
+below `CODEX_HOME/sessions` — is written by consult and, on a codex without
+`--ephemeral`, by review too.
+
+### Session persistence
+
+`--ephemeral` ("Run without persisting session files to disk") removes a write
+channel rather than checking where it points, and review is the only mode that
+can take it: review has no `--continue`, so the session it would write is never
+read back by anything, while resuming a consultation *is* what consult offers.
+`Environment.detectEphemeralSupport` (`lib/environment.mjs`) therefore refuses
+to arm outside review rather than trusting every future call site to remember
+that — a guard the unit suite mutation-tests, and which the contract suite
+covers only against the mis-wiring it exists to catch (adding the probe call to
+`runConsult`), since the method is otherwise unreachable from consult.
+
+Support is probed, not assumed: a codex without the flag rejects the whole
+invocation over an unknown argument, which would turn every review into an exit
+`4` on an older install. A failed or silent probe degrades to the previous
+behaviour — the session is written, and the `CODEX_HOME` placement checks are
+what keep it out of the repository — and says so in a `note:`, so the caller is
+never left assuming the stronger guarantee held. The probe runs from
+`runReview` after the empty-scope precheck rather than from `initialize()`: a
+run about to exit `2` or `3` should not spend a process on a capability it will
+never use.
+
+Measured against `codex-cli 0.147.0`, one release past this document's baseline:
+an ephemeral run still emits `thread.started` carrying a `thread_id`, so nothing
+this script parses out of the event stream changes; only the on-disk rollout
+disappears, and resuming that thread id afterwards fails with `no rollout found
+for thread id ...`. `codex exec review` accepts the flag as well as `codex
+exec`.
+
+This narrows what the `sessions/` refusal below is protecting, for review, from
+"every run" to "only a run on a codex that cannot suppress it". It does not
+retire that refusal: consult still writes a session on every run, and codex
+reads `auth.json` and `config.toml` from `CODEX_HOME` regardless. Whether an
+ephemeral run still writes `cache/`, `.tmp/` or `archived_sessions/` was **not**
+measured, so the placement checks stay exactly as they are.
+
+`--ignore-user-config` was evaluated as the "real deny-all" the MCP section
+below says to recheck for, and rejected: `codex mcp list` does not accept it
+(measured on 0.147.0), so the verified switch-off this script relies on could
+not be performed at all; it would also discard the user's configured model,
+breaking both `--inherit` and the stale-default fallback, and break any install
+whose model provider is defined in `config.toml`.
 
 `CODEX_HOME` cannot be relocated without breaking continuation, so an unsafe
 placement refuses the run. Resolution walks path components in filesystem
@@ -192,7 +240,8 @@ repository are still queued — the check then approved `/outside` and handed
 codex a string the kernel resolves inside the repository.
 
 `sessions/` gets the deep walk and a hard refusal, because codex demonstrably
-writes there on every run. It is not the only thing it writes under
+writes there on every run that is not `--ephemeral` (see "Session persistence"
+above — which is review only, and only on a codex that accepts the flag). It is not the only thing it writes under
 `CODEX_HOME` — a real install also carries `archived_sessions`, `cache`,
 `.tmp`, `attachments` and `automations` — so `CODEX_HOME` is additionally swept
 two levels deep and any entry resolving inside the repository is **named in a

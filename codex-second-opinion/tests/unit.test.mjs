@@ -459,6 +459,58 @@ test('every Codex invocation carries the complete local safety boundary', () => 
   ])
 })
 
+test('a review that can go ephemeral does, and consult never can', () => {
+  const helpWith = { status: 0, stdout: 'Options:\n      --ephemeral\n          Run without persisting session files to disk\n', stderr: '' }
+  const armed = (mode) => {
+    const state = createState(mode)
+    const env = new Environment(state)
+    env.codexBin = '/bin/codex'
+    env.command = () => helpWith
+    env.detectEphemeralSupport()
+    return state.ephemeral
+  }
+  assert.equal(armed('review'), true)
+  // Not merely unused in consult -- refused there. A consult session that is
+  // never written to disk cannot be resumed, which is the whole mode.
+  assert.equal(armed('consult'), false)
+})
+
+test('an ephemeral review suppresses the session file only when codex accepts the flag', () => {
+  const probe = (help) => {
+    const state = createState('review')
+    const env = new Environment(state)
+    env.codexBin = '/bin/codex'
+    env.command = () => help
+    env.detectEphemeralSupport()
+    return state.ephemeral
+  }
+  // An older codex whose help never names the flag: passing it anyway would
+  // fail the whole invocation on an unknown argument, so the run degrades to
+  // writing a session rather than breaking.
+  assert.equal(probe({ status: 0, stdout: 'Options:\n      --json\n', stderr: '' }), false)
+  // A probe that could not run at all is not evidence of support either.
+  assert.equal(probe({ status: 1, stdout: '', stderr: 'boom' }), false)
+  // Help printed on stderr instead of stdout still counts.
+  assert.equal(probe({ status: 0, stdout: '', stderr: '      --ephemeral\n' }), true)
+  // A substring of a longer flag must not be read as the flag itself.
+  assert.equal(probe({ status: 0, stdout: '      --ephemeral-store <PATH>\n', stderr: '' }), false)
+})
+
+test('the ephemeral flag reaches the codex invocation only when armed', () => {
+  const environment = { mcpArgs: [] }
+  const plain = new Runtime(createState('review'), environment, { out: '/tmp/out', log: '/tmp/log' })
+  assert.equal(plain.safetyArgs('m', 'high').includes('--ephemeral'), false)
+
+  const state = createState('review')
+  state.ephemeral = true
+  const ephemeral = new Runtime(state, environment, { out: '/tmp/out', log: '/tmp/log' })
+  const args = ephemeral.safetyArgs('m', 'high')
+  assert.equal(args.includes('--ephemeral'), true)
+  // Still a flag, never a `-c` config key: --strict-config governs config
+  // keys, and pinning this keeps a future edit from smuggling it in as one.
+  assert.equal(args[args.indexOf('--ephemeral') - 1], '--strict-config')
+})
+
 test('a failed feature probe cannot reuse reassuring partial output', () => {
   const env = new Environment({ runNoun: 'review' })
   env.command = (_command, args) => args[0] === 'features'

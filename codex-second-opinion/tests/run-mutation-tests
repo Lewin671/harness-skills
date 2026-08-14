@@ -61,6 +61,9 @@ const mutants = [
   ['streaming file hash returns null on a nonexistent path', 'lib/util.mjs', `fd = openSync(path, 'r')`, `fd = openSync(path + '__does_not_exist__', 'r')`],
   ['a PATH-resolved codex binary inside the repo is also refused', 'lib/environment.mjs', `if (isInside(resolved, this.repoRoots)) {\n      die(3,\n        \`error: '\${flat(found)}' was found on PATH but resolves to \${flat(resolved)}, which is inside the repository under review.\`,`, `if (false) {\n      die(3,\n        \`error: '\${flat(found)}' was found on PATH but resolves to \${flat(resolved)}, which is inside the repository under review.\`,`],
   ['file hash reads in chunks, not all at once', 'lib/util.mjs', `const CHUNK = 2 * 1024 * 1024`, `const CHUNK = 0`],
+  ['consult is never armed for ephemeral, which would break every resume', 'lib/environment.mjs', `if (this.state.mode !== 'review') return`, `if (false) return`],
+  ['ephemeral is armed only on proven codex support', 'lib/environment.mjs', `if (help.status === 0 && /(?:^|\\s)--ephemeral(?:[\\s=]|$)/.test(\`${'${help.stdout}'}\\n${'${help.stderr}'}\`)) {`, `if (true) {`],
+  ['an armed review actually passes --ephemeral to codex', 'lib/runtime.mjs', `...(this.state.ephemeral ? ['--ephemeral'] : []),`, ``],
 ]
 
 function run(command, args, cwd) {

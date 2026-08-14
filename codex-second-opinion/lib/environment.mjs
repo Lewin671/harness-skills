@@ -554,6 +554,40 @@ export class Environment {
     }
   }
 
+  // `--ephemeral` tells codex not to persist this run's session file. Review
+  // is the only mode that can take it: it has no `--continue`, so the session
+  // it would write is never read back by anything. Consult must keep writing
+  // one -- resuming a consultation IS the feature -- so this refuses to arm
+  // itself outside review rather than trusting every future call site to
+  // remember that. Measured against codex-cli 0.147.0: an ephemeral run still
+  // emits `thread.started` with a thread_id, so nothing this script parses out
+  // of the event stream changes; only the on-disk rollout disappears, and
+  // resuming that thread id afterwards fails with "no rollout found".
+  //
+  // Probed, not assumed. A codex without the flag rejects the whole
+  // invocation over an unknown argument, which would turn a working review
+  // into an exit 4 on every older install. Absent support degrades to exactly
+  // the previous behaviour -- the session is written, and the CODEX_HOME
+  // placement checks are what keep it out of the repository -- so the probe
+  // fails safe in the only direction that matters, and says so rather than
+  // leaving the caller to assume the stronger guarantee held.
+  //
+  // Called from runReview after the empty-scope precheck rather than from
+  // initialize(): a run that is about to exit 2 or 3 should not spend a
+  // process on a capability it will never use.
+  detectEphemeralSupport() {
+    if (this.state.mode !== 'review') return
+    const help = this.command(this.codexBin, ['exec', 'review', '--help'], { argv0: this.codexArgv0 })
+    // stdout and stderr both: help is stdout on 0.147.0, but which stream a
+    // CLI prints usage on is exactly the kind of detail that moves between
+    // releases, and reading both cannot produce a false positive here.
+    if (help.status === 0 && /(?:^|\s)--ephemeral(?:[\s=]|$)/.test(`${help.stdout}\n${help.stderr}`)) {
+      this.state.ephemeral = true
+      return
+    }
+    process.stderr.write('note: this codex build does not accept --ephemeral, so it will write a session file for this review; CODEX_HOME placement is what keeps that out of the repository\n')
+  }
+
   readonlyGit(args) {
     const indexPath = this.git(['rev-parse', '--git-path', 'index'])
     if (indexPath.status !== 0 || !indexPath.stdout.trim() || !exists(indexPath.stdout.trim())) {

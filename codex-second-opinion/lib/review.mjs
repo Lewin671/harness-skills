@@ -324,6 +324,7 @@ export async function runReview(state, args) {
   env.initialize()
   guardWorktreeFilters(review, env)
   scopeNonempty(review, env)
+  env.detectEphemeralSupport()
   const artifacts = env.createArtifacts('review')
   const before = scopeFingerprint(review, env)
   const runtime = new Runtime(state, env, artifacts)

@@ -86,7 +86,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # Five former Bash-internal path helper assertions now live in the fast
   # node:test suite. This contract suite stays black-box and counts only
   # behavior observable through the executable entry point.
-  expected=288
+  expected=292
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -167,7 +167,20 @@ cat > "$fake" <<'FAKE'
 #   FAKE_FORGE_LINE     emit this verbatim as a plain (non-JSON) output line,
 #                       so a codex line that mimics a wrapper marker can be
 #                       checked to arrive prefixed rather than bare
+#   FAKE_NO_EPHEMERAL   drop --ephemeral from `exec review --help`, standing in
+#                       for a codex-cli too old to accept the flag
 [ -n "${FAKE_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ARGV_LOG"
+# Matched on the exact argv shape, not on "--help appears anywhere": the
+# wrapper passes a caller-supplied prompt through as a positional argument,
+# and a prompt that merely mentions --help must not turn a real invocation
+# into a usage dump.
+if [ "${1:-}" = exec ] && [ "${2:-}" = review ] && [ "${3:-}" = --help ]; then
+  printf 'Usage: codex exec review [OPTIONS]\n\nOptions:\n'
+  [ -z "${FAKE_NO_EPHEMERAL:-}" ] &&
+    printf '      --ephemeral\n          Run without persisting session files to disk\n'
+  printf '      --json\n'
+  exit 0
+fi
 [ -n "${FAKE_TMPDIR_LOG:-}" ] && printf '%s\n' "${TMPDIR:-unset}" >> "$FAKE_TMPDIR_LOG"
 case "${1:-}" in
   --version)
@@ -1340,6 +1353,50 @@ if grep -qE -- 'exec review .*--disable apps --disable plugins' "$argv_log"; the
   ok "review: invocation disables apps and plugins"
 else
   bad "review: invocation disables apps and plugins" "argv: $(tail -1 "$argv_log")"
+fi
+
+# Review never resumes, so the session file codex would write is a pure
+# by-product. Suppressing it beats placing it correctly, which is why
+# resolveScratchAndCodexHome's hard refusal on CODEX_HOME/sessions is a
+# weaker requirement for review than the same check is for consult.
+if grep -q -- '^exec review --help' "$argv_log"; then
+  ok "review: support for --ephemeral is probed, not assumed"
+else
+  bad "review: support for --ephemeral is probed, not assumed" "argv: $(cat "$argv_log")"
+fi
+
+if grep -qE -- '^exec review .*--ephemeral' "$argv_log"; then
+  ok "review: invocation writes no codex session file"
+else
+  bad "review: invocation writes no codex session file" "argv: $(tail -1 "$argv_log")"
+fi
+
+# A codex too old for the flag must degrade to the previous behaviour --
+# writing a session -- not fail the whole review on an unknown argument.
+# The note is part of the contract: the caller is told the weaker guarantee
+# is the one that actually held.
+noeph_argv="${workdir}/argv-no-ephemeral.log"
+noeph_err="${workdir}/no-ephemeral.err"
+FAKE_NO_EPHEMERAL=1 FAKE_ARGV_LOG="$noeph_argv" FAKE_OUTPUT='Looks fine overall.' \
+  "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$noeph_err"
+status=$?
+if [ "$status" = 0 ] && ! grep -q -- '--ephemeral' "$noeph_argv" &&
+   grep -q 'does not accept --ephemeral' "$noeph_err"; then
+  ok "review: a codex without --ephemeral still runs, and says the session was written"
+else
+  bad "review: a codex without --ephemeral still runs, and says the session was written" "exit $status"
+fi
+
+# Consult must never be armed: --continue reads exactly the session file
+# --ephemeral suppresses, so an ephemeral consultation could never resume.
+conseph_argv="${workdir}/argv-consult-ephemeral.log"
+FAKE_ARGV_LOG="$conseph_argv" FAKE_OUTPUT='A position.' \
+  "$wrapper" consult --repo "$dirty" --timeout 30 -- "question" >/dev/null 2>&1
+status=$?
+if [ "$status" = 0 ] && ! grep -q -- '--ephemeral' "$conseph_argv"; then
+  ok "consult: invocation keeps the session file its --continue depends on"
+else
+  bad "consult: invocation keeps the session file its --continue depends on" "exit $status"
 fi
 
 # The fake report has no trailing newline; in merged output the marker
