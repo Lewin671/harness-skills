@@ -66,8 +66,8 @@ What the boundary does *not* do:
   git commands (`--no-optional-locks`, no external diff/textconv) —
   best effort, not a guarantee.
 - Preserve a durable snapshot. `--uncommitted` and `--base` copy the
-  committed repository plus non-ignored working changes into an isolated
-  temporary clone. The clone is removed after the run; `--commit` is the
+  committed repository plus working changes (untracked files only for
+  `--uncommitted`) into an isolated temporary clone. The clone is removed after the run; `--commit` is the
   durable immutable scope. `--custom` still reads the live repository.
 
 A run leaves a result file and an event log in TMPDIR (result removed

@@ -177,7 +177,13 @@ function fingerprintEntry(hash, root, path) {
 }
 
 function captureState(review, env) {
-  const head = mustGit(env, ['rev-parse', '--verify', 'HEAD'], 'resolve HEAD').trim()
+  const headProbe = git(env, ['rev-parse', '--verify', 'HEAD'])
+  if (headProbe.status !== 0) {
+    die(3,
+      'error: could not resolve HEAD; the repository may have no commits yet.',
+      'hint: make an initial commit, then rerun the review.')
+  }
+  const head = headProbe.stdout.trim()
   const paths = changedPaths(review, env)
   const indexPatch = mustGit(env,
     ['diff', '--cached', '--binary', '--full-index', '--src-prefix=a/', '--dst-prefix=b/', '--no-ext-diff', '--no-textconv', 'HEAD', '--'],

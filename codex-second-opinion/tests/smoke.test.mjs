@@ -358,6 +358,20 @@ test('snapshot tolerates an unchanged committed symlink to an unrelated external
   assert.match(result.stderr, /^snapshot: ready [0-9a-f]{64}$/m)
 })
 
+test('a repository with no commits yet gets a make-an-initial-commit hint', () => {
+  const unborn = join(root, 'unborn-repo')
+  mkdirSync(unborn)
+  sh('git init -q', { cwd: unborn })
+  writeFileSync(join(unborn, 'first.txt'), 'new\n')
+  sh('git add first.txt', { cwd: unborn })
+
+  const result = run(['review', '--uncommitted'], {}, unborn)
+  assert.equal(result.status, 3, result.stderr)
+  assert.match(result.stderr, /no commits yet/)
+  assert.match(result.stderr, /make an initial commit/)
+  assert.equal(result.argv.length, 0, 'codex must not run without a resolvable HEAD')
+})
+
 test('base review fails closed on a branch-introduced external symlink', () => {
   const baseRepo = join(root, 'base-symlink-repo')
   const outside = join(root, 'outside-base')

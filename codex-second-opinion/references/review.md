@@ -111,8 +111,10 @@ Follow SKILL.md § Reporting, plus:
    Do not silently drop low-priority findings.
 2. Add a Claude-side trust line **per finding**: agree, disagree with
    reason, or needs-checking.
-3. `--uncommitted` and `--base` identify the ephemeral snapshot by the
-   wrapper's fingerprint. Only `--commit` names a durable immutable
-   object; `--custom` remains live and is not reproducible.
+3. When stating the scope: only `--commit` names a durable immutable
+   object. `--uncommitted` and `--base` reviewed an ephemeral snapshot
+   (the `snapshot:` line's fingerprint identifies what was captured —
+   no need to relay it), and `--custom` reads the live repository and
+   is not reproducible.
 
 For open questions rather than code changes, use consult mode instead.
