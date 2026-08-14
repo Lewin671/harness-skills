@@ -46,8 +46,9 @@ them can switch the discussion to different defaults mid-conversation.
 Codex resumes with everything it already read and said, so follow-ups
 need only the new material.
 
-The session lives on disk under `CODEX_HOME/sessions`, so a
-consultation's question and answer outlive the run. A follow-up
+The session lives on disk in codex's own session store
+(`~/.codex/sessions` by default), so a consultation's question and
+answer outlive the run. A follow-up
 requires the user's authorization — do not launch one to settle a
 disagreement on your own initiative, and authorization for one
 follow-up is not authorization for an unlimited loop.

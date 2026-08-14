@@ -189,24 +189,9 @@ function resolveCodexBin(env) {
   process.stderr.write(`note: using codex binary: ${flat(env.codexBin)}\n`)
 }
 
+// Only the wrapper's own artifacts are placed here; codex manages its own
+// session storage (CODEX_HOME) untouched.
 function resolveStorage(env) {
-  if (!process.env.CODEX_HOME && !process.env.HOME) {
-    die(3,
-      'error: neither CODEX_HOME nor HOME is set, so where codex would write its sessions cannot be determined.',
-      'hint: set CODEX_HOME explicitly, outside the repository.')
-  }
-  const codexHome = process.env.CODEX_HOME || join(process.env.HOME, '.codex')
-  const home = bestRealpath(isAbsolute(codexHome) ? codexHome : resolve(env.cwd, codexHome))
-  // The sessions directory is checked separately because it is the one entry
-  // codex writes on every run, and it may itself be a symlink even when
-  // CODEX_HOME is not.
-  if ([home, bestRealpath(join(home, 'sessions'))].some((path) => isInside(path, env.repoRoot))) {
-    die(3,
-      `error: CODEX_HOME (${flat(codexHome)}) resolves inside the repository under review, and codex writes every session under it.`,
-      'hint: point CODEX_HOME outside the repository for this run.')
-  }
-  env.baseEnv.CODEX_HOME = home
-
   let scratch = bestRealpath(process.env.TMPDIR || tmpdir())
   if (isInside(scratch, env.repoRoot)) {
     process.stderr.write('warning: TMPDIR is inside the repository; using /tmp instead\n')

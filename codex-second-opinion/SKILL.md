@@ -71,9 +71,8 @@ What the boundary does *not* do:
 
 A run leaves a result file and an event log in TMPDIR (result removed
 on exit `4`/`5`). Review passes `--ephemeral` and leaves no Codex
-session; consult leaves one under `CODEX_HOME/sessions` — what
-`--continue` resumes. A `CODEX_HOME` that resolves into the repository
-is refused.
+session; consult leaves one in codex's own session store — what
+`--continue` resumes.
 
 ## Independence Contract
 

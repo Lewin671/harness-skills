@@ -275,12 +275,6 @@ test('a timeout exits 5 and kills the whole detached process group', async () =>
   assert.fail(`grandchild ${grandchild} survived the process-group kill`)
 })
 
-test('a CODEX_HOME inside the repository is refused', () => {
-  const result = run(['review', '--commit', 'HEAD'], { CODEX_HOME: join(repo, '.codex-home') })
-  assert.equal(result.status, 3, result.stderr)
-  assert.match(result.stderr, /CODEX_HOME .* inside the repository/)
-})
-
 test('a relative CODEX_BIN is refused', () => {
   const result = run(['review', '--commit', 'HEAD'], { CODEX_BIN: 'bin/codex' })
   assert.equal(result.status, 3, result.stderr)
