@@ -12,7 +12,6 @@ import {
   ExitError,
   flat,
   lastThreadId,
-  mcpOverrides,
   parseTimeout,
   runCodex,
   safetyArgs,
@@ -39,7 +38,6 @@ Options:
   --context <TEXT>     neutral background for the reviewer
   --model <MODEL>      override the pinned model (requires --effort)
   --effort <LEVEL>     override reasoning effort (requires --model)
-  --allow-mcp          keep standalone MCP servers reachable
   --repo <DIR>         repository to review (default: current directory)
   --timeout <SECONDS>  abort a hung review (default: 3000; 1-86400)`
 
@@ -52,7 +50,6 @@ Options:
   --continue <SESSION> resume a session UUID with a follow-up QUESTION
   --model <MODEL>      override the pinned model (requires --effort)
   --effort <LEVEL>     override reasoning effort (requires --model)
-  --allow-mcp          keep standalone MCP servers reachable
   --repo <DIR>         repository for context (default: current directory)
   --timeout <SECONDS>  abort a hung run (default: 3000; 1-86400)`
 
@@ -72,7 +69,6 @@ function createPolicy() {
     effort: envEffort || 'high',
     modelSet: false,
     effortSet: false,
-    allowMcp: false,
     repo: '.',
     timeout: 3000,
     sessionId: '',
@@ -108,9 +104,6 @@ function commonOption(policy, args, index) {
       policy.effort = value
       policy.effortSet = true
       return index + 2
-    case '--allow-mcp':
-      policy.allowMcp = true
-      return index + 1
     case '--repo':
       if (value === undefined) die(3, 'error: --repo needs a value')
       policy.repo = value
@@ -261,9 +254,8 @@ async function runReview(args) {
   validatePolicy(policy)
   const env = createEnvironment(policy.repo)
   checkScopeNonempty(review, env)
-  const mcpArgs = mcpOverrides(env, policy.allowMcp)
   const artifacts = createArtifacts(env, 'review')
-  const invocation = buildReviewCommand(review, env, safetyArgs('review', policy, mcpArgs, artifacts.out))
+  const invocation = buildReviewCommand(review, env, safetyArgs('review', policy, artifacts.out))
   const run = await runCodex(env, invocation, {
     ...artifacts, timeout: policy.timeout, runNoun: 'review', resultNoun: 'report',
   })
@@ -341,9 +333,8 @@ function emitResume(policy, env, run, artifacts) {
     return
   }
   process.stderr.write(`session: ${session}\n`)
-  const mcp = policy.allowMcp ? ' --allow-mcp' : ''
   const timeout = policy.timeout !== 3000 ? ` --timeout ${policy.timeout}` : ''
-  process.stderr.write(`resume: --continue ${session} --model ${shellQuote(policy.model)} --effort ${shellQuote(policy.effort)}${mcp}${timeout} --repo ${shellQuote(env.cwd)}\n`)
+  process.stderr.write(`resume: --continue ${session} --model ${shellQuote(policy.model)} --effort ${shellQuote(policy.effort)}${timeout} --repo ${shellQuote(env.cwd)}\n`)
 }
 
 async function runConsult(args) {
@@ -351,10 +342,9 @@ async function runConsult(args) {
   const question = parseConsultArgs(policy, args)
   validatePolicy(policy)
   const env = createEnvironment(policy.repo, { requireWorkTree: false })
-  const mcpArgs = mcpOverrides(env, policy.allowMcp)
   const artifacts = createArtifacts(env, 'consult')
   const cmdArgs = policy.sessionId ? ['exec', 'resume', policy.sessionId] : ['exec']
-  cmdArgs.push(...safetyArgs('consult', policy, mcpArgs, artifacts.out))
+  cmdArgs.push(...safetyArgs('consult', policy, artifacts.out))
   const diagnostic = `running: ${env.codexBin} ${cmdArgs.join(' ')} -- <question: ${question.length} chars>`
   cmdArgs.push('--', question)
   const run = await runCodex(env, { args: cmdArgs, diagnostic }, {

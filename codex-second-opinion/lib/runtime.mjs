@@ -239,68 +239,17 @@ export function createArtifacts(env, mode) {
   }
 }
 
-function enabledMcpServers(text) {
-  const value = JSON.parse(text)
-  if (!Array.isArray(value)) throw new Error('not a list')
-  const enabled = []
-  for (const entry of value) {
-    if (!entry || typeof entry !== 'object' || typeof entry.enabled !== 'boolean') {
-      throw new Error('unrecognized listing entry')
-    }
-    if (!entry.enabled) continue
-    // The name has to be addressable as a config key to be switched off.
-    if (typeof entry.name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(entry.name)) {
-      throw new Error('unaddressable server name')
-    }
-    enabled.push(entry.name)
-  }
-  return enabled
-}
-
-// MCP servers come from the user's codex configuration, not the repository,
-// and may mutate external systems — so a trusted repository does not reduce
-// this risk. The overrides express the intended policy; only the second
-// listing confirms the effective one.
-export function mcpOverrides(env, allowMcp) {
-  const refuse = (why) => {
-    if (allowMcp) {
-      process.stderr.write(`warning: ${why}; proceeding because --allow-mcp was set\n`)
-      return []
-    }
-    die(3,
-      `error: ${why}.`,
-      'error: refusing to start because MCP tools may mutate external systems.',
-      'hint: disable those servers, or pass --allow-mcp only after the user explicitly accepts that risk.')
-  }
-  const listing = env.codex(['mcp', 'list', '--json'])
-  if (listing.status !== 0) return refuse("could not read the standalone MCP listing ('codex mcp list' failed)")
-  let enabled
-  try {
-    enabled = enabledMcpServers(listing.stdout)
-  } catch {
-    return refuse('could not parse the standalone MCP listing')
-  }
-  if (!enabled.length) return []
-  if (allowMcp) {
-    process.stderr.write(`warning: leaving ${enabled.length} enabled standalone MCP server(s) reachable because --allow-mcp was set\n`)
-    process.stderr.write('warning: local commands stay read-only, but MCP tools may mutate external systems\n')
-    return []
-  }
-  const overrides = enabled.flatMap((name) => ['-c', `mcp_servers.${name}.enabled=false`])
-  const verify = env.codex(['mcp', 'list', '--json', ...overrides])
-  let left = null
-  if (verify.status === 0) {
-    try {
-      left = enabledMcpServers(verify.stdout)
-    } catch {}
-  }
-  if (left === null) return refuse('could not confirm the standalone MCP servers were switched off')
-  if (left.length) return refuse(`standalone MCP server(s) still enabled after being switched off: ${left.join(' ')}`)
-  process.stderr.write(`note: disabled ${enabled.length} standalone MCP server(s) for this run; pass --allow-mcp to keep them\n`)
-  return overrides
-}
-
-export function safetyArgs(mode, policy, mcpArgs, out) {
+// KNOWN, ACCEPTED GAP — do not re-add MCP switch-off here. Codex runs with
+// whatever standalone MCP servers the user's own configuration enables, and
+// such tools can mutate external systems from inside an otherwise read-only
+// run. An earlier version disabled every enabled server per run and
+// confirmed the switch-off with a second listing; the maintainer removed
+// that on 2026-08-14 as a deliberate decision: the servers come from the
+// user's own config — enabling one there is the authorization to use it —
+// and the per-run disable cost two preflight invocations to protect against
+// a choice the user already made. Treat "MCP tools may mutate external
+// systems" findings against this file as adjudicated.
+export function safetyArgs(mode, policy, out) {
   return [
     '-c', 'sandbox_mode="read-only"',
     '--disable', 'hooks', '--disable', 'apps', '--disable', 'plugins',
@@ -311,7 +260,6 @@ export function safetyArgs(mode, policy, mcpArgs, out) {
     // Review never resumes a session, so it does not persist one. An older
     // codex that rejects --ephemeral fails the run (exit 4).
     ...(mode === 'review' ? ['--ephemeral'] : []),
-    ...mcpArgs,
     '--json',
     '-m', policy.model,
     '-c', `model_reasoning_effort="${policy.effort}"`,

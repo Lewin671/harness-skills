@@ -177,30 +177,12 @@ test('review --commit works on a clean tree and --context reaches the prompt', (
   assert.ok(!exec.includes('--commit'), `scope flag and prompt together in: ${exec}`)
 })
 
-test('enabled MCP servers are switched off, confirmed, and passed to exec', () => {
+test('MCP servers are left untouched — no listing, no overrides', () => {
   const result = run(['review', '--commit', 'HEAD'], { FAKE_MCP_ENABLED: '1' })
   assert.equal(result.status, 0, result.stderr)
-  const lists = result.argv.filter((line) => line.startsWith('mcp list --json'))
-  assert.equal(lists.length, 2, `expected listing + re-check in ${result.argv}`)
-  assert.ok(lists[1].includes('mcp_servers.srv.enabled=false'), `re-check without override: ${lists[1]}`)
+  assert.ok(!result.argv.some((line) => line.startsWith('mcp')), `unexpected mcp invocation in ${result.argv}`)
   const exec = result.argv.find((line) => line.startsWith('exec review'))
-  assert.ok(exec.includes('mcp_servers.srv.enabled=false'), `exec without override: ${exec}`)
-  assert.match(result.stderr, /note: disabled 1 standalone MCP server/)
-})
-
-test('an MCP server that stays enabled after switch-off refuses the run', () => {
-  const result = run(['review', '--commit', 'HEAD'], { FAKE_MCP_ENABLED: '1', FAKE_MCP_STICKY: '1' })
-  assert.equal(result.status, 3, result.stderr)
-  assert.match(result.stderr, /still enabled after being switched off/)
-  assert.ok(!result.argv.some((line) => line.startsWith('exec')), 'exec must not run')
-})
-
-test('--allow-mcp leaves servers reachable with a warning', () => {
-  const result = run(['review', '--commit', 'HEAD', '--allow-mcp'], { FAKE_MCP_ENABLED: '1' })
-  assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stderr, /warning: leaving 1 enabled standalone MCP server/)
-  const exec = result.argv.find((line) => line.startsWith('exec review'))
-  assert.ok(!exec.includes('enabled=false'), `override present despite --allow-mcp: ${exec}`)
+  assert.ok(!exec.includes('enabled=false'), `MCP override present in: ${exec}`)
 })
 
 test('a failing codex exits 4 and discards the result but keeps the log', () => {

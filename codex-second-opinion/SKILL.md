@@ -49,12 +49,12 @@ Model-generated commands run in Codex's read-only sandbox
 (`sandbox_mode="read-only"`), with hooks, apps, plugins and the legacy
 `notify` callback disabled by flags — `--strict-config` turns an
 unrecognized key into a failed run (exit `4`) instead of a silently
-ignored safety setting. Standalone MCP servers are switched off per
-server and the switch-off is **confirmed** with a second listing; a
-listing that cannot be read or confirmed refuses the run. `--allow-mcp`
-leaves those servers reachable and is the user's risk to accept, never
-yours to add — a request for a second opinion is not that acceptance.
-**Never use this skill to apply fixes.**
+ignored safety setting. Standalone MCP servers from the user's own
+codex configuration stay **reachable**: enabling one there is the
+user's authorization to use it, so the wrapper does not second-guess
+it. The read-only sandbox covers local commands only — an MCP tool can
+mutate whatever external system it fronts, so mention it if Codex's
+output shows one was used. **Never use this skill to apply fixes.**
 
 What the boundary does *not* do:
 
@@ -111,7 +111,6 @@ holds stays readable to Codex.
 | `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means `--uncommitted`. |
 | `--context TEXT` | Review only. Cannot combine with `--custom`. |
 | `--model M --effort L` | Always a pair, or omit both for the pinned defaults. |
-| `--allow-mcp` | User-authorized risk override. Never add on your own. |
 | `--timeout N` | 1–86400 seconds; default 3000. |
 | `--continue ID` | Consult only. Paste the whole `resume:` tail, not just the id. |
 
