@@ -578,3 +578,10 @@ test('a relative CODEX_BIN is refused', () => {
   assert.equal(result.status, 3, result.stderr)
   assert.match(result.stderr, /must be an absolute path/)
 })
+
+test('a CODEX_BIN that does not exist is refused with a clear message', () => {
+  const result = run(['review', '--commit', 'HEAD'], { CODEX_BIN: join(root, 'missing-codex') })
+  assert.equal(result.status, 3, result.stderr)
+  assert.match(result.stderr, /not an executable file/)
+  assert.equal(result.argv.length, 0)
+})

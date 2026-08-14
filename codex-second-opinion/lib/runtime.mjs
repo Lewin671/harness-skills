@@ -165,6 +165,14 @@ function resolveCodexBin(env) {
         `error: CODEX_BIN (${flat(raw)}) must be an absolute path; this script runs from inside the repository under review, so a relative one would resolve against its content.`,
         'hint: use the output of `command -v codex` from an interactive shell.')
     }
+    try {
+      accessSync(raw, constants.X_OK)
+      if (!statSync(raw).isFile()) throw new Error('not a file')
+    } catch {
+      die(3,
+        `error: CODEX_BIN (${flat(raw)}) is not an executable file.`,
+        'hint: use the output of `command -v codex` from an interactive shell.')
+    }
     env.codexBin = raw
   } else {
     // spawn() would search the same absolute-only PATH, but resolving here
@@ -387,7 +395,9 @@ export async function runCodex(env, invocation, options) {
   }, timeout * 1000)
 
   const result = await new Promise((resolvePromise) => {
-    child.once('error', () => resolvePromise({ status: 127 }))
+    // spawn reports ENOENT/EACCES asynchronously; keep the reason, or the
+    // failure surfaces as "codex failed" with an empty log.
+    child.once('error', (error) => resolvePromise({ status: 127, spawnError: error?.message }))
     child.once('close', (code, signal) => resolvePromise({ status: code ?? (signal ? 1 : 0) }))
   })
   clearTimeout(timeoutTimer)
@@ -413,6 +423,9 @@ export async function runCodex(env, invocation, options) {
     die(5)
   }
   if (result.status !== 0) {
+    if (result.spawnError) {
+      process.stderr.write(`error: could not start ${flat(env.codexBin)}: ${flat(result.spawnError)}\n`)
+    }
     process.stderr.write(`error: codex ${runNoun} failed; raw output at ${log}\n`)
     if (readLogFile(log).includes('unknown configuration field')) {
       process.stderr.write('hint: codex rejected a configuration key this script sets (--strict-config is deliberate); the installed codex CLI may have drifted from the keys in lib/runtime.mjs.\n')

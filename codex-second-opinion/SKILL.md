@@ -210,7 +210,7 @@ The exit code is the verdict on *the run*, never on the code:
 | `0` | A result was produced | Read stdout and relay it. |
 | `2` | (review only) Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
 | `3` | Bad arguments or an unsafe environment | Read stderr; report the invalid or unsafe setup. Do not substitute a Claude answer. |
-| `4` | The invocation produced no usable result | Read stderr. Codex failed, never started, was not authenticated, rejected a config key (including `--ephemeral` on an old CLI), or did not resume the session. |
+| `4` | The invocation produced no usable result | Read stderr. Codex failed, never started, was not authenticated, rejected a config key (including `--ephemeral` on an old CLI), rejected the selected model (report codex's message; the user may pick another or set the env overrides), or did not resume the session. |
 | `5` | Hung and was killed | Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
 | `129`/`130`/`143` | The wrapper was signalled (`HUP`/`INT`/`TERM`) | Something outside the run interrupted it. |
 
