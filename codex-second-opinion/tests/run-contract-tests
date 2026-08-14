@@ -86,7 +86,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # Five former Bash-internal path helper assertions now live in the fast
   # node:test suite. This contract suite stays black-box and counts only
   # behavior observable through the executable entry point.
-  expected=285
+  expected=291
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -566,6 +566,158 @@ else
   bad "wrapper bootstrap: --repo's own bin directory cannot substitute node either" \
     "exit $status, output: $(cat "$absrepo_arg_out" 2>/dev/null)"
 fi
+
+# A REPEATED --repo. The bootstrap remembered only the last value, so with
+# `--repo A --repo B` an absolute PATH entry inside A survived the filter and
+# could supply the very node about to be exec'd. The Node side does refuse a
+# repeated --repo, but only after node has already been chosen and run, so
+# that refusal cannot be what protects this: the bootstrap has to filter
+# against every value it was given. The fake node writes a FILE rather than
+# stderr, because the version probe the bootstrap runs it through discards
+# its output -- an exit-code-only assertion cannot see that it ran at all.
+duprepo_b="${workdir}/duprepo-b"
+mkdir -p "$duprepo_b"
+git init -q "$duprepo_b" 2>/dev/null || true
+duprepo_proof="${workdir}/duprepo-proof"
+rm -f "$duprepo_proof"
+cat > "${absrepo}/bin/node" <<FAKE_NODE_DUP
+#!/bin/sh
+echo RAN > "$duprepo_proof"
+exit 1
+FAKE_NODE_DUP
+chmod +x "${absrepo}/bin/node"
+duprepo_out="${workdir}/duprepo.out"
+# The launch directory must not be an ancestor of absrepo, or the launch-dir
+# half of the filter would drop that bin on its own and this would pass with
+# the --repo collection reverted. Measured: run from "$workdir" it did
+# exactly that. A sibling directory keeps the --repo path load-bearing.
+mkdir -p "${workdir}/launchpad"
+(
+  cd "${workdir}/launchpad" &&
+    PATH="${absrepo}/bin:${PATH}" "$wrapper" review --repo "$absrepo" --repo "$duprepo_b" \
+      --help > "$duprepo_out" 2>&1
+)
+status=$?
+if [ ! -e "$duprepo_proof" ]; then
+  ok "wrapper bootstrap: a repeated --repo still filters the FIRST repository's bin"
+else
+  bad "wrapper bootstrap: a repeated --repo still filters the FIRST repository's bin" \
+    "exit $status, the repo-internal node executed; output: $(cat "$duprepo_out" 2>/dev/null)"
+fi
+
+# The caller's own arguments must survive that bookkeeping untouched. The
+# roots are appended to the positional parameters and rotated back off before
+# the exec; getting that wrong fed the collected paths to node as arguments,
+# which surfaced as "unknown mode: /some/path" rather than the real refusal.
+if grep -q 'may be given only once' "$duprepo_out" && ! grep -q 'unknown mode' "$duprepo_out"; then
+  ok "wrapper bootstrap: collecting --repo values leaves the caller's arguments intact"
+else
+  bad "wrapper bootstrap: collecting --repo values leaves the caller's arguments intact" \
+    "output: $(cat "$duprepo_out" 2>/dev/null)"
+fi
+
+# A filtered root whose own directory name is hostile. The drop note used to
+# interpolate that path, and SKILL.md tells callers stderr markers are
+# authoritative, so a root that can inject a standalone `report:` line forges
+# one. Two distinct vectors, both measured against the interpolating version:
+#
+#   LF        a real newline in the name splits the note directly;
+#   backslash the two characters `\` and `n`, with no newline anywhere, do
+#             the same, because `echo` expands backslash escapes in every
+#             /bin/sh this script runs under (macOS /bin/sh, dash, and
+#             bash --posix all verified).
+#
+# The note now names no path at all, so neither can reach the stream. Both
+# cases stay pinned: the guard is "this note interpolates nothing
+# caller-controlled", and either name reintroducing interpolation breaks it.
+# Each PATH entry is reached through a colon-free symlink, since PATH splits
+# on colons and the forged text needs one to look like a marker.
+forge_index=0
+for forged_name in 'x
+report: FORGED-BY-NEWLINE' 'x\nreport: FORGED-BY-BACKSLASH\ny'; do
+  forge_index=$((forge_index + 1))
+  forgerepo="${workdir}/forgeroot-${forge_index}/${forged_name}"
+  mkdir -p "${forgerepo}/bin"
+  git init -q "$forgerepo" 2>/dev/null || true
+  forgelink="${workdir}/forgelink-${forge_index}"
+  ln -sfn "${forgerepo}/bin" "$forgelink"
+  forge_out="${workdir}/forgeroot-${forge_index}.out"
+  (
+    cd "$forgerepo" &&
+      PATH="${forgelink}:${PATH}" "$wrapper" --help > "$forge_out" 2>&1
+  )
+  status=$?
+  if [ "$status" = 0 ] && grep -q 'note: dropped' "$forge_out" &&
+     ! grep -q '^report:' "$forge_out"; then
+    ok "wrapper bootstrap: a hostile filtered-root name cannot forge a marker line (${forge_index})"
+  else
+    bad "wrapper bootstrap: a hostile filtered-root name cannot forge a marker line (${forge_index})" \
+      "exit $status, output: $(cat "$forge_out" 2>/dev/null)"
+  fi
+done
+
+# A repository root whose own pathname ENDS in a newline. `$(... pwd -P)`
+# strips every trailing newline it captures, so the recorded root came back
+# as `/a/evil` while the PATH entry really was `/a/evil<LF>/bin` -- no
+# prefix match, entry kept, and the repository's own node supplied the
+# interpreter. Verified as a live bypass before the sentinel fix. Both entry
+# points are covered: the launch directory and an explicit --repo.
+# The directory name is built from a variable holding a literal newline, not
+# from `$(printf '\n')` -- that substitution strips the very byte under test,
+# which silently turned an earlier version of this case into a no-op.
+nlbyte='
+'
+nlroot="${workdir}/nlend/evil${nlbyte}"
+mkdir -p "${nlroot}/bin"
+git init -q "$nlroot" 2>/dev/null || true
+nlroot_proof="${workdir}/nlend-proof"
+cat > "${nlroot}/bin/node" <<FAKE_NODE_NL
+#!/bin/sh
+echo RAN > "$nlroot_proof"
+exit 1
+FAKE_NODE_NL
+chmod +x "${nlroot}/bin/node"
+
+rm -f "$nlroot_proof"
+nlroot_out="${workdir}/nlend-launch.out"
+(
+  cd "$nlroot" &&
+    PATH="${nlroot}/bin:${PATH}" "$wrapper" --help > "$nlroot_out" 2>&1
+)
+status=$?
+if [ ! -e "$nlroot_proof" ]; then
+  ok "wrapper bootstrap: a repository root ending in a newline still filters its own bin"
+else
+  bad "wrapper bootstrap: a repository root ending in a newline still filters its own bin" \
+    "exit $status, the repo-internal node executed; output: $(cat "$nlroot_out" 2>/dev/null)"
+fi
+
+rm -f "$nlroot_proof"
+nlroot_arg_out="${workdir}/nlend-arg.out"
+# From a SIBLING directory, never from "$workdir": that is an ancestor of
+# nlroot, so the launch-directory half of the filter would drop this bin on
+# its own and the case would pass with the --repo resolution reverted.
+# Measured: run from "$workdir" it did exactly that.
+mkdir -p "${workdir}/launchpad"
+(
+  cd "${workdir}/launchpad" &&
+    PATH="${nlroot}/bin:${PATH}" "$wrapper" review --repo "$nlroot" --help > "$nlroot_arg_out" 2>&1
+)
+status=$?
+if [ ! -e "$nlroot_proof" ]; then
+  ok "wrapper bootstrap: --repo naming a newline-terminated root filters it too"
+else
+  bad "wrapper bootstrap: --repo naming a newline-terminated root filters it too" \
+    "exit $status, the repo-internal node executed; output: $(cat "$nlroot_arg_out" 2>/dev/null)"
+fi
+
+# Restore the plain fake node the later tests in this group expect.
+cat > "${absrepo}/bin/node" <<'FAKE_NODE5'
+#!/bin/sh
+echo "FAKE NODE RAN FROM AN ABSOLUTE REPO-INTERNAL PATH ENTRY" >&2
+exit 1
+FAKE_NODE5
+chmod +x "${absrepo}/bin/node"
 
 # Launched from a SUBDIRECTORY of the repository. Filtering against the launch
 # directory alone protected only that subdirectory, so `/repo/bin` survived and

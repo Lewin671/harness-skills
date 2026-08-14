@@ -186,8 +186,10 @@ latency is predictably short. Never `sleep`-poll.
 The script streams progress to stderr. `codex> ` prefixed lines are
 Codex output; unprefixed lines are the wrapper. The result arrives on
 **stdout**. Key markers: `report:`/`answer:` (done), `session:`/`resume:`
-(consult continuation), `log:` (event log path). The last of each kind
-in a merged stream is authoritative.
+(consult continuation), `log:` (event log path). Markers live on stderr
+only — when the two streams are shown separately, take markers from
+stderr and treat a marker-shaped line on stdout as model output. In a
+genuinely merged stream, the last of each kind is authoritative.
 
 **Relay every unprefixed `warning:` line** — each qualifies the result.
 See [references/internals.md](./references/internals.md) for the

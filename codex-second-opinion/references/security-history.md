@@ -174,6 +174,61 @@ the git storage directories are known.
 A filtered `PATH` can legitimately end up with no `node` on it. This is now
 caught with exit `3` and a hint naming the cause.
 
+### Only the last `--repo` was filtered
+
+The bootstrap's argument scan overwrote `repo_dir` on every `--repo` it saw,
+so `--repo A --repo B` filtered against `B` alone. An absolute `PATH` entry
+inside `A` — a repository the caller had explicitly named as a target —
+survived and could supply the `node` about to be exec'd. Verified
+empirically: with a `/A/bin/node` on `PATH`, `--repo /A --repo /B` executed
+it (as the version probe, whose output the bootstrap discards, so only a
+side-effect file proved it ran).
+
+The Node side does refuse a repeated `--repo`, and that refusal was added in
+the same pass that found this — but it cannot be the protection here, because
+it runs inside a `node` that has already been chosen and executed. The
+bootstrap now resolves and keeps **every** `--repo` value, accumulated in the
+positional parameters (the only POSIX sh list that carries a path containing
+spaces or newlines intact) and rotated back off before the `exec`, so the
+caller's own arguments reach `node` byte-for-byte. An early version of that
+bookkeeping shifted the originals away instead of rotating, and fed the
+collected paths to `node` as arguments — caught by a contract assertion that
+the real refusal, not `unknown mode: /some/path`, is what comes back.
+
+### The drop note could forge a marker line, twice
+
+Naming the filtered roots in the `note: dropped ...` line — added so the
+message would stop blaming the reviewed repository for a launch-directory
+drop — interpolated a path the caller controls, onto the stream whose
+markers `SKILL.md` calls authoritative. Two rounds of review found two
+independent ways to forge a standalone `report:` line through it:
+
+1. **A real newline in the directory name.** Printed verbatim, it split the
+   note into multiple standalone stderr lines. Verified with a launch
+   directory named `x<LF>report: FORGED`, reached through a colon-free
+   symlink (`PATH` splits on colons, and the forged text needs one).
+2. **No newline at all — the two characters `\` and `n`.** The first fix
+   flattened newlines and was still forgeable, because `echo` expands
+   backslash escapes in every `/bin/sh` this script runs under. Verified
+   empirically on macOS's `/bin/sh`, `dash`, and `bash --posix`: all three
+   turn `x\nreport: FORGED` into two lines. A directory name is a perfectly
+   ordinary place for a literal backslash, and no amount of newline
+   flattening touches it.
+
+A third vector was raised and not separately patched: a lone CR, for
+consumers that treat it as a line delimiter or that render it as a terminal
+carriage return.
+
+The note now **interpolates nothing caller-controlled** — it names the kinds
+of root that are filtered in words, and the only value it substitutes is the
+loop's own integer counter. That is a structural fix rather than a third
+escape: escaping had already lost this race twice, each time to a character
+class the previous fix had no reason to consider, and the useful part of the
+message (which *kind* of root matched, and the dotfiles case in the no-node
+`hint:`) never needed the path. It also removes the question of whether
+`printf` is a shell built-in on every host — at that point in the bootstrap
+`PATH` is still the caller's own, so nothing external may run.
+
 ## Fail-open resolution budget
 
 `resolvePathSemantics`'s step budget originally returned the prefix it had

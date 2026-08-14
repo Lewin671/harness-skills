@@ -352,7 +352,7 @@ export class Runtime {
     if (logSize <= 0) {
       process.stderr.write(`warning: progress log ${this.log} is missing or empty; session and diagnostic details may be lost\n`)
     } else if (!hasRecognizedEvent(this.readStdoutEvents())) {
-      process.stderr.write(`warning: codex's --json event stream at ${this.log} has no line this script recognizes as a JSON event.\n`)
+      process.stderr.write(`warning: codex's --json stdout stream carried no line this script recognizes as a JSON event (both streams are archived at ${this.log}).\n`)
       process.stderr.write('warning: this usually means the installed codex-cli changed its event format; model/session metadata reported below may be silently wrong -- recheck references/internals.md against the version in use.\n')
     }
     if (this.state.modelSelection.kind === 'inherit') {

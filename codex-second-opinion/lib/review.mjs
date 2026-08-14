@@ -34,7 +34,7 @@ function parseReviewArgs(state, args) {
     scopeFlag: '--uncommitted', scopeValue: '', scopeSet: false,
     context: '', contextSet: false,
     resolvedBase: '', resolvedCommit: '', resolvedParent: '',
-    allowGitFilters: false,
+    allowGitFilters: false, timeoutSet: false,
   }
   const setScope = () => {
     if (review.scopeSet) die(3, 'error: scopes are mutually exclusive; pick one of --uncommitted, --base, --commit, --custom')
@@ -62,7 +62,12 @@ function parseReviewArgs(state, args) {
     }
     if (option === '--timeout') {
       if (args[i + 1] === undefined) die(3, 'error: --timeout needs a value')
-      state.timeout = parseTimeout(args[i + 1], '--timeout'); i += 2; continue
+      if (review.timeoutSet) {
+        die(3,
+          'error: --timeout may be given only once.',
+          'hint: repeating it makes the effective deadline depend on flag order.')
+      }
+      state.timeout = parseTimeout(args[i + 1], '--timeout'); review.timeoutSet = true; i += 2; continue
     }
     if (option === '-h' || option === '--help') { usage(); throw { code: 0, lines: [] } }
     if (option === '--allow-git-filters') { review.allowGitFilters = true; i += 1; continue }
@@ -273,7 +278,7 @@ function checkScopeDrift(review, env, before) {
     process.stderr.write('warning: could not fingerprint the working tree, so whether it changed while codex read it is unknown.\n')
     process.stderr.write('warning: treat the result as non-reproducible; use --commit, which names an immutable object.\n')
   } else if (before !== after) {
-    process.stderr.write('warning: the working tree changed while codex was reading it, so this review does not describe the tree that passed the scope check.\n')
+    process.stderr.write('warning: the working tree changed between the scope check and the end of this review, so the report does not describe the tree that passed the scope check.\n')
     process.stderr.write('warning: treat the result as non-reproducible; rerun on a quiet tree, or use --commit, which names an immutable object.\n')
   }
 }
@@ -326,9 +331,14 @@ export async function runReview(state, args) {
   env.initialize()
   guardWorktreeFilters(review, env)
   scopeNonempty(review, env)
+  // Immediately after the scope check, not just before the codex spawn: the
+  // drift warning speaks for "the tree that passed the scope check", so the
+  // fingerprint window has to open at that check. Taken any later, a change
+  // landing during the capability probes or artifact setup was invisible to
+  // the drift comparison while the warning still claimed that coverage.
+  const before = scopeFingerprint(review, env)
   const launchPlan = verifyLaunchPlan(env)
   const artifacts = env.createArtifacts('review')
-  const before = scopeFingerprint(review, env)
   const runtime = new Runtime(launchPlan, env, artifacts)
   await runtime.run(buildCommand(review, env, runtime))
   checkScopeDrift(review, env, before)

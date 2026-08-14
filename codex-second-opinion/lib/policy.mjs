@@ -1,4 +1,4 @@
-import { die, hasLineBreak, shellQuote } from './util.mjs'
+import { die, flat, hasLineBreak, shellQuote } from './util.mjs'
 
 const validatedPolicies = new WeakSet()
 
@@ -18,6 +18,7 @@ export function createPolicy(mode) {
     inheritSet: 0,
     allowMcp: false,
     repo: '.',
+    repoSet: 0,
     timeout: null,
     sessionId: '',
   }
@@ -26,6 +27,20 @@ export function createPolicy(mode) {
 export function validatePolicy(policy) {
   if (hasLineBreak(policy.model) || hasLineBreak(policy.effort)) {
     die(3, 'error: the model and effort must not contain line breaks')
+  }
+  // The effort is the one selection value embedded in config SYNTAX rather
+  // than passed as its own argv element: safetyArgs writes it inside the
+  // quotes of -c model_reasoning_effort="...". The model travels via -m and
+  // needs no such check. A quote or backslash in the effort cannot define a
+  // second config key (the whole -c value is one argv element, split at its
+  // first '='), but it would reach codex as broken TOML and fail there,
+  // minutes and a spawn later, with a config error naming this script's own
+  // key -- when the policy promise is that an invalid selection is refused
+  // before anything is spawned.
+  if (!policy.inheritSet && !/^[A-Za-z0-9._-]+$/.test(policy.effort)) {
+    die(3,
+      `error: the effort may contain only letters, digits, '.', '_' and '-', got '${flat(policy.effort)}'.`,
+      'error: the effort is embedded in a quoted codex config value, so other characters would reach codex as config syntax instead of failing here.')
   }
   if (policy.envModelSet !== policy.envEffortSet) {
     die(3,
@@ -82,7 +97,12 @@ export function commonOption(policy, args, index) {
       policy.allowMcp = true; return index + 1
     case '--repo':
       if (value === undefined) die(3, 'error: --repo needs a value')
-      policy.repo = value; return index + 2
+      if (policy.repoSet) {
+        die(3,
+          'error: --repo may be given only once.',
+          'hint: repeating it makes the effective repository depend on flag order.')
+      }
+      policy.repo = value; policy.repoSet += 1; return index + 2
     default:
       return null
   }

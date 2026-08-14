@@ -76,7 +76,14 @@ The launcher distrusts:
   bootstrap (physical-location comparison, before `node` is looked up) and the
   Node side (`Environment.excludeFromPath`, before `git` or `codex` is
   spawned). Entries are compared against the repository root, not merely the
-  launch directory.
+  launch directory, and against **every** `--repo` value rather than the last
+  one — the Node side's duplicate-`--repo` refusal happens after `node` has
+  already been chosen, so it cannot be what protects this. The bootstrap's
+  drop note names no path at all: those are caller-controlled, the note sits
+  on the stream whose markers `SKILL.md` calls authoritative, and both a
+  newline in a directory name and a literal `\n` two-character sequence
+  (which `echo` expands under every `/bin/sh` tested) were shown to forge a
+  standalone `report:` line through it.
 - **Node preload/write variables** — `NODE_OPTIONS`, `NODE_PATH`,
   `NODE_V8_COVERAGE`, `NODE_COMPILE_CACHE`, and `NODE_REDIRECT_WARNINGS` are
   cleared in the bootstrap (before `node` starts) and deleted from `baseEnv`
@@ -140,8 +147,8 @@ afterwards. A server enabled in the user's config inside that window carries no
 `enabled=false` override, because the override list is built from the names the
 re-check saw. Closing this structurally would need either a deny-all switch or
 a configuration snapshot shared by verification and execution, and codex-cli
-`0.146.0` offers neither (`--ignore-user-config` was evaluated on `0.147.0` and
-rejected — see "Session persistence" above): `-c mcp_servers={}` **merges** rather than replaces,
+`0.147.0` offers neither (`--ignore-user-config` was evaluated on `0.147.0` and
+rejected — see "Session persistence" below): `-c mcp_servers={}` **merges** rather than replaces,
 leaving an already-enabled server enabled (measured — with one enabled server
 in the config, `codex mcp list --json -c 'mcp_servers={}'` still reports it as
 enabled), and `exec` has no flag that pins a config the probes could share.
@@ -189,7 +196,7 @@ the feature. `verifyCapabilityProfile` probes support after the empty-scope
 check. Missing support is exit `3`, not a compatibility downgrade that silently
 persists a review transcript.
 
-Measured against `codex-cli 0.147.0`, one release past this document's baseline:
+Measured against `codex-cli 0.147.0`, this document's baseline:
 an ephemeral run still emits `thread.started` carrying a `thread_id`, so nothing
 this script parses out of the event stream changes; only the on-disk rollout
 disappears, and resuming that thread id afterwards fails with `no rollout found
@@ -407,6 +414,18 @@ lines are emitted throughout the run, *after* `running:` included (an
 event-schema warning, a drift warning, and a timeout hint), and a Codex event
 can carry text identical to any of them.
 
+One residual sits outside that prefix rule: the result body itself is
+written to **stdout**, unprefixed — it is the deliverable, not an echoed
+event — while every wrapper marker lives on stderr. The wrapper writes the
+body before the markers that follow it, so in a reader that preserves
+cross-stream arrival order the last line of each marker kind is the
+wrapper's; but stdout and stderr are separate pipes, and nothing guarantees
+a consumer merges them in write order. A reader that can separate the
+streams should therefore take markers from stderr only — a marker-shaped
+line on stdout is model output by construction. The "last of each kind"
+rule in SKILL.md is the fallback for a genuinely merged view, and it
+assumes order-preserving interleaving.
+
 A failed log write is handled rather than thrown. `appendFileSync` throwing
 from inside a stream callback escapes both the awaited promise and the entry
 point's `try`/`catch`, so Node printed a raw stack trace and exited `1` — a
@@ -440,6 +459,16 @@ negative-pid kill and survives both the watchdog and cancellation. Portable
 containment of a full process *tree* would need cgroups, a subreaper, or job
 objects, none of which this wrapper has. "Codex and the descendants that stay
 in its process group" is the guarantee; "every command it spawned" is not.
+
+The group-wide kill fires only on timeout, signal, and failure paths. A run
+that ends with codex exiting `0` is deliberately **not** followed by a sweep
+of its process group: the group leader has already exited by then, so its
+pgid is no longer pinned to a live leader, and a negative-pid `SIGKILL`
+aimed at a pgid the kernel may have already reused would risk killing an
+unrelated process to reap a descendant that, on a clean exit, codex is
+expected to have reaped itself. The residual is the mirror image of the
+containment limit above: a descendant codex leaves running after a clean
+exit survives, and this wrapper does not claim otherwise.
 
 `effectiveModel` and `lastThreadId` assume the documented JSONL event shape (a
 `type` field and `thread.started` carrying `thread_id`). None of that is
@@ -558,11 +587,15 @@ composed prompt. Escaping closes the one concrete forgery this script can
 prevent; it is not a claim that adversarial text inside the fence cannot
 influence the model.
 
-Live `--uncommitted` and `--base` scopes are fingerprinted before and after the
-run. The fingerprint includes HEAD, status, the tracked diff, and contents or
-targets of untracked entries. Read failure produces “unknown,” never the same
-digest as another failure. Drifted or unmeasurable results are labelled
-non-reproducible.
+Live `--uncommitted` and `--base` scopes are fingerprinted immediately after
+the emptiness precheck and again after the run, so the drift window covers
+the capability probes and artifact setup as well as the model invocation —
+fingerprinting only around the codex call left the preflight seconds
+unobserved while the drift warning claimed to speak for "the tree that
+passed the scope check". The fingerprint includes HEAD, status, the tracked
+diff, and contents or targets of untracked entries. Read failure produces
+“unknown,” never the same digest as another failure. Drifted or unmeasurable
+results are labelled non-reproducible.
 
 Status and diff both pass `--ignore-submodules=none` so a repo-configured
 `submodule.<name>.ignore` of `dirty`, `untracked`, or `all` cannot hide

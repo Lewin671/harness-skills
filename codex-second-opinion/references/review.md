@@ -126,9 +126,11 @@ review-specific additions:
    that boundary.
 4. Only `--commit` names an immutable object. `--uncommitted` and
    `--base` diff the live working tree, which the wrapper fingerprints
-   across the run window. Relay drift and unmeasurable warnings rather
-   than calling the result reproducible. "Unmeasurable" is not
-   "unchanged".
+   from the scope check to the end of the run. Relay drift and
+   unmeasurable warnings rather than calling the result reproducible.
+   "Unmeasurable" is not "unchanged". `--custom` gets neither
+   protection — no fingerprint is taken and nothing it names is
+   immutable — so never describe a `--custom` result as reproducible.
 
 For open questions rather than code changes, use consult mode instead:
 it returns a reasoned position instead of a defect list.

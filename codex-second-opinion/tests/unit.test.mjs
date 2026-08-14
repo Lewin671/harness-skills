@@ -402,6 +402,33 @@ test('model settings reject every half-configured or mixed state', () => {
   throwsExit(3, () => validatePolicy(repeated))
 })
 
+// The effort is the one selection value embedded in config SYNTAX (inside the
+// quotes of -c model_reasoning_effort="..."), so it is charset-checked before
+// anything is spawned. A quote cannot define a second config key -- the -c
+// value is a single argv element -- but it would otherwise reach codex as
+// broken TOML and fail there instead of here.
+test('an effort holding config syntax is refused before anything is spawned', () => {
+  for (const effort of ['high" sandbox_mode="danger-full-access', 'high\\', 'hi gh', 'high\'']) {
+    const policy = createPolicy('review')
+    policy.model = 'm'; policy.effort = effort; policy.modelSet = 1; policy.effortSet = 1
+    throwsExit(3, () => validatePolicy(policy), /effort may contain only/)
+  }
+  // The check applies to the pinned and env-supplied values too, and must not
+  // fire under --inherit, where the effort is deliberately empty.
+  const inherit = createPolicy('review'); inherit.model = ''; inherit.effort = ''; inherit.inheritSet = 1
+  assert.equal(validatePolicy(inherit).modelSelection.kind, 'inherit')
+})
+
+// --model/--effort/--inherit already refuse repetition because the effective
+// value would depend on flag order; the same reasoning covers these three.
+test('repeated --repo, --timeout, and --continue are refused rather than last-wins', () => {
+  throwsExit(3, () => reviewInternals.parseReviewArgs(createPolicy('review'), ['--repo', '/a', '--repo', '/b']), /--repo may be given only once/)
+  throwsExit(3, () => reviewInternals.parseReviewArgs(createPolicy('review'), ['--timeout', '10', '--timeout', '20']), /--timeout may be given only once/)
+  throwsExit(3, () => consultInternals.parseConsultArgs(createPolicy('consult'), ['--timeout', '10', '--timeout', '20', 'q']), /--timeout may be given only once/)
+  const uuid = '123e4567-e89b-12d3-a456-426614174000'
+  throwsExit(3, () => consultInternals.parseConsultArgs(createPolicy('consult'), ['--continue', uuid, '--continue', uuid, 'q']), /--continue may be given only once/)
+})
+
 test('event parsing takes the latest metadata from the single invocation', () => {
   const log = `{"type":"thread.started","thread_id":"old","model":"old-model"}\n{"type":"thread.started","thread_id":"new","model":"new-model"}\n`
   assert.equal(lastThreadId(log), 'new')

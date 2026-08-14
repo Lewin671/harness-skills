@@ -25,11 +25,17 @@ function usage() { process.stderr.write(`${USAGE}\n`) }
 function parseConsultArgs(state, args) {
   let question = ''
   let questionSet = false
+  let timeoutSet = false
   for (let i = 0; i < args.length;) {
     const option = args[i]
     if (option === '--continue') {
       const value = args[i + 1]
       if (value === undefined) die(3, 'error: --continue needs a session id')
+      if (state.sessionId) {
+        die(3,
+          'error: --continue may be given only once.',
+          'hint: repeating it makes the effective session depend on flag order.')
+      }
       if (!UUID.test(value)) {
         const suffix = /^[A-Za-z0-9-]+$/.test(value) ? `, got '${flat(value)}'` : ''
         die(3, `error: --continue needs the session UUID printed by the previous run${suffix}`)
@@ -45,7 +51,12 @@ function parseConsultArgs(state, args) {
     }
     if (option === '--timeout') {
       if (args[i + 1] === undefined) die(3, 'error: --timeout needs a value')
-      state.timeout = parseTimeout(args[i + 1], '--timeout'); i += 2; continue
+      if (timeoutSet) {
+        die(3,
+          'error: --timeout may be given only once.',
+          'hint: repeating it makes the effective deadline depend on flag order.')
+      }
+      state.timeout = parseTimeout(args[i + 1], '--timeout'); timeoutSet = true; i += 2; continue
     }
     if (option === '-h' || option === '--help') { usage(); throw { code: 0, lines: [] } }
     if (option === '--') {
