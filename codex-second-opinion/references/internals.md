@@ -1,6 +1,6 @@
 # Runtime Internals
 
-Verified against `codex-cli 0.146.0`. Recheck the capability contract when
+Capability contract verified against `codex-cli 0.147.0`. Recheck it when
 Codex changes its feature, MCP, config, or JSONL interfaces.
 
 ## Contents
@@ -49,15 +49,23 @@ The runtime is split by responsibility:
   resolution.
 - `lib/mcp.mjs` — strict JSON parsing and schema validation for standalone MCP
   listings.
+- `lib/policy.mjs` — argument policy, the closed model-selection state, and
+  resumable model descriptors.
+- `lib/capability-profile.mjs` — the launch-safety capability contract,
+  ephemeral-review requirement, MCP neutralization, and construction of the
+  indivisible launch plan. Stream-schema compatibility stays in `Runtime`,
+  where actual JSONL output can be checked.
 - `lib/environment.mjs` — repository discovery, scratch and `CODEX_HOME`
-  placement, feature gates, MCP neutralization, and read-only git helpers.
-- `lib/runtime.mjs` — shared model state, Codex command safety flags, JSONL
-  metadata, streaming, timeout/cancellation, fallback, and result emission.
+  placement, trusted command execution, and read-only git helpers.
+- `lib/runtime.mjs` — Codex command safety flags, JSONL metadata, streaming,
+  timeout/cancellation, and result emission.
 - `lib/review.mjs` and `lib/consult.mjs` — mode-specific parsing, scope or
   session rules, command construction, and reporting.
 
-State is explicit: mode parsers fill one state object, `Environment` owns
-preflight facts, and `Runtime` owns one invocation's process and artifacts.
+State is explicit: mode parsers fill one policy object, `validatePolicy`
+freezes it, capability discovery binds a matching frozen profile into one
+launch plan, and `Runtime` accepts only that plan for an invocation's process
+and artifacts.
 Modules do not communicate through sourced-shell globals.
 
 ## Trusted launch boundary
@@ -107,10 +115,8 @@ legacy notify callbacks, and standalone MCP tools sit outside that boundary,
 so each is handled separately and fail-closed.
 
 The feature probe reads the final field for `hooks`, `apps`, and `plugins` and
-requires each to be exactly `false`. Missing, unknown, or unparsable state is
-not treated as disabled. When the feature command fails, `codex --version`
-distinguishes an unusable binary from a changed capability response; either
-way the run still refuses because the effective states were not proven false.
+requires each to be exactly `false`. A failed command, missing entry, unknown
+state, or unparsable state is not treated as disabled.
 
 MCP handling uses `JSON.parse`, then requires:
 
@@ -172,30 +178,16 @@ Scratch output is resolved physically. A repo-local `TMPDIR` is moved to the
 physical `/tmp`, exported to the Codex child, and checked again. The result and
 event log are created as private files outside the repository and intentionally
 kept; their final paths are reported. A third artifact — Codex's own session,
-below `CODEX_HOME/sessions` — is written by consult and, on a codex without
-`--ephemeral`, by review too.
+below `CODEX_HOME/sessions` — is written by consult only.
 
 ### Session persistence
 
 `--ephemeral` ("Run without persisting session files to disk") removes a write
-channel rather than checking where it points, and review is the only mode that
-can take it: review has no `--continue`, so the session it would write is never
-read back by anything, while resuming a consultation *is* what consult offers.
-`Environment.detectEphemeralSupport` (`lib/environment.mjs`) therefore refuses
-to arm outside review rather than trusting every future call site to remember
-that — a guard the unit suite mutation-tests, and which the contract suite
-covers only against the mis-wiring it exists to catch (adding the probe call to
-`runConsult`), since the method is otherwise unreachable from consult.
-
-Support is probed, not assumed: a codex without the flag rejects the whole
-invocation over an unknown argument, which would turn every review into an exit
-`4` on an older install. A failed or silent probe degrades to the previous
-behaviour — the session is written, and the `CODEX_HOME` placement checks are
-what keep it out of the repository — and says so in a `note:`, so the caller is
-never left assuming the stronger guarantee held. The probe runs from
-`runReview` after the empty-scope precheck rather than from `initialize()`: a
-run about to exit `2` or `3` should not spend a process on a capability it will
-never use.
+channel rather than checking where it points. Review always requires it because
+review has no continuation; consult never receives it because continuation is
+the feature. `verifyCapabilityProfile` probes support after the empty-scope
+check. Missing support is exit `3`, not a compatibility downgrade that silently
+persists a review transcript.
 
 Measured against `codex-cli 0.147.0`, one release past this document's baseline:
 an ephemeral run still emits `thread.started` carrying a `thread_id`, so nothing
@@ -204,10 +196,9 @@ disappears, and resuming that thread id afterwards fails with `no rollout found
 for thread id ...`. `codex exec review` accepts the flag as well as `codex
 exec`.
 
-This narrows what the `sessions/` refusal below is protecting, for review, from
-"every run" to "only a run on a codex that cannot suppress it". It does not
-retire that refusal: consult still writes a session on every run, and codex
-reads `auth.json` and `config.toml` from `CODEX_HOME` regardless. Whether an
+The `sessions/` refusal below remains because consult writes a session on every
+run, and Codex reads `auth.json` and `config.toml` from `CODEX_HOME` in both
+modes. Whether an
 ephemeral run still writes `cache/`, `.tmp/` or `archived_sessions/` was **not**
 measured, so the placement checks stay exactly as they are.
 
@@ -215,7 +206,7 @@ measured, so the placement checks stay exactly as they are.
 below says to recheck for, and rejected: `codex mcp list` does not accept it
 (measured on 0.147.0), so the verified switch-off this script relies on could
 not be performed at all; it would also discard the user's configured model,
-breaking both `--inherit` and the stale-default fallback, and break any install
+breaking `--inherit`, and break any install
 whose model provider is defined in `config.toml`.
 
 `CODEX_HOME` cannot be relocated without breaking continuation, so an unsafe
@@ -287,17 +278,14 @@ prevents promised-object fetches on Git versions that support it. Git older
 than 2.42 may still fetch a missing object, which remains a disclosed version
 bound rather than an overclaimed guarantee.
 
-Every preflight probe — git, `codex features list`, `codex mcp list` — runs
-synchronously, before `Runtime`'s watchdog timer exists, and so carries a
-deadline of its own: `--timeout` or 600 seconds, **whichever is larger**. Without
-one, "it will not hang forever" was only ever true of the model invocation; a
-git command stalling on an unreachable network mount hung the wrapper
-indefinitely. The 600-second floor matters because `--timeout` also means
-"abort a hung review", and a deliberately tiny value (the contract suite uses
-`--timeout 1` to exercise the watchdog) would otherwise kill every probe before
-it could answer and turn a fast-failing review into an environment error. A
-probe that exceeds its deadline is killed and reported as a failed probe, which
-every caller already refuses on.
+Every preflight probe — git, `codex features list`, `codex mcp list`, and
+`codex exec review --help` for ephemeral support — runs synchronously before
+`Runtime`'s watchdog exists and carries its own fixed 120-second deadline.
+This budget is intentionally independent of `--timeout`, which governs the
+model invocation: a large model budget must not let one preflight process
+stall for hours, while a tiny model budget must not kill a healthy Git probe.
+A probe that exceeds its deadline is killed and reported as a failed probe,
+which every caller refuses on.
 
 ## Codex binary trust boundary
 
@@ -397,32 +385,27 @@ raw chunks let a stderr chunk arriving between two halves of a split stdout
 event splice itself into the middle of that JSON line, so the line stopped
 parsing and the event vanished — silently, since `hasRecognizedEvent` is
 satisfied by any other well-formed event in the log. The events lost that way
-are exactly the ones this script draws conclusions from: model rejection,
-session id, model attribution. Separating only the *echoed* view does not fix
+are exactly the ones this script draws conclusions from: session id and model
+attribution. Separating only the *echoed* view does not fix
 this: the log is what `jsonEvents()` parses, so the framing has to hold there.
 Byte content is still untruncated; only the interleaving granularity changes,
 from arbitrary chunk boundaries to line boundaries.
 
-Event metadata — model attribution, session id, model-rejection detection —
-is parsed from an in-memory stdout-only buffer (`stdoutEventBuffer`), not from
+Event metadata — model attribution and session id — is parsed from an in-memory
+stdout-only buffer (`stdoutEventBuffer`), not from
 the combined log file. The log file still contains both streams for diagnostics,
-but `rejectedModel`, `effectiveModel`, `lastThreadId`, `hasRecognizedEvent`,
+but `effectiveModel`, `lastThreadId`, `hasRecognizedEvent`,
 and `hasThreadStartedEvent` all read from the stdout buffer. This prevents a
 valid JSON line on child stderr from impersonating a `thread.started` event
-(forging a session id), a model-attribution event, or a model-rejection error
-that would trigger the stale-default fallback. The buffer is cleared at the
-start of each `execute()` call, so it naturally contains only the current
-attempt's events without needing the textual `ATTEMPT_MARKER` segmentation the
-combined log uses.
+(forging a session id) or a model-attribution event. The buffer is cleared at
+the start of the single `execute()` call.
 
 Every echoed line of codex output carries a `codex> ` prefix and no line the
 wrapper writes about itself does, which is what lets a caller tell them apart
 mechanically. Position cannot: the wrapper's own `warning:`/`note:`/`hint:`
-lines are emitted throughout the run, *after* `running:` included (a
-stale-model fallback, an event-schema warning, a drift warning, a timeout
-hint), and a codex event can carry text identical to any of them. The failure
-tail skips the wrapper-written `ATTEMPT_MARKER` for the same reason —
-prefixing it would put `codex> ` on a wrapper-authored line.
+lines are emitted throughout the run, *after* `running:` included (an
+event-schema warning, a drift warning, and a timeout hint), and a Codex event
+can carry text identical to any of them.
 
 A failed log write is handled rather than thrown. `appendFileSync` throwing
 from inside a stream callback escapes both the awaited promise and the entry
@@ -458,23 +441,18 @@ containment of a full process *tree* would need cgroups, a subreaper, or job
 objects, none of which this wrapper has. "Codex and the descendants that stay
 in its process group" is the guarantee; "every command it spawned" is not.
 
-Each attempt is separated in the log. Model and thread metadata are parsed as
-JSON only from the final attempt, preventing a rejected first attempt from
-supplying the successful fallback's model or session id.
-
-`effectiveModel`, `lastThreadId`, and `rejectedModel` all assume the
-documented JSONL event shape (a `type` field, `thread.started` carrying
-`thread_id`, top-level `error`/`turn.failed` events). None of that is
+`effectiveModel` and `lastThreadId` assume the documented JSONL event shape (a
+`type` field and `thread.started` carrying `thread_id`). None of that is
 verified against the codex-cli feature surface the way sandbox/MCP state is
 — there is no equivalent of `features list` for event schema. Instead,
 `hasRecognizedEvent` (`lib/runtime.mjs`) is checked once a run has already
 succeeded: if the log holds bytes but not one line parses with a string
 `type` field, the JSONL format has almost certainly drifted from what this
-script expects, and `runWithFallback` warns rather than staying silent. This
+script expects, and `Runtime.run` warns rather than staying silent. This
 is deliberately a warning, not a refusal — the result on stdout came from
 `-o`, not from the event stream, and is not invalidated by this — but every
-value this script itself derives from the event stream (fallback
-attribution, the inherited-model note, session resumability) should be
+value this script itself derives from the event stream (the inherited-model
+note and session resumability) should be
 treated as unconfirmed until this doc is rechecked against the installed
 `codex-cli` version.
 
@@ -483,8 +461,7 @@ treated as unconfirmed until this doc is rechecked against the installed
 Model and effort are a closed three-way choice, validated before anything is
 spawned: no flags (the pinned defaults), an explicit `--model M --effort L`
 pair, or `--inherit`. `--model` without `--effort` and `--effort` without
-`--model` are both refused, because naming either turns off the stale-default
-fallback and the pinned half of the pair is not a tier every model accepts.
+`--model` are both refused because a half-selected tier is ambiguous.
 Each flag may appear at most once — repeating one would make the effective
 setting depend on argument order — and `--inherit` combines with neither.
 
@@ -492,23 +469,12 @@ setting depend on argument order — and `--inherit` combines with neither.
 pinned pair wholesale, for every run in that environment. They must be set
 **together or not at all**: setting one half pairs a caller's value with this
 script's other half, which is exactly the combination the `--model`/`--effort`
-rules exist to refuse, so a half-set environment refuses the run. When a
-fallback fires on a pair that came from these variables, the warning says so
-explicitly rather than calling the defaults stale — they are not this script's
-defaults.
+rules exist to refuse, so a half-set environment refuses the run.
 
-A pinned default rejected as unsupported retries once with inherited Codex
-settings. Explicit pairs never retry. A consult follow-up never retries because
-the rejected question may already have entered the persisted session.
-
-Detecting "the model was rejected" reads only top-level `error`/`turn.failed`
-events, and requires either a phrase that can only describe a model or effort
-(`model_not_found`, `unsupported_value`, `unknown model`, `reasoning.effort`)
-or an `is not supported` message that *also* names a model or effort. Bare
-`is not supported` is ordinary English an unrelated capability error carries
-just as easily; treating it as a stale model spent a second full invocation and
-then attributed the answer to "your configured model" in a note that was simply
-wrong.
+`validatePolicy` converts the mutable parser state into a frozen policy with a
+tagged `modelSelection` (`pinned`, `explicit`, or `inherit`). A rejected choice
+fails once. The wrapper never changes models automatically, which keeps cost,
+attribution, and consult-session effects deterministic.
 
 ## Review mode
 
@@ -623,7 +589,7 @@ the ordinary diff/status text.
 ## Consult mode
 
 Consult requires exactly one non-empty question. `--continue` accepts a UUID
-only. After the run, the thread id is read from the final attempt's parsed
+only. After the run, the thread id is read from the invocation's parsed
 `thread.started` event and must match the requested session on a continuation;
 otherwise the answer is discarded with exit `4`. `emitResume`
 (`lib/consult.mjs`) distinguishes two ways that read can come back empty on a

@@ -78,13 +78,11 @@ Three rules keep the loop honest:
   travel with the session: a follow-up without the original
   `--model`/`--effort` (or `--inherit`) switches the discussion back to
   the pinned defaults mid-conversation. The descriptor carries them —
-  with one honest limit. After a stale-default fallback, or under
-  `--inherit`, it says `--inherit`, which reproduces *your config as it
+  with one honest limit. Under `--inherit`, it says `--inherit`, which reproduces *your config as it
   is when you replay it*, not the model that actually answered. Those
   differ if the config changes in between. The run prints that model in a
   `note:` line; pin it explicitly with `--model`/`--effort` if the
-  discussion has to stay on it. Repeating the pinned defaults instead
-  would fail a second time, with no automatic retry left.
+  discussion has to stay on it.
 - Continuation is verified: if the session expired, the script
   discards the fresh-thread answer and exits `4` instead of passing it
   off as a follow-up. Start a new consultation and restate context.
@@ -102,11 +100,10 @@ Three rules keep the loop honest:
   of that kind in a merged stream. For `session:` that is not merely
   cosmetic — the id is what a follow-up passes to `--continue`.
 
-A rejected model on a follow-up is never retried automatically: the
-rejected attempt may already have recorded the question in the
-session, and any resend into that session — scripted or manual — could
-duplicate it. Treat such a session as contaminated and start a fresh
-consultation instead.
+A rejected model is never retried automatically. On a follow-up, the failed
+attempt may already have recorded the question, so treat the session as
+contaminated and start a fresh consultation. On a first pass, choose another
+model explicitly and start a new run.
 
 Follow-ups belong in the same session — a fresh run rereads the repo
 from scratch and forgets every position already staked out. Only start

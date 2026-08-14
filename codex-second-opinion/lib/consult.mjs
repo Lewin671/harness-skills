@@ -1,5 +1,7 @@
 import { Environment } from './environment.mjs'
-import { commonOption, hasThreadStartedEvent, lastThreadId, resumeFlags, Runtime, validateModelState } from './runtime.mjs'
+import { verifyLaunchPlan } from './capability-profile.mjs'
+import { commonOption, resumeModelFlags, validatePolicy } from './policy.mjs'
+import { hasThreadStartedEvent, lastThreadId, Runtime } from './runtime.mjs'
 import { die, flat, parseTimeout, shellQuote } from './util.mjs'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -65,20 +67,12 @@ function parseConsultArgs(state, args) {
   return question
 }
 
-function buildCommand(state, env, runtime, question, model, effort) {
+function buildCommand(state, env, runtime, question) {
   const args = state.sessionId ? ['exec', 'resume', state.sessionId] : ['exec']
-  args.push(...runtime.safetyArgs(model, effort))
+  args.push(...runtime.safetyArgs())
   const diagnostic = `running: ${env.codexBin} ${args.join(' ')} -- <question: ${question.length} chars>`
   args.push('--', question)
   return { command: env.codexBin, args, diagnostic }
-}
-
-function blockFollowupRetry(state) {
-  if (!state.sessionId) return false
-  process.stderr.write('error: the model/effort was rejected on a follow-up; not retrying automatically.\n')
-  process.stderr.write('hint: treat this session as contaminated — the question may already be recorded in it.\n')
-  process.stderr.write('hint: start a fresh consultation (restating context), with the model flags the session was started with.\n')
-  return true
 }
 
 function emitResume(state, env, runtime) {
@@ -122,21 +116,19 @@ function emitResume(state, env, runtime) {
     // replay has to reproduce to find this session again.
     process.stderr.write(`note: this consultation used CODEX_HOME=${shellQuote(env.codexHome)}; set it the same way before replaying the line below\n`)
   }
-  process.stderr.write(`resume: --continue ${session}${resumeFlags(state)}${mcp}${timeout} --repo ${shellQuote(env.cwd)}\n`)
+  process.stderr.write(`resume: --continue ${session}${resumeModelFlags(state)}${mcp}${timeout} --repo ${shellQuote(env.cwd)}\n`)
 }
 
 export async function runConsult(state, args) {
   const question = parseConsultArgs(state, args)
-  validateModelState(state)
-  const env = new Environment(state)
+  const policy = validatePolicy(state)
+  const env = new Environment(policy)
   env.initialize()
+  const launchPlan = verifyLaunchPlan(env)
   const artifacts = env.createArtifacts('consult')
-  const runtime = new Runtime(state, env, artifacts)
-  await runtime.runWithFallback(
-    (model, effort) => buildCommand(state, env, runtime, question, model, effort),
-    () => blockFollowupRetry(state),
-  )
-  emitResume(state, env, runtime)
+  const runtime = new Runtime(launchPlan, env, artifacts)
+  await runtime.run(buildCommand(policy, env, runtime, question))
+  emitResume(policy, env, runtime)
 }
 
 export const consultInternals = { parseConsultArgs }

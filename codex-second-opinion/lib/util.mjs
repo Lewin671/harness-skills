@@ -80,16 +80,12 @@ export function run(command, args, options = {}) {
     input: options.input,
     maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
     stdio: options.stdio,
-    // Every preflight probe -- git, `codex features list`, `codex mcp list`
-    // -- runs through here, synchronously, BEFORE Runtime's watchdog timer
-    // exists. Without a deadline of their own, any one of them hanging
-    // (an unreachable network mount under the repo, a codex install that
-    // stalls on a config read) hangs the whole wrapper forever, which
-    // contradicts SKILL.md's "It will not hang forever". The caller passes
-    // the same --timeout budget the model invocation gets, so one flag
-    // bounds the entire run rather than only its last phase. A timeout
-    // surfaces as result.error below -- i.e. status 127 -- which every
-    // caller already treats as a failure and refuses on.
+    // Every preflight probe -- git, `codex features list`, `codex mcp list`,
+    // and the ephemeral-help check -- runs here before Runtime's watchdog
+    // exists. Environment gives these probes a fixed, independent budget so
+    // an unreachable mount or stalled config read cannot block the wrapper
+    // indefinitely. A timeout surfaces as result.error below (status 127),
+    // which every caller treats as a failed probe and refuses on.
     timeout: options.timeout,
     killSignal: 'SIGKILL',
     // Only meaningful when the caller resolved `command` to a different

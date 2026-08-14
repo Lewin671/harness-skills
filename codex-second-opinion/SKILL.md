@@ -73,9 +73,9 @@ narrowing scope does not create that boundary.
 
 A run leaves an event log and a result file (kept on `0`, removed on
 `4`/`5`). Consult also leaves a Codex session on disk — what `--continue`
-resumes. Review suppresses it, or says in a `note:` that the installed
-codex could not. `references/internals.md` covers artifact lifecycle,
-storage placement and the git-precheck guarantees in full.
+resumes. Review requires ephemeral-session support and refuses an older
+Codex rather than persisting one. `references/internals.md` covers artifact
+lifecycle, storage placement and the git-precheck guarantees in full.
 
 ## Independence Contract
 
@@ -176,13 +176,10 @@ trust boundary".
 # it beats rebuilding it from the session id.
 ```
 
-**Prefer `run_in_background: true`.** A run legitimately takes minutes —
-at `xhigh` a 374-line review diff blew past the Bash tool's 10-minute
-ceiling, and a tiny one still took 100s. Continue Claude's own analysis
-meanwhile; if nothing useful remains, end the turn and wait for the
-completion notification. Foreground is fine when model, effort and scope
-make the latency predictably short. Never `sleep`-poll: a guessed sleep
-overshoots and wastes the difference.
+**Prefer `run_in_background: true`.** A run can legitimately take minutes.
+Continue Claude's own analysis meanwhile; if nothing useful remains, end
+the turn and wait for the completion notification. Foreground is fine when
+latency is predictably short. Never `sleep`-poll.
 
 ### Is it still running, or hung?
 
@@ -206,14 +203,9 @@ preference.
 
 Settings are a closed three-way choice — nothing, an explicit
 `--model M --effort L` **pair**, or `--inherit` — and anything else is
-refused before a token is spent. Naming a model also turns off the
-stale-default fallback, which is why the pair must be complete.
-
-If the pinned default has gone stale the script retries once on the
-user's config (never on a consult follow-up) and says so. Relay that
-warning: the result came, but not from the tier it promised.
-`references/internals.md` covers `CODEX_SECOND_OPINION_MODEL`/`_EFFORT`
-and the fallback's exact rules.
+refused before a token is spent. The validated choice is exact: if Codex
+rejects it, the run fails once instead of silently changing models.
+`references/internals.md` covers `CODEX_SECOND_OPINION_MODEL`/`_EFFORT`.
 
 ## Exit Codes
 

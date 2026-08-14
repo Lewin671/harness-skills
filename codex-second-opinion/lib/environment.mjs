@@ -10,7 +10,6 @@ import {
 } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { assertAddressableMcpName, enabledMcpServers, McpShapeError } from './mcp.mjs'
 import { exists, isDirectory, isSymlink, resolvePathSemantics, collectSessionDestinations, resolveOnPath, resolveReal, enclosingRepositoryRoot } from './path-safety.mjs'
 import {
   absolutePathEntries,
@@ -26,7 +25,11 @@ import {
 // No single git or codex preflight probe should ever legitimately need this
 // long; a probe that does has hung. Large enough that a cold `git status` on
 // a very large repository still finishes well inside it.
-const PREFLIGHT_FLOOR_SECONDS = 600
+const PREFLIGHT_TIMEOUT_SECONDS = 120
+
+export function preflightTimeoutSeconds(options = {}) {
+  return options.timeoutSeconds || PREFLIGHT_TIMEOUT_SECONDS
+}
 
 const GIT_ENV_KEYS = [
   'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
@@ -51,7 +54,6 @@ export class Environment {
     // spawn's `argv0` option, so a dispatcher keeps seeing "codex" even
     // though the safer, resolved path is what actually gets executed.
     this.codexArgv0 = this.codexBin
-    this.mcpArgs = []
     this.baseEnv = { ...process.env }
     for (const key of GIT_ENV_KEYS) delete this.baseEnv[key]
     for (const key of Object.keys(this.baseEnv)) {
@@ -89,16 +91,10 @@ export class Environment {
       encoding: options.encoding,
       stdio: options.stdio,
       argv0: options.argv0,
-      // Preflight probes run before Runtime's watchdog exists, so they carry
-      // a deadline of their own; see run() in lib/util.mjs. It is --timeout
-      // or PREFLIGHT_FLOOR_SECONDS, whichever is LARGER, rather than
-      // --timeout alone: --timeout means "abort a hung review", and a caller
-      // passing a deliberately tiny one (the contract suite uses `--timeout
-      // 1` to exercise the watchdog) would otherwise have every git and codex
-      // probe killed before it could answer, turning a fast-failing review
-      // into an environment error. The floor is well above any legitimate
-      // probe while still bounding the unbounded case.
-      timeout: Math.max(this.state.timeout || 0, PREFLIGHT_FLOOR_SECONDS) * 1000,
+      // Preflight is a separate phase from model execution. A large model
+      // timeout must not let one feature or Git probe stall for hours before
+      // the caller even sees `running:`.
+      timeout: preflightTimeoutSeconds(options) * 1000,
     })
   }
 
@@ -147,8 +143,6 @@ export class Environment {
     this.resolveScratchAndCodexHome()
     this.baseEnv.GIT_NO_LAZY_FETCH = '1'
     this.resolveCodexBin()
-    this.verifyFeatures()
-    this.verifyMcp()
   }
 
   // Drops every PATH entry that lands inside one of `roots`, comparing on the
@@ -182,8 +176,8 @@ export class Environment {
         'hint: set CODEX_BIN to an absolute path, e.g. the output of `command -v codex` in an interactive shell.')
     }
     // Both branches below pin codexBin to a symlink-free real path, not just
-    // print one, and do it once here rather than per invocation. verifyFeatures
-    // and verifyMcp check codexBin now; the actual review/consult exec, which
+    // print one, and do it once here rather than per invocation. Capability
+    // checks use codexBin now; the actual review/consult exec, which
     // can start minutes later, spawns the identical string again. If codexBin
     // still named a symlink, the OS would re-resolve it fresh at that later
     // spawn -- so retargeting the symlink in between would run a different,
@@ -463,129 +457,8 @@ export class Environment {
     this.codexHome = absoluteHome
   }
 
-  verifyFeatures() {
-    const args = ['features', 'list', '--disable', 'hooks', '--disable', 'apps', '--disable', 'plugins']
-    const features = this.command(this.codexBin, args, { argv0: this.codexArgv0 })
-    let featureText = features.stdout
-    if (features.status !== 0) {
-      featureText = ''
-      const version = this.command(this.codexBin, ['--version'], { argv0: this.codexArgv0 })
-      if (version.status !== 0) {
-        die(3,
-          `error: '${this.codexBin}' is not runnable.`,
-          '',
-          'A codex on PATH that fails --version usually means a broken install',
-          '(a shell-function wrapper, or an npm shim whose vendored binary is',
-          "missing) rather than a missing one. Try 'codex update', or set",
-          'CODEX_BIN to a working binary.')
-      }
-    }
-
-    const states = new Map()
-    for (const line of featureText.split(/\r?\n/)) {
-      const fields = line.trim().split(/\s+/)
-      if (['hooks', 'apps', 'plugins'].includes(fields[0])) states.set(fields[0], fields.at(-1))
-    }
-    for (const feature of ['hooks', 'apps', 'plugins']) {
-      const state = states.get(feature) || 'unknown'
-      if (state !== 'false') {
-        die(3,
-          `error: codex ${feature} stay enabled (effective state: '${state}').`,
-          `error: ${feature} act outside the read-only sandbox, so this ${this.state.runNoun} could write; refusing to start.`)
-      }
-    }
-  }
-
-  verifyMcp() {
-    const base = ['mcp', 'list', '--json', '--disable', 'hooks', '--disable', 'apps', '--disable', 'plugins']
-    const listing = this.command(this.codexBin, base, { argv0: this.codexArgv0 })
-    let problem = null
-    let enabled = []
-    if (listing.status !== 0) {
-      problem = "could not verify standalone MCP exposure ('codex mcp list' failed)"
-    } else {
-      try {
-        enabled = enabledMcpServers(listing.stdout.trimEnd())
-        for (const entry of enabled) assertAddressableMcpName(entry.name)
-      } catch (error) {
-        problem = error instanceof McpShapeError ? error.message : `could not parse standalone MCP exposure (${error.message})`
-      }
-    }
-
-    const overrides = enabled.flatMap(({ name }) => ['-c', `mcp_servers.${name}.enabled=false`])
-    if (!problem && enabled.length && !this.state.allowMcp) {
-      const verify = this.command(this.codexBin, [...base, ...overrides], { argv0: this.codexArgv0 })
-      if (verify.status !== 0) {
-        problem = "could not confirm the standalone MCP servers were switched off ('codex mcp list' failed on the re-check)"
-      } else {
-        try {
-          const left = enabledMcpServers(verify.stdout.trimEnd())
-          if (left.length) problem = `standalone MCP server(s) still enabled after being switched off: ${left.map((x) => x.name).join(' ')}`
-        } catch (error) {
-          if (error.message.includes('unrecognized')) {
-            problem = 'could not confirm the standalone MCP servers were switched off (unrecognized re-check output)'
-          } else if (error.message.includes('incomplete') || error.message.includes('malformed')) {
-            problem = 'could not confirm the standalone MCP servers were switched off (incomplete re-check output)'
-          } else {
-            problem = `could not confirm the standalone MCP servers were switched off (${error.message})`
-          }
-        }
-      }
-    }
-
-    if (problem) {
-      if (this.state.allowMcp) {
-        process.stderr.write(`warning: ${problem}; proceeding because --allow-mcp was set\n`)
-        process.stderr.write('warning: local commands stay read-only, but MCP tools may mutate external systems\n')
-        return
-      }
-      die(3,
-        `error: ${problem}.`,
-        'error: refusing to start because MCP tools may mutate external systems.',
-        'hint: disable those servers, or use --allow-mcp only after the user explicitly accepts that risk.')
-    }
-
-    if (enabled.length && this.state.allowMcp) {
-      process.stderr.write(`warning: leaving ${enabled.length} enabled standalone MCP server(s) reachable because --allow-mcp was set\n`)
-      process.stderr.write('warning: local commands stay read-only, but MCP tools may mutate external systems\n')
-    } else if (enabled.length) {
-      this.mcpArgs = overrides
-      process.stderr.write(`note: disabled ${enabled.length} enabled standalone MCP server(s) for this ${this.state.runNoun}; pass --allow-mcp to keep them\n`)
-    }
-  }
-
-  // `--ephemeral` tells codex not to persist this run's session file. Review
-  // is the only mode that can take it: it has no `--continue`, so the session
-  // it would write is never read back by anything. Consult must keep writing
-  // one -- resuming a consultation IS the feature -- so this refuses to arm
-  // itself outside review rather than trusting every future call site to
-  // remember that. Measured against codex-cli 0.147.0: an ephemeral run still
-  // emits `thread.started` with a thread_id, so nothing this script parses out
-  // of the event stream changes; only the on-disk rollout disappears, and
-  // resuming that thread id afterwards fails with "no rollout found".
-  //
-  // Probed, not assumed. A codex without the flag rejects the whole
-  // invocation over an unknown argument, which would turn a working review
-  // into an exit 4 on every older install. Absent support degrades to exactly
-  // the previous behaviour -- the session is written, and the CODEX_HOME
-  // placement checks are what keep it out of the repository -- so the probe
-  // fails safe in the only direction that matters, and says so rather than
-  // leaving the caller to assume the stronger guarantee held.
-  //
-  // Called from runReview after the empty-scope precheck rather than from
-  // initialize(): a run that is about to exit 2 or 3 should not spend a
-  // process on a capability it will never use.
-  detectEphemeralSupport() {
-    if (this.state.mode !== 'review') return
-    const help = this.command(this.codexBin, ['exec', 'review', '--help'], { argv0: this.codexArgv0 })
-    // stdout and stderr both: help is stdout on 0.147.0, but which stream a
-    // CLI prints usage on is exactly the kind of detail that moves between
-    // releases, and reading both cannot produce a false positive here.
-    if (help.status === 0 && /(?:^|\s)--ephemeral(?:[\s=]|$)/.test(`${help.stdout}\n${help.stderr}`)) {
-      this.state.ephemeral = true
-      return
-    }
-    process.stderr.write('note: this codex build does not accept --ephemeral, so it will write a session file for this review; CODEX_HOME placement is what keeps that out of the repository\n')
+  codex(args) {
+    return this.command(this.codexBin, args, { argv0: this.codexArgv0 })
   }
 
   readonlyGit(args) {

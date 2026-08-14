@@ -14,7 +14,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   script="${script_dir}/$(basename "$0")"
   groups=(
     utility review_args review_models review_safety_head review_safety_tail
-    review_fallback review_behavior review_context review_paths_mcp_a
+    review_capabilities review_behavior review_context review_paths_mcp_a
     review_paths_mcp_b review_paths_scopes_a review_paths_scopes_b review_git_a
     review_git_b review_git_filters review_storage_a review_storage_b review_watchdog_a
     review_watchdog_b review_watchdog_c consult_basic consult_sessions_a
@@ -86,7 +86,7 @@ if [ "${CSO_TEST_WORKER:-0}" != 1 ] && [ "${CSO_FAIL_FAST:-0}" != 1 ]; then
   # Five former Bash-internal path helper assertions now live in the fast
   # node:test suite. This contract suite stays black-box and counts only
   # behavior observable through the executable entry point.
-  expected=292
+  expected=285
   if [ "$pass" -ne "$expected" ]; then
     echo "FAIL - expected ${expected} passing assertions, got ${pass}"
     fail=$((fail + 1))
@@ -146,10 +146,8 @@ cat > "$fake" <<'FAKE'
 #   FAKE_SLEEP          seconds to stall before writing the result
 #   FAKE_OUTPUT         result body, written verbatim (no trailing newline added)
 #   FAKE_ARGV_LOG       file to append each invocation's argv to, one line per call
-#   FAKE_FAIL           reject the model: emit a stale-model line and exit 1
-#   FAKE_ERROR_TAIL     emit N more error-like lines after a rejection
-#   FAKE_FAIL_ONCE      path: fail like FAKE_FAIL only while this file is
-#                       absent (created on the first failure)
+#   FAKE_FAIL           emit an error event and exit 1
+#   FAKE_FAIL_WRITES    write a partial result before FAKE_FAIL exits
 #   FAKE_EXIT           exit with this status after the event stream (default 0)
 #   FAKE_NO_THREAD      suppress the thread.started event when set
 #   FAKE_LONG_LINE      emit one event line of this many bytes
@@ -183,8 +181,6 @@ if [ "${1:-}" = exec ] && [ "${2:-}" = review ] && [ "${3:-}" = --help ]; then
 fi
 [ -n "${FAKE_TMPDIR_LOG:-}" ] && printf '%s\n' "${TMPDIR:-unset}" >> "$FAKE_TMPDIR_LOG"
 case "${1:-}" in
-  --version)
-    echo "fake-codex 0.146.0"; exit 0 ;;
   features)
     # A `features list` that cannot answer. The wrapper blanks its output on
     # any non-zero exit, so every state reads as unknown and the fail-closed
@@ -219,39 +215,14 @@ if [ -n "${FAKE_CONFIG_ERR:-}" ]; then
   exit 1
 fi
 if [ -n "${FAKE_FAIL:-}" ]; then
-  echo '{"type":"error","message":"unknown model"}'
-  exit 1
-fi
-if [ -n "${FAKE_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_FAIL_ONCE" ]; then
-  : > "$FAKE_FAIL_ONCE"
-  # FAKE_FAIL_THREAD: emit a thread id BEFORE being rejected. The failed
-  # attempt's session then sits in the log ahead of the retry's.
-  [ -n "${FAKE_FAIL_THREAD:-}" ] &&
-    echo '{"type":"thread.started","thread_id":"0198dead-dead-dead-dead-deaddeaddead"}'
-  # FAKE_FAIL_MODEL: name a model before being rejected, so the failed
-  # attempt's metadata sits in the log ahead of the retry's.
-  [ -n "${FAKE_FAIL_MODEL:-}" ] &&
-    echo '{"type":"turn.started","model":"rejected-model-xyz"}'
-  # FAKE_FAIL_WRITES: write the result file BEFORE being rejected, so a retry
-  # that produces none could inherit it.
   if [ -n "${FAKE_FAIL_WRITES:-}" ]; then
     prev=""
     for a in "$@"; do
-      [ "$prev" = "-o" ] && printf 'STALE-FIRST-ATTEMPT' > "$a"
+      [ "$prev" = "-o" ] && printf 'PARTIAL-FAILED-RESULT' > "$a"
       prev="$a"
     done
   fi
   echo '{"type":"error","message":"unknown model"}'
-  # FAKE_ERROR_TAIL: N more error-like lines AFTER the rejection, which is
-  # the order that matters. If the detector reads the log through a pipeline,
-  # `grep -q` exits at this match and the producer takes SIGPIPE on the
-  # remaining output; pipefail turns that into 141, read as "no rejection",
-  # and the fallback never fires. Emitting the tail BEFORE the match instead
-  # lets the consumer read to the end and the case proves nothing — measured,
-  # the mutant survived that ordering.
-  if [ -n "${FAKE_ERROR_TAIL:-}" ]; then
-    awk -v n="$FAKE_ERROR_TAIL" 'BEGIN{for(i=0;i<n;i++) print "{\"type\":\"error\",\"message\":\"padding line\"}"}'
-  fi
   exit 1
 fi
 # Two kinds of descendant, because a parent-only kill is invisible to either
@@ -295,11 +266,6 @@ if [ -n "${FAKE_SLEEP:-}" ]; then
   fi
   [ -n "${FAKE_IGNORE_TERM:-}" ] && trap '' TERM
   sleep "$FAKE_SLEEP"
-fi
-# FAKE_SILENT_RETRY: succeed without writing a result at all.
-if [ -n "${FAKE_SILENT_RETRY:-}" ]; then
-  echo '{"type":"item.completed"}'
-  exit 0
 fi
 [ -n "${FAKE_FORGE_LINE:-}" ] && printf '%s\n' "$FAKE_FORGE_LINE"
 prev=""
@@ -799,10 +765,8 @@ check_exit "consult: empty --effort is exit 3, not silent inheritance" 3 "$?"
 group_review_models() {
 # --- model settings are a closed three-way choice ----------------------
 #
-# Each rejection here replaces a failure that used to cost a full run:
-# a lone --model keeps the pinned effort (which the named model need not
-# accept) and clears `pinned`, disabling the fallback that would have
-# rescued it.
+# Each rejection here prevents a half-configured model choice from reaching a
+# full run. Model and effort are one closed selection, or both are inherited.
 
 argv_log="${workdir}/argv-model-flags.log"
 FAKE_ARGV_LOG="$argv_log" \
@@ -883,20 +847,18 @@ else
   bad "review: an empty CODEX_SECOND_OPINION_MODEL is treated as unset" "exit $status"
 fi
 
-# And when the environment pair IS complete and codex rejects it, the warning
-# must name where the pair came from. "These pinned defaults look stale" is a
-# false report about whose setting failed — the user's own, not this script's —
-# and it is relayed verbatim to that user.
+# A complete environment pair is exact policy, not a hint. A rejection fails
+# once and is never silently retried under different settings.
 stderr="${workdir}/env-pair-stale.err"
+argv_log="${workdir}/argv-env-pair.log"
 CODEX_SECOND_OPINION_MODEL=env-model CODEX_SECOND_OPINION_EFFORT=medium \
-FAKE_FAIL_ONCE="${workdir}/env-pair-once" \
+FAKE_FAIL=1 FAKE_ARGV_LOG="$argv_log" \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$stderr"
-if grep -q 'CODEX_SECOND_OPINION_MODEL/_EFFORT' "$stderr" &&
-   ! grep -q 'pinned defaults look stale' "$stderr"; then
-  ok "review: a rejected environment pair is not reported as a stale pinned default"
+status=$?
+if [ "$status" = 4 ] && [ "$(grep -c '^exec review --uncommitted' "$argv_log")" = 1 ]; then
+  ok "review: a rejected environment pair fails once without changing policy"
 else
-  bad "review: a rejected environment pair is not reported as a stale pinned default" \
-    "$(tr '\n' '|' < "$stderr")"
+  bad "review: a rejected environment pair fails once without changing policy" "exit $status"
 fi
 
 # With no flags at all the pinned tier still has to reach codex. The model
@@ -1176,7 +1138,7 @@ fi
 
 }
 
-group_review_fallback() {
+group_review_capabilities() {
 # --allow-mcp now means the opposite opt-in: keep them reachable. No
 # override may be emitted, and the warning must stay loud.
 stderr="${workdir}/mcp-allowed.err"
@@ -1243,53 +1205,18 @@ fi
 "$wrapper" review --repo "$dirty" --timeout 30 --inherit >/dev/null 2>&1
 check_exit "review: --inherit succeeds without model metadata in the stream" 0 "$?"
 
-# Stale-default fallback success: first exec rejected, retry succeeds,
-# and the missing model field must not abort the note path.
-stderr="${workdir}/fallback.err"
-fb_argv="${workdir}/argv-fallback.log"
-: > "$fb_argv"
-FAKE_FAIL_ONCE="${workdir}/fail-once-marker" FAKE_ARGV_LOG="$fb_argv" \
+# A rejected pinned model fails once. Automatically switching to an inherited
+# model would change the requested policy and complicate attribution.
+stderr="${workdir}/rejected-model.err"
+single_argv="${workdir}/single-invocation.log"
+: > "$single_argv"
+FAKE_FAIL=1 FAKE_ARGV_LOG="$single_argv" \
   "$wrapper" consult --repo "$dirty" --timeout 30 "question" >/dev/null 2> "$stderr"
-fb_status=$?
-if [ "$fb_status" = 0 ] && grep -q 'came from your configured model' "$stderr"; then
-  ok "consult: fallback success emits the note and the answer"
+single_status=$?
+if [ "$single_status" = 4 ] && [ "$(grep -c '^exec ' "$single_argv")" = 1 ]; then
+  ok "consult: a rejected model fails once without fallback"
 else
-  bad "consult: fallback success emits the note and the answer"
-fi
-# A rejection followed by a long tail of error-like output. The detector must
-# still find it: reading the log through `grep | grep -q` makes the producer
-# take SIGPIPE the moment the second grep matches, and pipefail reports 141,
-# which reads as "no rejection" and skips the fallback entirely. Measured at
-# 141 before the fix, so the tail has to be long enough to fill a pipe buffer.
-tail_once="${workdir}/tail-fail-once"
-tail_err="${workdir}/tail-fallback.err"
-rm -f "$tail_once"
-FAKE_FAIL_ONCE="$tail_once" FAKE_ERROR_TAIL=4096 \
-  "$wrapper" review --repo "$dirty" --timeout 60 >/dev/null 2> "$tail_err"
-tail_status=$?
-if [ "$tail_status" = 0 ] && grep -q 'came from your configured model' "$tail_err"; then
-  ok "review: a rejection buried under a long error tail still triggers the fallback"
-else
-  bad "review: a rejection buried under a long error tail still triggers the fallback" \
-    "exit $tail_status"
-fi
-
-# The RETRY must inherit the user's configuration. Resending the model that was
-# just rejected is the one thing the fallback cannot do — and the fake succeeds
-# on its second call whatever the arguments, so only the argv shows it. First
-# exec line carries the pinned model; the second must carry neither -m nor
-# model_reasoning_effort.
-fb_first="$(grep -n '^exec ' "$fb_argv" | sed -n '1s/^\([0-9]*\):.*/\1/p')"
-fb_second_line="$(grep '^exec ' "$fb_argv" | sed -n '2p')"
-fb_first_line="$(grep '^exec ' "$fb_argv" | sed -n '1p')"
-if [ -n "$fb_second_line" ] &&
-   printf '%s' "$fb_first_line" | grep -q -- '-m ' &&
-   ! printf '%s' "$fb_second_line" | grep -q -- '-m ' &&
-   ! printf '%s' "$fb_second_line" | grep -q 'model_reasoning_effort'; then
-  ok "consult: the fallback retry inherits the config instead of resending the rejected model"
-else
-  bad "consult: the fallback retry inherits the config instead of resending the rejected model" \
-    "attempts=$(grep -c '^exec ' "$fb_argv"), second=$(printf '%s' "$fb_second_line" | cut -c1-80)"
+  bad "consult: a rejected model fails once without fallback" "exit $single_status"
 fi
 
 }
@@ -1371,20 +1298,18 @@ else
   bad "review: invocation writes no codex session file" "argv: $(tail -1 "$argv_log")"
 fi
 
-# A codex too old for the flag must degrade to the previous behaviour --
-# writing a session -- not fail the whole review on an unknown argument.
-# The note is part of the contract: the caller is told the weaker guarantee
-# is the one that actually held.
+# A codex too old for the flag does not satisfy the review profile. Refuse
+# instead of silently persisting a transcript under a weaker boundary.
 noeph_argv="${workdir}/argv-no-ephemeral.log"
 noeph_err="${workdir}/no-ephemeral.err"
 FAKE_NO_EPHEMERAL=1 FAKE_ARGV_LOG="$noeph_argv" FAKE_OUTPUT='Looks fine overall.' \
   "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$noeph_err"
 status=$?
-if [ "$status" = 0 ] && ! grep -q -- '--ephemeral' "$noeph_argv" &&
-   grep -q 'does not accept --ephemeral' "$noeph_err"; then
-  ok "review: a codex without --ephemeral still runs, and says the session was written"
+if [ "$status" = 3 ] && ! grep -qE -- '^exec review .*--ephemeral' "$noeph_argv" &&
+   grep -q 'does not support ephemeral review sessions' "$noeph_err"; then
+  ok "review: a codex without --ephemeral fails closed"
 else
-  bad "review: a codex without --ephemeral still runs, and says the session was written" "exit $status"
+  bad "review: a codex without --ephemeral fails closed" "exit $status"
 fi
 
 # Consult must never be armed: --continue reads exactly the session file
@@ -3225,19 +3150,6 @@ else
     "exit $split_status, session line: $(grep '^session:' "$split_err" | tr '\n' '|')"
 fi
 
-# The failure tail echoes log lines through the child-prefixer, and the log
-# contains this script's OWN attempt marker. Prefixing that would attach
-# `codex> ` to a wrapper-authored line and falsify the provenance rule.
-tail_err="${workdir}/tail-marker.err"
-FAKE_EXIT=1 "$wrapper" review --repo "$dirty" --timeout 30 >/dev/null 2> "$tail_err"
-tail_status=$?
-if [ "$tail_status" = 4 ] && ! grep -q '^codex> === codex-second-opinion attempt boundary' "$tail_err"; then
-  ok "review: the failure tail does not prefix this script's own attempt marker"
-else
-  bad "review: the failure tail does not prefix this script's own attempt marker" \
-    "exit $tail_status, marker lines: $(grep -c 'attempt boundary' "$tail_err")"
-fi
-
 # SKILL.md tells agents that on stderr an UNPREFIXED line is the wrapper
 # speaking, and that this is mechanical rather than positional -- the
 # wrapper's own warning:/note:/hint: lines are emitted after `running:` too,
@@ -3267,25 +3179,6 @@ if [ "${log_widest:-0}" -ge 5000 ]; then
   ok "review: the log keeps the same stream untruncated"
 else
   bad "review: the log keeps the same stream untruncated" "widest log line ${log_widest:-none}, expected >= 5000"
-fi
-
-# A timeout on the FALLBACK attempt. There are two `watchdog_fired` checks —
-# one after the first attempt and one after the stale-model retry — and only
-# the first had a case. Deleting the second left both suites green while a
-# timed-out retry reported exit 4 (a failed run) instead of the documented 5
-# (hung and killed), which is the difference between "codex failed" and
-# "raise --timeout".
-fbto_once="${workdir}/fallback-timeout-once"
-rm -f "$fbto_once"
-fbto_start="$(date +%s)"
-FAKE_FAIL_ONCE="$fbto_once" FAKE_SLEEP=30 \
-  "$wrapper" review --repo "$dirty" --timeout 1 >/dev/null 2>&1
-fbto_status=$?
-fbto_elapsed=$(( $(date +%s) - fbto_start ))
-if [ "$fbto_status" = 5 ] && [ "$fbto_elapsed" -lt 25 ]; then
-  ok "review: a timeout during the stale-model retry is exit 5"
-else
-  bad "review: a timeout during the stale-model retry is exit 5" "exit $fbto_status after ${fbto_elapsed}s"
 fi
 
 # --- the watchdog does not leak its sleeper -----------------------------
@@ -3608,18 +3501,6 @@ else
   bad "consult: resume descriptor repeats --inherit" "$(grep '^resume: ' "$resume_out")"
 fi
 
-# After a stale-default fallback the answer came from the user's config.
-# Repeating the pinned defaults would fail again — and a resumed session
-# has no automatic retry left — so the descriptor must say --inherit.
-resume_out="${workdir}/resume-fallback.out"
-FAKE_FAIL_ONCE="${workdir}/fail-once-resume" \
-  "$wrapper" consult --repo "$repo" --timeout 30 "q" > /dev/null 2> "$resume_out"
-if grep -qE '^resume: --continue 0198aaaa-bbbb-cccc-dddd-eeeeffff0000 --inherit( --timeout [0-9]+)? --repo ' "$resume_out"; then
-  ok "consult: resume descriptor switches to --inherit after a fallback"
-else
-  bad "consult: resume descriptor switches to --inherit after a fallback" "$(grep '^resume: ' "$resume_out")"
-fi
-
 # A line break in a model value is rejected outright rather than
 # sanitized: it could forge a standalone marker in a merged stream, and
 # a rewritten name would advertise a command that does not reproduce
@@ -3777,16 +3658,16 @@ else
   bad "consult: rejected model on a follow-up fails without a retry" "exit $status, $resume_calls resume calls"
 fi
 
-# The fresh-run fallback retry must survive that change.
+# Fresh runs obey the same one-attempt policy as follow-ups.
 argv_log="${workdir}/argv-fail-fresh.log"
 FAKE_FAIL=1 FAKE_ARGV_LOG="$argv_log" \
   "$wrapper" consult --repo "$repo" --timeout 30 "question" >/dev/null 2>&1
 status=$?
 exec_calls="$(grep -cE '^exec ' "$argv_log")"
-if [ "$status" = 4 ] && [ "$exec_calls" = 2 ]; then
-  ok "consult: fresh-run stale-model fallback still retries once"
+if [ "$status" = 4 ] && [ "$exec_calls" = 1 ]; then
+  ok "consult: a rejected fresh run fails without changing model policy"
 else
-  bad "consult: fresh-run stale-model fallback still retries once" "exit $status, $exec_calls exec calls"
+  bad "consult: a rejected fresh run fails without changing model policy" "exit $status, $exec_calls exec calls"
 fi
 
 # A thread id that is not a session UUID. The answer still stands; what must
@@ -4225,39 +4106,6 @@ case "$last_session" in
     bad "consult: the wrapper's session line stays last when no session exists" "last: ${last_session}" ;;
 esac
 
-# The stale-model fallback appends a second run to the same log. If the
-# REJECTED attempt emitted a thread id and the successful retry did not, a
-# whole-file scan advertises the dead session — and a follow-up resumes it.
-combined2="${workdir}/fallback-thread.out"
-FAKE_FAIL_ONCE="${workdir}/fail-once-thread" FAKE_FAIL_THREAD=1 FAKE_NO_THREAD=1 \
-  "$wrapper" consult --repo "$repo" --timeout 30 "question" > "$combined2" 2>&1
-status=$?
-# The marker line, not the whole file: the progress feed legitimately echoes
-# the rejected attempt's raw thread.started event.
-last_session="$(grep '^session: ' "$combined2" | tail -1)"
-if [ "$status" = 0 ] && case "$last_session" in *deaddead*) false ;; *) true ;; esac &&
-   grep -q '^session: unavailable' "$combined2"; then
-  ok "consult: a rejected attempt's session is not advertised after a fallback"
-else
-  bad "consult: a rejected attempt's session is not advertised after a fallback" \
-    "exit $status, $(grep '^session: ' "$combined2" | tail -1)"
-fi
-
-# The same segmentation for the model name. A rejected attempt that named a
-# model and a retry that did not would otherwise label the answer with the
-# model that refused it.
-stderr="${workdir}/fallback-model.err"
-FAKE_FAIL_ONCE="${workdir}/fail-once-model" FAKE_FAIL_MODEL=1 \
-  "$wrapper" consult --repo "$repo" --timeout 30 "question" >/dev/null 2> "$stderr"
-status=$?
-# The note line, not the whole stream: the progress feed legitimately echoes
-# the rejected attempt's raw event.
-if [ "$status" = 0 ] && ! grep '^note: ' "$stderr" | grep -q 'rejected-model-xyz'; then
-  ok "consult: a rejected attempt's model is not reported as the one that answered"
-else
-  bad "consult: a rejected attempt's model is not reported as the one that answered" "exit $status"
-fi
-
 # The descriptor is advertised as the thing to run, so it has to carry every
 # choice the run was started with. Without --allow-mcp a replay silently
 # switches the standalone servers back off.
@@ -4280,18 +4128,16 @@ else
   bad "consult: the resume descriptor does not invent --allow-mcp"
 fi
 
-# A rejected first attempt can already have written its result. The retry
-# must not be served that stale answer as its own.
-cat >> "$fake" <<'EXTRA'
-EXTRA
-combined2="${workdir}/fallback-stale.out"
-FAKE_FAIL_ONCE="${workdir}/fail-once-stale" FAKE_FAIL_WRITES=1 FAKE_SILENT_RETRY=1 \
+# A failed invocation can already have written a result. Failure must never emit
+# that partial answer.
+combined2="${workdir}/failed-partial.out"
+FAKE_FAIL=1 FAKE_FAIL_WRITES=1 \
   "$wrapper" consult --repo "$repo" --timeout 30 "question" > "$combined2" 2>&1
 status=$?
-if [ "$status" = 4 ] && ! grep -q 'STALE-FIRST-ATTEMPT' "$combined2"; then
-  ok "consult: a rejected attempt's result is not reused by the retry"
+if [ "$status" = 4 ] && ! grep -q 'PARTIAL-FAILED-RESULT' "$combined2"; then
+  ok "consult: a failed invocation's partial result is not emitted"
 else
-  bad "consult: a rejected attempt's result is not reused by the retry" "exit $status"
+  bad "consult: a failed invocation's partial result is not emitted" "exit $status"
 fi
 
 # --- multiline question cannot forge progress markers ------------------
@@ -4341,7 +4187,7 @@ case "${CSO_TEST_GROUP:-all}" in
   review_models) group_review_models ;;
   review_safety_head) group_review_safety_head ;;
   review_safety_tail) group_review_safety_tail ;;
-  review_fallback) group_review_fallback ;;
+  review_capabilities) group_review_capabilities ;;
   review_behavior) group_review_behavior ;;
   review_context) group_review_context ;;
   review_paths_mcp_a) group_review_paths_mcp_a ;;
@@ -4371,7 +4217,7 @@ case "${CSO_TEST_GROUP:-all}" in
     group_review_models
     group_review_safety_head
     group_review_safety_tail
-    group_review_fallback
+    group_review_capabilities
     group_review_behavior
     group_review_context
     group_review_paths_mcp_a

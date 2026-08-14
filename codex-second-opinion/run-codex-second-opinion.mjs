@@ -1,6 +1,7 @@
 import { runConsult } from './lib/consult.mjs'
 import { runReview } from './lib/review.mjs'
-import { createState, terminateActiveChild } from './lib/runtime.mjs'
+import { createPolicy } from './lib/policy.mjs'
+import { terminateActiveChild } from './lib/runtime.mjs'
 import { assertSupportedPlatform, ExitError, flat, parseTimeout } from './lib/util.mjs'
 
 const TOP_USAGE = `Usage: run-codex-second-opinion <review|consult> [ARGS]
@@ -31,7 +32,7 @@ async function main(argv) {
     return
   }
 
-  const state = createState(mode)
+  const state = createPolicy(mode)
   state.timeout = parseTimeout(process.env.CODEX_SECOND_OPINION_TIMEOUT || '3000', 'CODEX_SECOND_OPINION_TIMEOUT')
   if (mode === 'review') await runReview(state, args)
   else await runConsult(state, args)

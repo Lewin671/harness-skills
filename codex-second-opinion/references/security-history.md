@@ -20,8 +20,8 @@ closing a gap the previous round's fix left open:
    Assigning the resolved value to `codexBin` closed that.
 2. The `CODEX_BIN`-set branch pinned `codexBin` to `raw` while printing its
    resolved form — so a `raw` symlink left the note showing one target
-   while `codexBin` itself still named the symlink. `verifyFeatures`/
-   `verifyMcp` and the actual review/consult exec each independently ask
+   while `codexBin` itself still named the symlink. Capability probes and the
+   actual review/consult exec each independently ask
    the OS to resolve that symlink again, at different times (the real exec
    can start minutes later); retargeting it in between would run a
    different binary than the one the earlier checks and note described.

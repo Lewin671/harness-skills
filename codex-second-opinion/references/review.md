@@ -121,10 +121,9 @@ review-specific additions:
 2. Add a Claude-side trust line **per finding**: agree, disagree with
    reason, or needs-checking. Codex has no stake in defending code
    Claude wrote.
-3. A review leaves no Codex session on disk — it asks Codex not to write
-   one, since review never resumes. If the installed codex is too old for
-   that, the run says so in a `note:`; relay it like any other, because
-   the conversation then persisted after all.
+3. A review leaves no Codex session on disk. The wrapper requires
+   `--ephemeral` support and refuses an older Codex instead of weakening
+   that boundary.
 4. Only `--commit` names an immutable object. `--uncommitted` and
    `--base` diff the live working tree, which the wrapper fingerprints
    across the run window. Relay drift and unmeasurable warnings rather
