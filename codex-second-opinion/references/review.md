@@ -14,6 +14,11 @@ At most one explicit scope; omission means `--uncommitted`:
 | `--commit <SHA>` | that one commit |
 | `--custom "<TEXT>"` | whatever the instructions describe |
 
+`--uncommitted` reviews *everything* uncommitted, related or not: on a
+tree carrying unrelated WIP, commit the change under review and use
+`--commit`, so findings stay on what the user asked about — and so the
+scope survives any edits made while the review runs.
+
 Pick `--custom` only when the user has a specific concern that the
 built-in review prompt would not prioritise. It replaces the built-in
 prompt rather than supplementing it — say what to look at inside the

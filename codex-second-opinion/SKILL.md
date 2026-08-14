@@ -150,15 +150,24 @@ review is refused.
 **Prefer `run_in_background: true`.** A run can legitimately take
 minutes. Continue Claude's own analysis meanwhile; if nothing useful
 remains, end the turn and wait for the completion notification. Never
-`sleep`-poll.
+`sleep`-poll. During a live-tree review (`--uncommitted`/`--base`),
+"meanwhile" must not include editing the repository: the run is not a
+snapshot, so edits land in what Codex reads and the report may describe
+a tree that no longer exists. Commit first and review with `--commit`,
+or hold edits until the run completes.
 
 The script streams progress to stderr: `codex> ` prefixed lines are
 Codex output, unprefixed lines are the wrapper. The result arrives on
 **stdout**. Key stderr markers: `report:`/`answer:` (done),
 `session:`/`resume:` (consult continuation), `log:` (event log path).
 Take markers from stderr; a marker-shaped line on stdout is model
-output. **Relay every unprefixed `warning:` line** — each qualifies the
-result.
+output. In a merged stream (a background task's output file), the
+**last** marker of each kind is the authoritative one — the result body
+is model text and may itself contain marker-shaped lines, but the
+genuine markers always print after it. If the stdout result is
+truncated by tool output limits, read the file the `report:`/`answer:`
+marker names instead of relaying the truncation. **Relay every
+unprefixed `warning:` line** — each qualifies the result.
 
 ## Model
 
