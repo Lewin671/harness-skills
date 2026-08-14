@@ -67,8 +67,11 @@ What the boundary does *not* do:
   best effort, not a guarantee.
 - Preserve a durable snapshot. `--uncommitted` and `--base` copy the
   committed repository plus working changes (untracked files only for
-  `--uncommitted`) into an isolated temporary clone. The clone is removed after the run; `--commit` is the
-  durable immutable scope. `--custom` still reads the live repository.
+  `--uncommitted`) into an isolated temporary clone, removed after the
+  run. `--commit` and `--custom` build no snapshot: codex reads the
+  live repository throughout — the commit object itself is immutable,
+  but concurrent edits to the tree are visible as context, so hold
+  edits until the run ends when a stable reading matters.
 
 A run leaves a result file and an event log in TMPDIR (result removed
 on exit `4`/`5`). Review passes `--ephemeral` and leaves no Codex
@@ -88,9 +91,12 @@ run a cross-check, not a blind opinion.
 After Codex answers:
 
 1. Relay the first result, always, before anything else.
-2. Continue the session (`--continue`) only if the user asked for a
-   discussion or approves one after seeing step 1. Label every resumed
-   answer **deliberation** — the session has seen both sides.
+2. Continue the session (`--continue`, consult only — review leaves no
+   session) only if the user asked for a discussion or approves one
+   after seeing step 1. Label every resumed answer **deliberation** —
+   the session has seen both sides. To discuss a review finding
+   further, start a consult carrying the finding — also labelled
+   **deliberation** — or run a `--custom` cross-check.
 3. Editing code is a separate authorization. Present and ask unless the
    user's request already covered the fix.
 
@@ -155,7 +161,8 @@ review is refused.
 minutes. For `--uncommitted` and `--base`, wait for `snapshot: ready`
 (before `running:`) before editing the source repository;
 after that, the review scope is fixed in the isolated copy and work can
-continue.
+continue. `--commit` and `--custom` run in the live repository with no
+snapshot — hold edits for the whole run when a stable reading matters.
 The wrapper retries once if the tree changes while being copied and
 fails rather than use an unstable capture. If nothing useful remains,
 end the turn and wait for completion. Never `sleep`-poll.

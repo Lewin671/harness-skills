@@ -93,8 +93,10 @@ Follow SKILL.md § Reporting, plus:
    load-bearing arguments, not just its conclusion.
 2. Verify Codex's checkable claims against the repo before relaying
    them as fact.
-3. Label a fresh session's first answer **independent first pass** and
-   resumed-session answers **deliberation**.
+3. Label an answer **independent first pass** only when its prompt held
+   no Claude-derived analysis; a fresh session that carries a prior
+   finding or position is **deliberation**, as is every resumed-session
+   answer.
 
 Do not use consult mode to outsource choices the user already made, and
 not for reviewing a diff, commit, or branch — review mode fits those
