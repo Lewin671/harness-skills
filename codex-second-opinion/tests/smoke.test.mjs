@@ -20,16 +20,7 @@ printf '%s\\n' "$*" >> "$FAKE_ARGV_LOG"
 case "$1" in
   mcp)
     if [ -n "$FAKE_MCP_ENABLED" ]; then
-      case "$*" in
-        *enabled=false*)
-          if [ -n "$FAKE_MCP_STICKY" ]; then
-            echo '[{"name":"srv","enabled":true}]'
-          else
-            echo '[{"name":"srv","enabled":false}]'
-          fi ;;
-        *)
-          echo '[{"name":"srv","enabled":true}]' ;;
-      esac
+      echo '[{"name":"srv","enabled":true}]'
     else
       echo '[]'
     fi

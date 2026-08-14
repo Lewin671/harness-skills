@@ -1,8 +1,7 @@
 // Process and environment layer for run-codex-second-opinion.mjs:
-// environment sanitization, storage placement, the MCP switch-off and its
-// confirmation, subprocess streaming with timeout/signal handling, and
-// JSONL session parsing. The entry point owns argument parsing, scope
-// checks, prompt construction and exit mapping.
+// environment sanitization, storage placement, subprocess streaming with
+// timeout/signal handling, and JSONL session parsing. The entry point owns
+// argument parsing, scope checks, prompt construction and exit mapping.
 
 import {
   accessSync,
@@ -76,9 +75,9 @@ function bestRealpath(path) {
   }
 }
 
-// Preflight probes (git, `codex mcp list`) get a fixed budget independent of
-// --timeout, so a stalled probe cannot block the wrapper for the whole model
-// budget before the caller even sees `running:`.
+// Preflight git probes get a fixed budget independent of --timeout, so a
+// stalled probe cannot block the wrapper for the whole model budget before
+// the caller even sees `running:`.
 const PREFLIGHT_TIMEOUT_MS = 120000
 
 export function createEnvironment(repo, { requireWorkTree = true } = {}) {
@@ -135,9 +134,6 @@ export function createEnvironment(repo, { requireWorkTree = true } = {}) {
     git(args) {
       return this.command('git', args)
     },
-    codex(args) {
-      return this.command(this.codexBin, args)
-    },
   }
 
   // Review needs a work tree — its scopes are defined in git terms. Consult
@@ -149,7 +145,10 @@ export function createEnvironment(repo, { requireWorkTree = true } = {}) {
     if (top.status !== 0 || !top.stdout.trim()) die(3, 'error: could not resolve the repository root')
     env.repoRoot = realpathSync(top.stdout.trim())
   } else if (requireWorkTree) {
-    die(3, `error: ${flat(repo)} is not a git work tree`)
+    // Pass git's own reason through: "dubious ownership" and friends would
+    // otherwise masquerade as "not a work tree".
+    const detail = workTree.stderr.trim() ? ` (git: ${flat(workTree.stderr.trim())})` : ''
+    die(3, `error: ${flat(repo)} is not a git work tree${detail}`)
   }
 
   resolveCodexBin(env)

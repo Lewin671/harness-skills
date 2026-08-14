@@ -172,13 +172,19 @@ function parseReviewArgs(policy, args) {
   return review
 }
 
+// Attaches git's own stderr to a precheck failure so the real cause (e.g.
+// "dubious ownership") is not hidden behind a generic message.
+function gitDetail(result) {
+  return result.stderr.trim() ? `: ${flat(result.stderr.trim())}` : ''
+}
+
 // Refuses to spend minutes on an empty scope: codex reports "no changes" as
 // an ordinary successful review, which reads like a pass. Exit 2 instead.
 function checkScopeNonempty(review, env) {
   const base = ['--no-optional-locks']
   if (review.scopeFlag === '--uncommitted') {
     const status = env.git([...base, 'status', '--porcelain', '--untracked-files=normal'])
-    if (status.status !== 0) die(3, `error: git status failed in ${flat(env.cwd)}`)
+    if (status.status !== 0) die(3, `error: git status failed in ${flat(env.cwd)}${gitDetail(status)}`)
     if (!status.stdout) die(2, 'nothing to review: no staged, unstaged, or untracked changes')
     return
   }
@@ -192,7 +198,7 @@ function checkScopeNonempty(review, env) {
     review.resolvedBase = mergeBase.stdout.trim()
     const diff = env.git([...base, 'diff', '--no-ext-diff', '--no-textconv', '--quiet', review.resolvedBase])
     if (diff.status === 0) die(2, `nothing to review: no changes since the merge base with ${flat(review.scopeValue)}`)
-    if (diff.status !== 1) die(3, `error: git diff failed against merge base ${review.resolvedBase}`)
+    if (diff.status !== 1) die(3, `error: git diff failed against merge base ${review.resolvedBase}${gitDetail(diff)}`)
     return
   }
   if (review.scopeFlag === '--commit') {
@@ -204,10 +210,10 @@ function checkScopeNonempty(review, env) {
     if (parent.status === 0) {
       review.resolvedParent = parent.stdout.trim()
       files = env.git([...base, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', review.resolvedParent, review.resolvedCommit])
-      if (files.status !== 0) die(3, `error: git diff failed for ${flat(review.scopeValue)}`)
+      if (files.status !== 0) die(3, `error: git diff failed for ${flat(review.scopeValue)}${gitDetail(files)}`)
     } else {
       files = env.git(['show', '--pretty=format:', '--name-only', review.resolvedCommit])
-      if (files.status !== 0) die(3, `error: git show failed for ${flat(review.scopeValue)}`)
+      if (files.status !== 0) die(3, `error: git show failed for ${flat(review.scopeValue)}${gitDetail(files)}`)
     }
     if (!files.stdout.trim()) die(2, `nothing to review: ${flat(review.scopeValue)} is an empty commit`)
   }

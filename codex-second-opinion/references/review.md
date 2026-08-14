@@ -10,7 +10,7 @@ At most one explicit scope; omission means `--uncommitted`:
 | Flag | Reviews |
 |------|---------|
 | `--uncommitted` (default) | startup snapshot of staged + unstaged + untracked |
-| `--base <REF>` | startup snapshot of the current branch and tracked working changes against that ref |
+| `--base <REF>` | startup snapshot of the changes since the merge base with that ref, plus tracked working changes |
 | `--commit <SHA>` | that one commit |
 | `--custom "<TEXT>"` | whatever the instructions describe |
 
