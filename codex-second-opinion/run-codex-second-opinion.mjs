@@ -34,7 +34,9 @@ const REVIEW_USAGE = `Usage: run-codex-second-opinion review [SCOPE] [OPTIONS]
 
 Scope (choose exactly one, default --uncommitted):
   --uncommitted        staged + unstaged + untracked changes
-  --base <BRANCH>      current branch against BRANCH
+  --base <REF>         commits since REF (a branch, or e.g. HEAD~3) plus
+                       tracked working changes — commit first to review
+                       commits alone
   --commit <SHA>       the changes introduced by one commit
   --custom <TEXT>      free-form instructions that describe their own scope
 
@@ -45,10 +47,11 @@ Options:
   --repo <DIR>         repository to review (default: current directory)
   --timeout <SECONDS>  abort a hung review (default: 3000; 1-86400)`
 
-const CONSULT_USAGE = `Usage: run-codex-second-opinion consult [OPTIONS] QUESTION
+const CONSULT_USAGE = `Usage: run-codex-second-opinion consult [OPTIONS] [--] QUESTION
 
-The QUESTION is one free-form argument. Name the files or documents Codex
-should read; it answers with the repository as context.
+The QUESTION is one free-form argument; put it after -- when it starts
+with a dash. Name the files or documents Codex should read; it answers
+with the repository as context.
 
 Options:
   --continue <SESSION> resume a session UUID with a follow-up QUESTION

@@ -129,7 +129,7 @@ run; a `codex` or `CODEX_BIN` that resolves inside the repository under
 review is refused.
 
 ```bash
-# Review the uncommitted changes (also: --base BRANCH, --commit SHA,
+# Review the uncommitted changes (also: --base REF, --commit SHA,
 # --custom "TEXT")
 ~/.claude/skills/codex-second-opinion/run-codex-second-opinion.mjs \
   review --repo /path/to/repo --uncommitted
@@ -162,7 +162,9 @@ end the turn and wait for completion. Never `sleep`-poll.
 
 The script streams progress to stderr: `codex> ` prefixed lines are
 Codex output, unprefixed lines are the wrapper. The result arrives on
-**stdout**. Key stderr markers: `snapshot:` (live scope captured),
+**stdout**. In a background run's merged output, the least error-prone
+route is to read the result from the file the last `report:`/`answer:`
+line names rather than parse the body out of the stream. Key stderr markers: `snapshot:` (live scope captured),
 `report:`/`answer:` (done), `session:`/`resume:` (consult continuation),
 `log:` (event log path).
 Take markers from stderr; a marker-shaped line on stdout is model

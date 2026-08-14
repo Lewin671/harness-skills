@@ -10,7 +10,7 @@ At most one explicit scope; omission means `--uncommitted`:
 | Flag | Reviews |
 |------|---------|
 | `--uncommitted` (default) | startup snapshot of staged + unstaged + untracked |
-| `--base <BRANCH>` | startup snapshot of the current branch and tracked working changes against that branch |
+| `--base <REF>` | startup snapshot of the current branch and tracked working changes against that ref |
 | `--commit <SHA>` | that one commit |
 | `--custom "<TEXT>"` | whatever the instructions describe |
 
@@ -18,14 +18,22 @@ At most one explicit scope; omission means `--uncommitted`:
 tree carrying unrelated WIP, commit the intended change and use
 `--commit` so findings stay on what the user asked about.
 
+`--base` takes any ref, not just a branch: `--base HEAD~3` reviews the
+last three commits. It always includes tracked working changes too — if
+the user asked only about the commits, commit or stash the tree first
+so findings stay on what they asked about.
+
 For `--uncommitted` and `--base`, the wrapper creates an isolated local
 clone, overlays changed tracked files (plus non-ignored untracked files
 for `--uncommitted`), preserves the index separately, verifies the source
 and copied bytes, and prints `snapshot: ready`. Edits to the source
 repository are safe after that marker. The temporary clone is removed
 after the run. An unchanged submodule appears in the snapshot as an
-empty directory — a review that needs its content should use
-`--commit`, which reads the live repository. Unresolved merges and live
+empty directory, and ignored *untracked* files (a local `.env`,
+generated artifacts) never enter it — code that reads them will find
+them missing there, while a tracked file stays in the snapshot even
+when an ignore rule matches it. A review that needs such content should use `--commit`,
+which reads the live repository. Unresolved merges and live
 changes inside submodules fail
 closed. So do embedded repositories, changed symlinks that resolve
 outside the clone, and any symlink that resolves back into the live
