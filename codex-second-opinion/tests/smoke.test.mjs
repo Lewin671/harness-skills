@@ -84,10 +84,10 @@ after(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-function run(args, extraEnv = {}) {
+function run(args, extraEnv = {}, cwd = repo) {
   const argvLog = join(mkdtempSync(join(root, 'argv-')), 'argv.log')
   const result = spawnSync(process.execPath, [SCRIPT, ...args], {
-    cwd: repo,
+    cwd,
     encoding: 'utf8',
     timeout: 60000,
     env: {
@@ -273,6 +273,16 @@ test('a timeout exits 5 and kills the whole detached process group', async () =>
   }
   try { process.kill(grandchild, 'SIGKILL') } catch {}
   assert.fail(`grandchild ${grandchild} survived the process-group kill`)
+})
+
+test('consult runs outside a git work tree; review refuses', () => {
+  const plain = mkdtempSync(join(root, 'plain-'))
+  const consult = run(['consult', '--', 'question'], {}, plain)
+  assert.equal(consult.status, 0, consult.stderr)
+  assert.match(consult.stdout, /the fake result body/)
+  const review = run(['review', '--uncommitted'], {}, plain)
+  assert.equal(review.status, 3, review.stderr)
+  assert.match(review.stderr, /not a git work tree/)
 })
 
 test('a relative CODEX_BIN is refused', () => {

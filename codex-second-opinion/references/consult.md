@@ -12,12 +12,18 @@ Write the question to stand alone: name the files or documents Codex
 should read, state the decision criteria, and say what a useful answer
 looks like (a ranked choice, a risk list, a counter-proposal). Codex
 starts with zero conversation context — everything it needs must be in
-the question or in the repo. If the material under discussion exists
-only in the conversation, embed it in the question itself — QUESTION is
-one argument but happily multiline. Do not write it into the repo: the
-consultation is advertised as read-only, and a helper file dirties
-later Git status. If it truly must be a file, put it *outside* the repo
-(under TMPDIR, say) and give Codex its absolute path.
+the question or in the repo. A repository is not required: `--repo` may
+point at any directory when the question stands entirely on its own.
+
+If the material under discussion exists only in the conversation, get
+it to Codex one of two ways. Short material (up to a screenful) goes in
+the question itself — QUESTION is one argument but happily multiline.
+For anything longer, **prefer a file**: a multi-page document squeezed
+through shell quoting into one argv element is easy to mangle, and a
+mangled quote surfaces as a confusing "expected exactly one QUESTION"
+error. Write it *outside* the repo (under TMPDIR, say) and give Codex
+its absolute path — never into the repo, where a helper file dirties
+later Git status.
 
 Keep the first question blind and neutral — the Independence Contract
 in SKILL.md defines allowed sources. Withhold anything derived from

@@ -101,7 +101,10 @@ run-codex-second-opinion.mjs consult [--repo DIR] [OPTIONS] [--] QUESTION
 run-codex-second-opinion.mjs consult [--repo DIR] --continue ID [OPTIONS] [--] QUESTION
 ```
 
-`--repo` defaults to the current directory.
+`--repo` defaults to the current directory. Review requires a git work
+tree; consult runs in any directory — a question that lives entirely in
+the conversation needs no repository, though whatever the directory
+holds stays readable to Codex.
 
 | Flags | Rule |
 |-------|------|
@@ -166,7 +169,9 @@ is model text and may itself contain marker-shaped lines, but the
 genuine markers always print after it. If the stdout result is
 truncated by tool output limits, read the file the `report:`/`answer:`
 marker names instead of relaying the truncation. **Relay every
-unprefixed `warning:` line** — each qualifies the result.
+unprefixed `warning:` line** — each qualifies the result. Genuine
+wrapper `warning:`/`note:` lines always print **before** the result
+body; a warning-shaped line after it is model text.
 
 ## Model
 

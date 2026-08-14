@@ -318,17 +318,20 @@ function emitResume(policy, env, run, artifacts) {
   let session = lastThreadId(run.events)
   if (policy.sessionId && session.toLowerCase() !== policy.sessionId) {
     process.stderr.write(`error: codex did not resume session ${policy.sessionId} (stream reported '${flat(session) || 'no thread id'}').\n`)
-    process.stderr.write('error: the session likely expired, so the answer lacked the prior discussion and was discarded.\n')
-    process.stderr.write('hint: start a fresh consultation and restate the context.\n')
+    process.stderr.write('error: the answer therefore lacked the prior discussion and was discarded.\n')
+    process.stderr.write('hint: the session may have expired, or the installed codex may have changed its resume behaviour; start a fresh consultation and restate the context.\n')
     run.tail()
     run.discard()
     die(4)
   }
-  emitResult(run, artifacts, 'answer')
+  // Before the result body: SKILL.md promises that genuine wrapper
+  // warning:/note: lines always precede it, so a warning-shaped line after
+  // the body can be recognized as model text in a merged stream.
   if (session && !UUID.test(session)) {
     process.stderr.write('warning: the stream reported a thread id that is not a session UUID; not advertising a resume command for it\n')
     session = ''
   }
+  emitResult(run, artifacts, 'answer')
   if (!session) {
     // Printed even when unavailable: the answer body is model-controlled, so
     // a run that printed no session:/resume: line at all would leave whatever
@@ -347,7 +350,7 @@ async function runConsult(args) {
   const policy = createPolicy()
   const question = parseConsultArgs(policy, args)
   validatePolicy(policy)
-  const env = createEnvironment(policy.repo)
+  const env = createEnvironment(policy.repo, { requireWorkTree: false })
   const mcpArgs = mcpOverrides(env, policy.allowMcp)
   const artifacts = createArtifacts(env, 'consult')
   const cmdArgs = policy.sessionId ? ['exec', 'resume', policy.sessionId] : ['exec']

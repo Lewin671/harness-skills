@@ -81,7 +81,7 @@ function bestRealpath(path) {
 // budget before the caller even sees `running:`.
 const PREFLIGHT_TIMEOUT_MS = 120000
 
-export function createEnvironment(repo) {
+export function createEnvironment(repo, { requireWorkTree = true } = {}) {
   const baseEnv = { ...process.env }
   // Redirection variables an outer git/node process may have exported; any of
   // them could point a child's reads or writes somewhere this run never
@@ -140,13 +140,17 @@ export function createEnvironment(repo) {
     },
   }
 
+  // Review needs a work tree — its scopes are defined in git terms. Consult
+  // does not: a question can stand on its own, so outside a repository it
+  // simply runs with the directory (and no repoRoot-based checks).
   const workTree = env.git(['rev-parse', '--is-inside-work-tree'])
-  if (workTree.status !== 0 || workTree.stdout.trim() !== 'true') {
+  if (workTree.status === 0 && workTree.stdout.trim() === 'true') {
+    const top = env.git(['rev-parse', '--show-toplevel'])
+    if (top.status !== 0 || !top.stdout.trim()) die(3, 'error: could not resolve the repository root')
+    env.repoRoot = realpathSync(top.stdout.trim())
+  } else if (requireWorkTree) {
     die(3, `error: ${flat(repo)} is not a git work tree`)
   }
-  const top = env.git(['rev-parse', '--show-toplevel'])
-  if (top.status !== 0 || !top.stdout.trim()) die(3, 'error: could not resolve the repository root')
-  env.repoRoot = realpathSync(top.stdout.trim())
 
   resolveCodexBin(env)
   resolveStorage(env)
@@ -181,7 +185,7 @@ function resolveCodexBin(env) {
         'hint: install the codex CLI, or set CODEX_BIN to its absolute path.')
     }
   }
-  if (isInside(bestRealpath(env.codexBin), env.repoRoot)) {
+  if (env.repoRoot && isInside(bestRealpath(env.codexBin), env.repoRoot)) {
     die(3,
       `error: the codex binary (${flat(env.codexBin)}) resolves inside the repository under review, which could control it; refusing to execute it.`,
       'hint: use a codex installed outside the repository.')
@@ -207,7 +211,7 @@ function resolveCodexBin(env) {
 // to protect that corner case.
 function resolveStorage(env) {
   let scratch = bestRealpath(process.env.TMPDIR || tmpdir())
-  if (isInside(scratch, env.repoRoot)) {
+  if (env.repoRoot && isInside(scratch, env.repoRoot)) {
     process.stderr.write('warning: TMPDIR is inside the repository; using /tmp instead\n')
     scratch = bestRealpath('/tmp')
     if (isInside(scratch, env.repoRoot)) die(3, 'error: no temporary directory outside the repository; set TMPDIR elsewhere')

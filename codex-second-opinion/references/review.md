@@ -53,7 +53,10 @@ The script refuses to spend minutes on an empty scope: a clean tree, an
 empty commit, or no changes since the merge base exit `2` before Codex
 is invoked. Codex itself reports "there are no changes" as an ordinary
 successful review, which reads like a pass — that is the misreport the
-precheck exists to prevent.
+precheck exists to prevent. `--custom` gets **no such precheck** — the
+wrapper cannot know what free-form instructions cover — so exit `2`
+never fires for it, and a "nothing to report" response must be read
+under the no-bullets rule below, not as a verified-empty scope.
 
 ## Reading The Report
 
