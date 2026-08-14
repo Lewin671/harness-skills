@@ -360,7 +360,15 @@ export function createReviewSnapshot(review, env) {
     scrubSourceMetadata(snapshotRepo)
 
     const relativeCwd = relative(env.repoRoot, env.cwd)
-    const snapshotCwd = safePath(snapshotRepo, relativeCwd || '.')
+    let snapshotCwd = safePath(snapshotRepo, relativeCwd || '.')
+    try {
+      lstatSync(snapshotCwd)
+    } catch {
+      // The caller's directory (ignored or empty, so absent from the clone)
+      // has no counterpart in the snapshot; codex would fail to spawn there.
+      process.stderr.write('note: the current directory is not present in the snapshot; running codex from the snapshot root\n')
+      snapshotCwd = snapshotRepo
+    }
     process.stderr.write(`snapshot: ready ${stable.fingerprint}\n`)
     const snapshotEnv = {
       ...env,

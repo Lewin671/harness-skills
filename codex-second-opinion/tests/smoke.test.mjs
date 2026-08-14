@@ -162,6 +162,17 @@ test('--help exits 0 without running codex', () => {
   }
 })
 
+test('a half-set env pair still allows --help but fails a real run', () => {
+  const extraEnv = { CODEX_SECOND_OPINION_MODEL: 'gpt-x' }
+  const help = run(['review', '--help'], extraEnv)
+  assert.equal(help.status, 0, help.stderr)
+  assert.match(help.stderr, /Usage: run-codex-second-opinion review/)
+  const real = run(['review', '--commit', 'HEAD'], extraEnv)
+  assert.equal(real.status, 3, real.stderr)
+  assert.match(real.stderr, /must be set together/)
+  assert.equal(real.argv.length, 0)
+})
+
 test('review of a clean tree exits 2 before any codex invocation', () => {
   const result = run(['review', '--uncommitted'])
   assert.equal(result.status, 2, result.stderr)
@@ -339,6 +350,22 @@ test('snapshot refuses a tracked file replaced by an external symlink', () => {
     rmSync(join(repo, 'tracked.txt'), { force: true })
     writeFileSync(join(repo, 'tracked.txt'), 'committed\n')
   }
+})
+
+test('a review from an ignored subdirectory falls back to the snapshot root', () => {
+  const igRepo = join(root, 'ignored-cwd-repo')
+  mkdirSync(igRepo)
+  sh('git init -q', { cwd: igRepo })
+  writeFileSync(join(igRepo, '.gitignore'), 'build/\n')
+  writeFileSync(join(igRepo, 'tracked.txt'), 'committed\n')
+  sh('git add .gitignore tracked.txt && git -c user.email=t@t -c user.name=t commit -q -m init', { cwd: igRepo })
+  mkdirSync(join(igRepo, 'build'))
+  writeFileSync(join(igRepo, 'tracked.txt'), 'changed\n')
+
+  const result = run(['review', '--uncommitted'], {}, join(igRepo, 'build'))
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stderr, /^note: the current directory is not present in the snapshot/m)
+  assert.match(result.stdout, /the fake result body/)
 })
 
 test('snapshot tolerates an unchanged committed symlink to an unrelated external target', () => {

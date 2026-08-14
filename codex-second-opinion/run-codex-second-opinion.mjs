@@ -66,12 +66,9 @@ const CONTEXT_FENCE = 'CALLER-BACKGROUND'
 function createPolicy() {
   const envModel = process.env.CODEX_SECOND_OPINION_MODEL || ''
   const envEffort = process.env.CODEX_SECOND_OPINION_EFFORT || ''
-  if (Boolean(envModel) !== Boolean(envEffort)) {
-    die(3,
-      'error: CODEX_SECOND_OPINION_MODEL and CODEX_SECOND_OPINION_EFFORT must be set together.',
-      "hint: set both, or unset both and pass '--model M --effort L' for a single run.")
-  }
   return {
+    // Checked in validatePolicy, after parsing, so `--help` still prints.
+    envMismatch: Boolean(envModel) !== Boolean(envEffort),
     model: envModel || 'gpt-5.6-sol',
     effort: envEffort || 'high',
     modelSet: false,
@@ -83,6 +80,11 @@ function createPolicy() {
 }
 
 function validatePolicy(policy) {
+  if (policy.envMismatch) {
+    die(3,
+      'error: CODEX_SECOND_OPINION_MODEL and CODEX_SECOND_OPINION_EFFORT must be set together.',
+      "hint: set both, or unset both and pass '--model M --effort L' for a single run.")
+  }
   if (policy.modelSet !== policy.effortSet) {
     die(3, 'error: --model and --effort must be given together, as an explicit pair.')
   }

@@ -77,7 +77,9 @@ Three rules keep the loop honest:
   `session: unavailable — ...` and `resume: unavailable — ...`; they
   are printed either way so a model-written line cannot pose as them.
 - A rejected model is never retried automatically. On a follow-up,
-  treat the session as contaminated and start a fresh consultation.
+  whether the failed attempt reached the session cannot be verified
+  from outside, so treat the session as contaminated and start a fresh
+  consultation.
 
 Follow-ups belong in the same session — a fresh run rereads the repo
 from scratch and forgets every position already staked out. Only start
