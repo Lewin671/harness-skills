@@ -9,15 +9,24 @@ At most one explicit scope; omission means `--uncommitted`:
 
 | Flag | Reviews |
 |------|---------|
-| `--uncommitted` (default) | staged + unstaged + untracked |
-| `--base <BRANCH>` | current branch against that branch |
+| `--uncommitted` (default) | startup snapshot of staged + unstaged + untracked |
+| `--base <BRANCH>` | startup snapshot of the current branch and tracked working changes against that branch |
 | `--commit <SHA>` | that one commit |
 | `--custom "<TEXT>"` | whatever the instructions describe |
 
-`--uncommitted` reviews *everything* uncommitted, related or not: on a
-tree carrying unrelated WIP, commit the change under review and use
-`--commit`, so findings stay on what the user asked about — and so the
-scope survives any edits made while the review runs.
+`--uncommitted` reviews *everything* uncommitted, related or not. On a
+tree carrying unrelated WIP, commit the intended change and use
+`--commit` so findings stay on what the user asked about.
+
+For `--uncommitted` and `--base`, the wrapper creates an isolated local
+clone, overlays changed tracked files (plus non-ignored untracked files
+for `--uncommitted`), preserves the index separately, verifies the source
+and copied bytes, and prints `snapshot: ready`. Edits to the source
+repository are safe after that marker. The temporary clone is removed
+after the run. Unresolved merges and live changes inside submodules fail
+closed. So do embedded repositories and symlinks that resolve outside
+the clone; make those paths repository-local, or commit them and use
+`--commit`.
 
 Pick `--custom` only when the user has a specific concern that the
 built-in review prompt would not prioritise. It replaces the built-in
@@ -44,10 +53,10 @@ finding.
 One trade-off is worth knowing: `codex exec review` refuses a scope
 flag and a prompt in the same invocation, so with `--context` the scope
 reaches Codex as prose instead of as a flag. The empty-scope precheck
-still runs on the real flag, but what Codex ends up diffing is
-prompt-described, and can drift. Without a genuine need for context,
-prefer the plain scope flag. `--context` cannot be combined with
-`--custom`.
+still runs on the real flag. The startup clone keeps built-in live
+scopes stable, but prompt interpretation remains less mechanical than
+a plain scope flag. Without a genuine need for context, prefer the
+plain scope flag. `--context` cannot be combined with `--custom`.
 
 The script refuses to spend minutes on an empty scope: a clean tree, an
 empty commit, or no changes since the merge base exit `2` before Codex
@@ -96,9 +105,8 @@ Follow SKILL.md § Reporting, plus:
    Do not silently drop low-priority findings.
 2. Add a Claude-side trust line **per finding**: agree, disagree with
    reason, or needs-checking.
-3. Only `--commit` names an immutable object. `--uncommitted` and
-   `--base` review the live working tree — the run is not a snapshot,
-   so never describe those results (or a `--custom` result) as
-   reproducible.
+3. `--uncommitted` and `--base` identify the ephemeral snapshot by the
+   wrapper's fingerprint. Only `--commit` names a durable immutable
+   object; `--custom` remains live and is not reproducible.
 
 For open questions rather than code changes, use consult mode instead.

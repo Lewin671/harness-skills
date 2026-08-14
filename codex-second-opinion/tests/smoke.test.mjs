@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync, existsSync, symlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -48,10 +48,36 @@ case "$1" in
     if [ -n "$FAKE_SLEEP" ]; then
       sleep "$FAKE_SLEEP"
     fi
+    if [ -n "$FAKE_CAPTURE_FILE" ]; then
+      {
+        echo "cwd=$PWD"
+        printf 'tracked-before='
+        cat tracked.txt
+        if [ -f untracked.txt ]; then echo 'untracked=yes'; else echo 'untracked=no'; fi
+        echo 'cached-diff:'
+        git diff --cached -- tracked.txt
+        if [ -n "$FAKE_SOURCE_MUST_BE_HIDDEN" ]; then
+          if grep -R -a -F "$FAKE_SOURCE_MUST_BE_HIDDEN" .git >/dev/null 2>&1; then
+            echo 'source-metadata=yes'
+          else
+            echo 'source-metadata=no'
+          fi
+        fi
+      } > "$FAKE_CAPTURE_FILE"
+    fi
+    if [ -n "$FAKE_MUTATE_SOURCE" ]; then
+      echo continued > "$FAKE_MUTATE_SOURCE/tracked.txt"
+      printf 'tracked-after=' >> "$FAKE_CAPTURE_FILE"
+      cat tracked.txt >> "$FAKE_CAPTURE_FILE"
+    fi
     echo '{"type":"thread.started","thread_id":"'"\${FAKE_THREAD_ID:-11111111-2222-3333-4444-555555555555}"'"}'
     echo 'free text from codex' >&2
     if [ -z "$FAKE_NO_RESULT" ] && [ -n "$out" ]; then
-      echo 'the fake result body' > "$out"
+      if [ -n "$FAKE_RESULT_PATH" ]; then
+        echo "finding at $PWD/tracked.txt" > "$out"
+      else
+        echo 'the fake result body' > "$out"
+      fi
     fi
     exit "\${FAKE_EXIT:-0}" ;;
 esac
@@ -72,7 +98,10 @@ before(() => {
   root = mkdtempSync(join(tmpdir(), 'codex-smoke-'))
   repo = join(root, 'repo')
   mkdirSync(repo)
-  sh('git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init && echo committed > tracked.txt && git add tracked.txt && git -c user.email=t@t -c user.name=t commit -q -m add', { cwd: repo })
+  sh('git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init && mkdir dir && echo committed > tracked.txt && echo nested > dir/file.txt && git add tracked.txt dir/file.txt && git -c user.email=t@t -c user.name=t commit -q -m add', { cwd: repo })
+  mkdirSync(join(repo, 'dir\\name'))
+  writeFileSync(join(repo, 'dir\\name', 'file.txt'), 'nested\n')
+  sh("git add -- 'dir\\name/file.txt' && git -c user.email=t@t -c user.name=t commit -q -m backslash-path", { cwd: repo })
   codexBin = join(root, 'bin', 'codex')
   mkdirSync(dirname(codexBin))
   writeFileSync(codexBin, FAKE_CODEX)
@@ -162,6 +191,146 @@ test('review of a change succeeds with safety args, markers and prefixes', () =>
     }
   } finally {
     rmSync(join(repo, 'untracked.txt'), { force: true })
+  }
+})
+
+test('live review uses an isolated startup snapshot while source edits continue', () => {
+  const capture = join(root, 'snapshot-capture.txt')
+  const sourceRoot = realpathSync(repo)
+  writeFileSync(join(repo, 'tracked.txt'), 'review me\n')
+  writeFileSync(join(repo, 'untracked.txt'), 'new\n')
+  try {
+    const result = run(['review', '--uncommitted'], {
+      FAKE_CAPTURE_FILE: capture,
+      FAKE_MUTATE_SOURCE: repo,
+      FAKE_RESULT_PATH: '1',
+      FAKE_SOURCE_MUST_BE_HIDDEN: sourceRoot,
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stderr, /^snapshot: ready [0-9a-f]{64}$/m)
+    const observed = readFileSync(capture, 'utf8')
+    const cwd = /^cwd=(.*)$/m.exec(observed)[1]
+    assert.notEqual(cwd, repo, 'codex must run outside the live source repository')
+    assert.match(observed, /^tracked-before=review me$/m)
+    assert.match(observed, /^tracked-after=review me$/m)
+    assert.match(observed, /^untracked=yes$/m)
+    assert.match(observed, /^source-metadata=no$/m)
+    assert.equal(readFileSync(join(repo, 'tracked.txt'), 'utf8'), 'continued\n')
+    assert.equal(existsSync(cwd), false, 'the isolated snapshot must be removed after review')
+    assert.match(result.stdout, new RegExp(`finding at ${sourceRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/tracked\\.txt`))
+    assert.ok(!result.stdout.includes(cwd), 'temporary paths must be remapped in the report')
+  } finally {
+    writeFileSync(join(repo, 'tracked.txt'), 'committed\n')
+    rmSync(join(repo, 'untracked.txt'), { force: true })
+  }
+})
+
+test('base review snapshots a clean working tree', () => {
+  const result = run(['review', '--base', 'HEAD^'])
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stderr, /^snapshot: ready [0-9a-f]{64}$/m)
+  const exec = result.argv.find((line) => line.startsWith('exec review'))
+  assert.match(exec, /--base [0-9a-f]{40}/)
+})
+
+test('snapshot preserves staged changes separately from the working tree', () => {
+  const capture = join(root, 'index-capture.txt')
+  writeFileSync(join(repo, 'tracked.txt'), 'staged\n')
+  sh('git add -- tracked.txt', { cwd: repo })
+  writeFileSync(join(repo, 'tracked.txt'), 'committed\n')
+  sh('git config diff.noprefix true', { cwd: repo })
+  try {
+    const result = run(['review', '--uncommitted'], { FAKE_CAPTURE_FILE: capture })
+    assert.equal(result.status, 0, result.stderr)
+    const observed = readFileSync(capture, 'utf8')
+    assert.match(observed, /^tracked-before=committed$/m)
+    assert.match(observed, /^\+staged$/m)
+  } finally {
+    sh('git reset -q HEAD -- tracked.txt', { cwd: repo })
+    sh('git config --unset diff.noprefix', { cwd: repo })
+    writeFileSync(join(repo, 'tracked.txt'), 'committed\n')
+  }
+})
+
+test('base snapshot excludes unrelated untracked files', () => {
+  const capture = join(root, 'base-capture.txt')
+  writeFileSync(join(repo, 'untracked.txt'), 'unrelated\n')
+  try {
+    const result = run(['review', '--base', 'HEAD^'], { FAKE_CAPTURE_FILE: capture })
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(readFileSync(capture, 'utf8'), /^untracked=no$/m)
+  } finally {
+    rmSync(join(repo, 'untracked.txt'), { force: true })
+  }
+})
+
+test('snapshot refuses a symlink ancestor without touching its external target', () => {
+  const outside = join(root, 'outside')
+  mkdirSync(outside)
+  writeFileSync(join(outside, 'file.txt'), 'must survive\n')
+  rmSync(join(repo, 'dir'), { recursive: true })
+  symlinkSync(outside, join(repo, 'dir'))
+  try {
+    const result = run(['review', '--uncommitted'])
+    assert.equal(result.status, 3, result.stderr)
+    assert.match(result.stderr, /ancestor dir is a symbolic link/)
+    assert.equal(result.argv.length, 0, 'codex must not run on an unsafe snapshot')
+    assert.equal(readFileSync(join(outside, 'file.txt'), 'utf8'), 'must survive\n')
+  } finally {
+    rmSync(join(repo, 'dir'), { force: true })
+    mkdirSync(join(repo, 'dir'))
+    writeFileSync(join(repo, 'dir', 'file.txt'), 'nested\n')
+  }
+})
+
+test('snapshot treats backslash as a filename character when guarding symlink ancestors', () => {
+  const outside = join(root, 'outside-backslash')
+  const sourceDir = join(repo, 'dir\\name')
+  mkdirSync(outside)
+  writeFileSync(join(outside, 'file.txt'), 'must survive\n')
+  rmSync(sourceDir, { recursive: true })
+  symlinkSync(outside, sourceDir)
+  try {
+    const result = run(['review', '--uncommitted'])
+    assert.equal(result.status, 3, result.stderr)
+    assert.match(result.stderr, /is a symbolic link/)
+    assert.equal(result.argv.length, 0, 'codex must not run on an unsafe snapshot')
+    assert.equal(readFileSync(join(outside, 'file.txt'), 'utf8'), 'must survive\n')
+  } finally {
+    rmSync(sourceDir, { force: true })
+    mkdirSync(sourceDir)
+    writeFileSync(join(sourceDir, 'file.txt'), 'nested\n')
+  }
+})
+
+test('snapshot refuses an unchanged symlink into the live source repository', () => {
+  const linkRepo = join(root, 'link-repo')
+  mkdirSync(linkRepo)
+  sh('git init -q', { cwd: linkRepo })
+  writeFileSync(join(linkRepo, 'tracked.txt'), 'committed\n')
+  symlinkSync(join(linkRepo, 'tracked.txt'), join(linkRepo, 'alias'))
+  sh('git add tracked.txt alias && git -c user.email=t@t -c user.name=t commit -q -m init', { cwd: linkRepo })
+  writeFileSync(join(linkRepo, 'tracked.txt'), 'changed\n')
+
+  const result = run(['review', '--uncommitted'], {}, linkRepo)
+  assert.equal(result.status, 3, result.stderr)
+  assert.match(result.stderr, /resolves outside the isolated review repository/)
+  assert.equal(result.argv.length, 0, 'codex must not run with a live external symlink')
+})
+
+test('snapshot refuses a tracked file replaced by an external symlink', () => {
+  const outside = join(root, 'outside-tracked.txt')
+  writeFileSync(outside, 'external\n')
+  rmSync(join(repo, 'tracked.txt'))
+  symlinkSync(outside, join(repo, 'tracked.txt'))
+  try {
+    const result = run(['review', '--uncommitted'])
+    assert.equal(result.status, 3, result.stderr)
+    assert.match(result.stderr, /resolves outside the isolated review repository/)
+    assert.equal(result.argv.length, 0, 'codex must not run with a live external symlink')
+  } finally {
+    rmSync(join(repo, 'tracked.txt'), { force: true })
+    writeFileSync(join(repo, 'tracked.txt'), 'committed\n')
   }
 })
 

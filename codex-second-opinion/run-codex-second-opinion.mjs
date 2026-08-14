@@ -4,6 +4,8 @@
 //   consult — codex exec over one free-form question, resumable
 // The process/environment layer lives in lib/runtime.mjs.
 
+import { writeFileSync } from 'node:fs'
+
 import {
   createArtifacts,
   createEnvironment,
@@ -18,6 +20,7 @@ import {
   shellQuote,
   terminateActiveChild,
 } from './lib/runtime.mjs'
+import { createReviewSnapshot } from './lib/snapshot.mjs'
 
 const TOP_USAGE = `Usage: run-codex-second-opinion <review|consult> [ARGS]
 
@@ -254,11 +257,27 @@ async function runReview(args) {
   validatePolicy(policy)
   const env = createEnvironment(policy.repo)
   checkScopeNonempty(review, env)
-  const artifacts = createArtifacts(env, 'review')
-  const invocation = buildReviewCommand(review, env, safetyArgs('review', policy, artifacts.out))
-  const run = await runCodex(env, invocation, {
-    ...artifacts, timeout: policy.timeout, runNoun: 'review', resultNoun: 'report',
-  })
+  const snapshot = createReviewSnapshot(review, env)
+  const reviewEnv = snapshot?.env || env
+  let artifacts
+  let run
+  try {
+    artifacts = createArtifacts(env, 'review')
+    const invocation = buildReviewCommand(review, reviewEnv, safetyArgs('review', policy, artifacts.out))
+    run = await runCodex(reviewEnv, invocation, {
+      ...artifacts, timeout: policy.timeout, runNoun: 'review', resultNoun: 'report',
+    })
+    if (snapshot) {
+      run.output = run.output.replaceAll(snapshot.env.repoRoot, env.repoRoot)
+      try {
+        writeFileSync(artifacts.out, run.output, { mode: 0o600 })
+      } catch (error) {
+        die(3, `error: could not rewrite snapshot paths in the review report: ${flat(error.message)}`)
+      }
+    }
+  } finally {
+    snapshot?.cleanup()
+  }
   emitResult(run, artifacts, 'report')
 }
 

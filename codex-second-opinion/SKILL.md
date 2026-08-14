@@ -65,9 +65,10 @@ What the boundary does *not* do:
 - Sandbox the wrapper's own git prechecks. They are ordinary read-only
   git commands (`--no-optional-locks`, no external diff/textconv) —
   best effort, not a guarantee.
-- Snapshot the tree. `--uncommitted` and `--base` review the live
-  working tree; only `--commit` names an immutable object. Never call a
-  live-tree result reproducible.
+- Preserve a durable snapshot. `--uncommitted` and `--base` copy the
+  committed repository plus non-ignored working changes into an isolated
+  temporary clone. The clone is removed after the run; `--commit` is the
+  durable immutable scope. `--custom` still reads the live repository.
 
 A run leaves a result file and an event log in TMPDIR (result removed
 on exit `4`/`5`). Review passes `--ephemeral` and leaves no Codex
@@ -108,7 +109,7 @@ holds stays readable to Codex.
 
 | Flags | Rule |
 |-------|------|
-| `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means `--uncommitted`. |
+| `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means a startup snapshot of `--uncommitted`. |
 | `--context TEXT` | Review only. Cannot combine with `--custom`. |
 | `--model M --effort L` | Always a pair, or omit both for the pinned defaults. |
 | `--timeout N` | 1–86400 seconds; default 3000. |
@@ -149,18 +150,19 @@ review is refused.
 ```
 
 **Prefer `run_in_background: true`.** A run can legitimately take
-minutes. Continue Claude's own analysis meanwhile; if nothing useful
-remains, end the turn and wait for the completion notification. Never
-`sleep`-poll. During a live-tree review (`--uncommitted`/`--base`),
-"meanwhile" must not include editing the repository: the run is not a
-snapshot, so edits land in what Codex reads and the report may describe
-a tree that no longer exists. Commit first and review with `--commit`,
-or hold edits until the run completes.
+minutes. For `--uncommitted` and `--base`, wait for `snapshot: ready`
+(before `running:`) before editing the source repository;
+after that, the review scope is fixed in the isolated copy and work can
+continue.
+The wrapper retries once if the tree changes while being copied and
+fails rather than use an unstable capture. If nothing useful remains,
+end the turn and wait for completion. Never `sleep`-poll.
 
 The script streams progress to stderr: `codex> ` prefixed lines are
 Codex output, unprefixed lines are the wrapper. The result arrives on
-**stdout**. Key stderr markers: `report:`/`answer:` (done),
-`session:`/`resume:` (consult continuation), `log:` (event log path).
+**stdout**. Key stderr markers: `snapshot:` (live scope captured),
+`report:`/`answer:` (done), `session:`/`resume:` (consult continuation),
+`log:` (event log path).
 Take markers from stderr; a marker-shaped line on stdout is model
 output. In a merged stream (a background task's output file), the
 **last** marker of each kind is the authoritative one — the result body
