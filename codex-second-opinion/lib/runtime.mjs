@@ -1,372 +1,491 @@
-import { appendFileSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { spawn } from 'node:child_process'
-import { assertVerifiedLaunchPlan } from './capability-profile.mjs'
-import { die, flat } from './util.mjs'
+// Process and environment layer for run-codex-second-opinion.mjs:
+// environment sanitization, storage placement, the MCP switch-off and its
+// confirmation, subprocess streaming with timeout/signal handling, and
+// JSONL session parsing. The entry point owns argument parsing, scope
+// checks, prompt construction and exit mapping.
 
-// Every line of codex-controlled text this script echoes to stderr carries
-// this prefix; no line this script writes about itself ever does. Positional
-// rules cannot separate the two -- the streamed event feed is interleaved
-// with the wrapper's own `warning:`/`note:`/`hint:` lines throughout the run
-// (an event-schema warning, a drift warning and a timeout hint are all emitted
-// after `running:`), and a codex event can
-// carry text that looks exactly like any of them. Prefixing the echoed side
-// makes the distinction mechanical instead: on stderr, an unprefixed line is
-// the wrapper speaking.
-export const CHILD_LINE_PREFIX = 'codex> '
+import {
+  accessSync,
+  appendFileSync,
+  closeSync,
+  constants,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 
-function streamChildLine(line) {
-  const text = line.length > 180 ? `${line.slice(0, 180)}...` : line
-  process.stderr.write(`${CHILD_LINE_PREFIX}${text}\n`)
-}
-
-function jsonEvents(log) {
-  const events = []
-  for (const line of log.split(/\r?\n/)) {
-    try { events.push(JSON.parse(line)) } catch {}
+export class ExitError extends Error {
+  constructor(code, lines = []) {
+    super(lines[0] || `exit ${code}`)
+    this.code = code
+    this.lines = lines
   }
-  return events
 }
 
-// A successful --json run should always yield at least one typed event
-// (thread.started, at minimum); zero across the whole log usually means
-// codex's JSONL event format drifted, not that nothing happened.
-export function hasRecognizedEvent(log) {
-  return jsonEvents(log).some((event) => typeof event?.type === 'string')
+export function die(code, ...lines) {
+  throw new ExitError(code, lines)
 }
 
-export function effectiveModel(log) {
-  let model = ''
-  for (const event of jsonEvents(log)) {
-    if (typeof event?.model === 'string') model = event.model
+// Caller-controlled text goes through flat() before it lands on stderr, so a
+// value holding a newline cannot forge a second marker-shaped line.
+export function flat(value) {
+  return String(value).replace(/[\r\n]/g, ' ')
+}
+
+export function shellQuote(value) {
+  const text = String(value)
+  return text && /^[A-Za-z0-9._/-]+$/.test(text)
+    ? text
+    : `'${text.replaceAll("'", `'\\''`)}'`
+}
+
+export function parseTimeout(value, source) {
+  const raw = String(value)
+  if (!/^\d{1,5}$/.test(raw) || Number(raw) < 1 || Number(raw) > 86400) {
+    die(3, `error: ${source} must be a whole number of seconds between 1 and 86400, got '${flat(raw)}'`)
   }
-  return model
+  return Number(raw)
 }
 
-export function lastThreadId(log) {
-  let id = ''
-  for (const event of jsonEvents(log)) {
-    if (event?.type === 'thread.started' && typeof event.thread_id === 'string') id = event.thread_id
+function isInside(candidate, root) {
+  const rel = relative(root, candidate)
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${'/'}`) && !isAbsolute(rel))
+}
+
+// realpath of the path, or of its nearest existing ancestor with the missing
+// remainder appended lexically — enough to decide "would this land inside the
+// repository?" for a path codex may be about to create.
+function bestRealpath(path) {
+  let probe = resolve(path)
+  const pending = []
+  for (;;) {
+    try {
+      const real = realpathSync(probe)
+      return pending.length ? join(real, ...pending) : real
+    } catch {}
+    const parent = dirname(probe)
+    if (parent === probe) return resolve(path)
+    pending.unshift(basename(probe))
+    probe = parent
   }
-  return id
 }
 
-// hasRecognizedEvent alone cannot catch a schema change that keeps `type`
-// strings intact but renames or moves `thread_id`: a run with only
-// item.started/item.completed events, and no thread.started at all, is
-// already an anticipated, legitimate shape (see consult.md's "no session"
-// case) -- but a thread.started event that carries no readable thread_id is
-// not, and emitResume (lib/consult.mjs) uses this to tell the two apart
-// before deciding whether a resumed session "expired" or the parser did.
-export function hasThreadStartedEvent(log) {
-  return jsonEvents(log).some((event) => event?.type === 'thread.started')
+// Preflight probes (git, `codex mcp list`) get a fixed budget independent of
+// --timeout, so a stalled probe cannot block the wrapper for the whole model
+// budget before the caller even sees `running:`.
+const PREFLIGHT_TIMEOUT_MS = 120000
+
+export function createEnvironment(repo) {
+  const baseEnv = { ...process.env }
+  // Redirection variables an outer git/node process may have exported; any of
+  // them could point a child's reads or writes somewhere this run never
+  // checked. NODE_* also covers codex itself, which ships as a node script.
+  for (const key of Object.keys(baseEnv)) {
+    if (key.startsWith('GIT_TRACE')) delete baseEnv[key]
+  }
+  for (const key of [
+    'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE',
+    'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+    'CDPATH', 'NODE_OPTIONS', 'NODE_PATH', 'NODE_V8_COVERAGE',
+    'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS',
+  ]) delete baseEnv[key]
+  // A relative PATH entry resolves against this process's cwd — the
+  // repository under review, below — for every child and for anything a
+  // child execs in turn (codex is an env-shebang node script).
+  baseEnv.PATH = String(baseEnv.PATH || '')
+    .split(delimiter)
+    .filter((dir) => dir && isAbsolute(dir))
+    .join(delimiter)
+  baseEnv.GIT_NO_LAZY_FETCH = '1'
+
+  try {
+    process.chdir(repo)
+  } catch {
+    die(3, `error: cannot enter ${flat(repo)}`)
+  }
+  const cwd = realpathSync(process.cwd())
+  process.chdir(cwd)
+
+  const env = {
+    cwd,
+    baseEnv,
+    repoRoot: null,
+    codexBin: null,
+    scratch: null,
+    command(command, args, options = {}) {
+      const result = spawnSync(command, args, {
+        cwd,
+        env: baseEnv,
+        encoding: 'utf8',
+        input: options.input,
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: PREFLIGHT_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+      })
+      if (result.error) return { status: 127, stdout: '', stderr: result.error.message }
+      return { status: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' }
+    },
+    git(args) {
+      return this.command('git', args)
+    },
+    codex(args) {
+      return this.command(this.codexBin, args)
+    },
+  }
+
+  const workTree = env.git(['rev-parse', '--is-inside-work-tree'])
+  if (workTree.status !== 0 || workTree.stdout.trim() !== 'true') {
+    die(3, `error: ${flat(repo)} is not a git work tree`)
+  }
+  const top = env.git(['rev-parse', '--show-toplevel'])
+  if (top.status !== 0 || !top.stdout.trim()) die(3, 'error: could not resolve the repository root')
+  env.repoRoot = realpathSync(top.stdout.trim())
+
+  resolveCodexBin(env)
+  resolveStorage(env)
+  return env
 }
 
-// The codex child of whichever Runtime currently has one running. Module
-// scope rather than an instance field because the entry point's
-// uncaughtException/unhandledRejection net has no reference to the Runtime,
-// and a detached process group with nobody left to signal it is precisely
-// what that net exists to prevent.
+function resolveCodexBin(env) {
+  const raw = process.env.CODEX_BIN
+  if (raw) {
+    if (!isAbsolute(raw)) {
+      die(3,
+        `error: CODEX_BIN (${flat(raw)}) must be an absolute path; this script runs from inside the repository under review, so a relative one would resolve against its content.`,
+        'hint: use the output of `command -v codex` from an interactive shell.')
+    }
+    env.codexBin = raw
+  } else {
+    // spawn() would search the same absolute-only PATH, but resolving here
+    // lets the `note:` line name the binary before anything runs.
+    for (const dir of env.baseEnv.PATH.split(delimiter)) {
+      const candidate = join(dir, 'codex')
+      try {
+        accessSync(candidate, constants.X_OK)
+        if (statSync(candidate).isFile()) {
+          env.codexBin = candidate
+          break
+        }
+      } catch {}
+    }
+    if (!env.codexBin) {
+      die(3,
+        "error: could not find 'codex' on an absolute PATH entry.",
+        'hint: install the codex CLI, or set CODEX_BIN to its absolute path.')
+    }
+  }
+  if (isInside(bestRealpath(env.codexBin), env.repoRoot)) {
+    die(3,
+      `error: the codex binary (${flat(env.codexBin)}) resolves inside the repository under review, which could control it; refusing to execute it.`,
+      'hint: use a codex installed outside the repository.')
+  }
+  process.stderr.write(`note: using codex binary: ${flat(env.codexBin)}\n`)
+}
+
+function resolveStorage(env) {
+  if (!process.env.CODEX_HOME && !process.env.HOME) {
+    die(3,
+      'error: neither CODEX_HOME nor HOME is set, so where codex would write its sessions cannot be determined.',
+      'hint: set CODEX_HOME explicitly, outside the repository.')
+  }
+  const codexHome = process.env.CODEX_HOME || join(process.env.HOME, '.codex')
+  const home = bestRealpath(isAbsolute(codexHome) ? codexHome : resolve(env.cwd, codexHome))
+  // The sessions directory is checked separately because it is the one entry
+  // codex writes on every run, and it may itself be a symlink even when
+  // CODEX_HOME is not.
+  if ([home, bestRealpath(join(home, 'sessions'))].some((path) => isInside(path, env.repoRoot))) {
+    die(3,
+      `error: CODEX_HOME (${flat(codexHome)}) resolves inside the repository under review, and codex writes every session under it.`,
+      'hint: point CODEX_HOME outside the repository for this run.')
+  }
+  env.baseEnv.CODEX_HOME = home
+
+  let scratch = bestRealpath(process.env.TMPDIR || tmpdir())
+  if (isInside(scratch, env.repoRoot)) {
+    process.stderr.write('warning: TMPDIR is inside the repository; using /tmp instead\n')
+    scratch = bestRealpath('/tmp')
+    if (isInside(scratch, env.repoRoot)) die(3, 'error: no temporary directory outside the repository; set TMPDIR elsewhere')
+  }
+  try {
+    accessSync(scratch, constants.R_OK | constants.W_OK | constants.X_OK)
+  } catch {
+    die(3, `error: cannot write scratch files under ${flat(scratch)}`)
+  }
+  env.baseEnv.TMPDIR = scratch
+  env.scratch = scratch
+}
+
+export function createArtifacts(env, mode) {
+  try {
+    const dir = mkdtempSync(join(env.scratch, `codex-${mode}-`))
+    const out = join(dir, 'result.md')
+    const log = join(dir, 'events.jsonl')
+    closeSync(openSync(out, 'wx', 0o600))
+    closeSync(openSync(log, 'wx', 0o600))
+    process.stderr.write(`log: ${log}\n`)
+    return { out, log }
+  } catch {
+    die(3, `error: cannot create scratch files under ${flat(env.scratch)}`)
+  }
+}
+
+function enabledMcpServers(text) {
+  const value = JSON.parse(text)
+  if (!Array.isArray(value)) throw new Error('not a list')
+  const enabled = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || typeof entry.enabled !== 'boolean') {
+      throw new Error('unrecognized listing entry')
+    }
+    if (!entry.enabled) continue
+    // The name has to be addressable as a config key to be switched off.
+    if (typeof entry.name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(entry.name)) {
+      throw new Error('unaddressable server name')
+    }
+    enabled.push(entry.name)
+  }
+  return enabled
+}
+
+// MCP servers come from the user's codex configuration, not the repository,
+// and may mutate external systems — so a trusted repository does not reduce
+// this risk. The overrides express the intended policy; only the second
+// listing confirms the effective one.
+export function mcpOverrides(env, allowMcp) {
+  const refuse = (why) => {
+    if (allowMcp) {
+      process.stderr.write(`warning: ${why}; proceeding because --allow-mcp was set\n`)
+      return []
+    }
+    die(3,
+      `error: ${why}.`,
+      'error: refusing to start because MCP tools may mutate external systems.',
+      'hint: disable those servers, or pass --allow-mcp only after the user explicitly accepts that risk.')
+  }
+  const listing = env.codex(['mcp', 'list', '--json'])
+  if (listing.status !== 0) return refuse("could not read the standalone MCP listing ('codex mcp list' failed)")
+  let enabled
+  try {
+    enabled = enabledMcpServers(listing.stdout)
+  } catch {
+    return refuse('could not parse the standalone MCP listing')
+  }
+  if (!enabled.length) return []
+  if (allowMcp) {
+    process.stderr.write(`warning: leaving ${enabled.length} enabled standalone MCP server(s) reachable because --allow-mcp was set\n`)
+    process.stderr.write('warning: local commands stay read-only, but MCP tools may mutate external systems\n')
+    return []
+  }
+  const overrides = enabled.flatMap((name) => ['-c', `mcp_servers.${name}.enabled=false`])
+  const verify = env.codex(['mcp', 'list', '--json', ...overrides])
+  let left = null
+  if (verify.status === 0) {
+    try {
+      left = enabledMcpServers(verify.stdout)
+    } catch {}
+  }
+  if (left === null) return refuse('could not confirm the standalone MCP servers were switched off')
+  if (left.length) return refuse(`standalone MCP server(s) still enabled after being switched off: ${left.join(' ')}`)
+  process.stderr.write(`note: disabled ${enabled.length} standalone MCP server(s) for this run; pass --allow-mcp to keep them\n`)
+  return overrides
+}
+
+export function safetyArgs(mode, policy, mcpArgs, out) {
+  return [
+    '-c', 'sandbox_mode="read-only"',
+    '--disable', 'hooks', '--disable', 'apps', '--disable', 'plugins',
+    '-c', 'notify=[]',
+    // Turns a renamed or unrecognized config key into a hard failure instead
+    // of a silently ignored safety setting.
+    '--strict-config',
+    // Review never resumes a session, so it does not persist one. An older
+    // codex that rejects --ephemeral fails the run (exit 4).
+    ...(mode === 'review' ? ['--ephemeral'] : []),
+    ...mcpArgs,
+    '--json',
+    '-m', policy.model,
+    '-c', `model_reasoning_effort="${policy.effort}"`,
+    '-o', out,
+  ]
+}
+
+// Every line of codex-controlled text echoed to stderr carries this prefix;
+// no line this script writes about itself does. On stderr, an unprefixed
+// line is the wrapper speaking.
+const CHILD_LINE_PREFIX = 'codex> '
+
+// The codex child currently running, at module scope so the entry point's
+// uncaughtException net can kill the detached process group even without a
+// reference into runCodex's scope.
 let activeChild = null
 
 export function terminateActiveChild(signal) {
   if (!activeChild?.pid) return
-  try { process.kill(-activeChild.pid, signal) } catch {
+  try {
+    process.kill(-activeChild.pid, signal)
+  } catch {
     try { activeChild.kill(signal) } catch {}
   }
 }
 
-export class Runtime {
-  constructor(launchPlan, environment, artifacts) {
-    assertVerifiedLaunchPlan(launchPlan)
-    this.plan = launchPlan
-    this.state = launchPlan.policy
-    this.environment = environment
-    this.out = artifacts.out
-    this.outDir = artifacts.outDir
-    this.log = artifacts.log
-    this.currentChild = null
-    this.timedOut = false
-    this.interruptedCode = null
-    this.signalHandlers = new Map()
-    this.stdoutEventBuffer = ''
-  }
+function readLogFile(log) {
+  try { return readFileSync(log, 'utf8') } catch { return '' }
+}
 
-  // An accessor pair rather than a plain field, so every existing assignment
-  // site keeps the module-level `activeChild` in step without any of them
-  // having to remember to. Missing one would be silent: the process group
-  // would simply survive a crash.
-  get currentChild() { return this.child }
-
-  set currentChild(child) {
-    this.child = child
-    activeChild = child
-  }
-
-  safetyArgs() {
-    const selection = this.state.modelSelection
-    const args = [
-      '-c', 'sandbox_mode="read-only"',
-      '--disable', 'hooks', '--disable', 'apps', '--disable', 'plugins',
-      '-c', 'notify=[]',
-      '--strict-config',
-      // Removes a write channel instead of checking where it points. Codex
-      // writes this run's transcript under CODEX_HOME/sessions on every
-      // ordinary invocation, which is why resolveScratchAndCodexHome refuses
-      // a CODEX_HOME that lands in the repository. Review never reads that
-      // transcript back -- it has no --continue -- so for review the file is
-      // a pure by-product, and not writing it beats placing it correctly.
-      // The frozen capability profile enables it only for review and only
-      // after confirming the installed Codex accepts the flag.
-      ...(this.plan.capabilities.ephemeral ? ['--ephemeral'] : []),
-      ...this.plan.capabilities.mcpArgs,
-      '--json',
-    ]
-    if (selection.kind !== 'inherit') {
-      args.push('-m', selection.model)
-      args.push('-c', `model_reasoning_effort="${selection.effort}"`)
-    }
-    args.push('-o', this.out)
-    return args
-  }
-
-  installSignalHandlers() {
-    for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
-      const handler = () => {
-        this.interruptedCode = code
-        // Forward the signal that actually arrived, rather than rewriting all
-        // three to TERM. A child can and does distinguish them -- INT is the
-        // interactive interrupt, HUP says the terminal went away, TERM is a
-        // plain request to stop -- and codex may well run different cleanup
-        // for each. Sending TERM for an INT also made internals.md's word
-        // "forwarded" untrue. KILL still follows if the group ignores it.
-        this.terminateChild(signal)
-        setTimeout(() => this.terminateChild('SIGKILL'), 2000).unref()
-        process.exitCode = code
-      }
-      this.signalHandlers.set(signal, handler)
-      process.once(signal, handler)
-    }
-  }
-
-  removeSignalHandlers() {
-    for (const [signal, handler] of this.signalHandlers) process.removeListener(signal, handler)
-    this.signalHandlers.clear()
-  }
-
-  terminateChild(signal) {
-    const child = this.currentChild
-    if (!child?.pid) return
-    try { process.kill(-child.pid, signal) } catch {
-      try { child.kill(signal) } catch {}
-    }
-  }
-
-  async execute(command, args, diagnostic) {
-    process.stderr.write(`${flat(diagnostic)}\n`)
-    // One buffer PER STREAM, not one shared by both, and -- just as
-    // importantly -- the LOG is written a whole line at a time out of those
-    // buffers rather than raw chunk by raw chunk. stdout carries the JSONL
-    // event stream; stderr carries codex's own free text. Appending raw
-    // chunks let a stderr chunk arriving between two halves of a split stdout
-    // event splice itself into the middle of that JSON line *in the log
-    // file*, so the line no longer parsed and the event vanished -- silently,
-    // because hasRecognizedEvent is satisfied by any other well-formed event
-    // in the same log. The events lost that way are exactly the ones this
-    // script draws conclusions from: model rejection, session id, model
-    // attribution. Separating the echoed view alone did not fix that; the log
-    // is what jsonEvents() actually parses, so the framing has to hold there.
-    // Byte content is still untruncated -- only the interleaving granularity
-    // changes, from arbitrary chunk boundaries to line boundaries.
-    const buffers = new Map([['stdout', ''], ['stderr', '']])
-    // A failed write here used to throw straight out of an EventEmitter
-    // callback -- outside the promise below and outside the entry point's
-    // try/catch -- so Node printed a raw stack trace, exited 1 (a code this
-    // skill does not document), and left the DETACHED codex process group
-    // running with nothing left to reap it. Reproduced by pointing the log at
-    // an unwritable path. It is now recorded, the child is torn down, and the
-    // run ends through the ordinary refusal path.
-    let archiveError = null
-    const archive = (stream) => (chunk) => {
-      if (archiveError) return
-      try {
-        let pending = buffers.get(stream) + chunk
-        let complete = ''
-        for (;;) {
-          const newline = pending.indexOf('\n')
-          if (newline < 0) break
-          const line = pending.slice(0, newline).replace(/\r$/, '')
-          pending = pending.slice(newline + 1)
-          complete += `${line}\n`
-          streamChildLine(line)
-        }
-        if (complete) appendFileSync(this.log, complete)
-        if (stream === 'stdout' && complete) this.stdoutEventBuffer += complete
-        buffers.set(stream, pending)
-      } catch (error) {
-        archiveError = error
-        this.terminateChild('SIGTERM')
-      }
-    }
-
-    this.stdoutEventBuffer = ''
-    this.timedOut = false
-    this.interruptedCode = null
-    this.installSignalHandlers()
-    let child
+export function lastThreadId(events) {
+  let id = ''
+  for (const line of events.split(/\r?\n/)) {
     try {
-      child = spawn(command, args, {
-        cwd: this.environment.cwd,
-        env: this.environment.baseEnv,
-        detached: true,
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        // command is codexBin, already resolved to a safe, dereferenced
-        // path (Environment.resolveCodexBin); argv0 keeps the identity a
-        // symlink-dispatching or multicall install may still expect to see
-        // itself invoked under -- see Environment.codexArgv0.
-        argv0: this.environment.codexArgv0,
-      })
-    } catch (error) {
-      this.removeSignalHandlers()
-      return { status: 127, error }
-    }
-    this.currentChild = child
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stdout.on('data', archive('stdout'))
-    child.stderr.on('data', archive('stderr'))
+      const event = JSON.parse(line)
+      if (event?.type === 'thread.started' && typeof event.thread_id === 'string') id = event.thread_id
+    } catch {}
+  }
+  return id
+}
 
-    let timeoutTimer = null
-    let killTimer = null
-    if (this.state.timeout > 0) {
-      timeoutTimer = setTimeout(() => {
-        this.timedOut = true
-        this.terminateChild('SIGTERM')
-        killTimer = setTimeout(() => this.terminateChild('SIGKILL'), 1000)
-      }, this.state.timeout * 1000)
-    }
+// Runs codex to completion. Returns { output, events, discard, tail } on
+// success; dies with 4 (failed), 5 (timed out) or 129/130/143 (signalled)
+// otherwise, discarding the result file but keeping the event log.
+export async function runCodex(env, invocation, options) {
+  const { out, log, timeout, runNoun, resultNoun } = options
+  process.stderr.write(`${flat(invocation.diagnostic)}\n`)
 
-    const result = await new Promise((resolve) => {
-      child.once('error', (error) => resolve({ status: 127, error }))
-      child.once('close', (code, signal) => resolve({ status: code ?? (signal ? 1 : 0), signal }))
+  const discard = () => rmSync(out, { force: true })
+  const tail = () => {
+    for (const line of readLogFile(log).split(/\r?\n/).slice(-21).filter(Boolean)) {
+      process.stderr.write(`${CHILD_LINE_PREFIX}${line.length > 180 ? `${line.slice(0, 180)}...` : line}\n`)
+    }
+  }
+
+  let logBroken = false
+  let stdoutEvents = ''
+  const emitLine = (stream, line) => {
+    process.stderr.write(`${CHILD_LINE_PREFIX}${line.length > 180 ? `${line.slice(0, 180)}...` : line}\n`)
+    if (stream === 'stdout') stdoutEvents += `${line}\n`
+    if (logBroken) return
+    try {
+      appendFileSync(log, `${line}\n`)
+    } catch {
+      logBroken = true
+      process.stderr.write(`warning: could not append to the progress log at ${log}; continuing without it\n`)
+    }
+  }
+  // One buffer per stream, flushed whole lines at a time, so a stderr chunk
+  // cannot splice itself into the middle of a stdout JSON event in the log.
+  const buffers = new Map([['stdout', ''], ['stderr', '']])
+  const archive = (stream) => (chunk) => {
+    let pending = buffers.get(stream) + chunk
+    for (;;) {
+      const newline = pending.indexOf('\n')
+      if (newline < 0) break
+      emitLine(stream, pending.slice(0, newline).replace(/\r$/, ''))
+      pending = pending.slice(newline + 1)
+    }
+    buffers.set(stream, pending)
+  }
+
+  let timedOut = false
+  let interruptedCode = null
+  const handlers = new Map()
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+    const handler = () => {
+      interruptedCode = code
+      terminateActiveChild(signal)
+      setTimeout(() => terminateActiveChild('SIGKILL'), 2000).unref()
+      process.exitCode = code
+    }
+    handlers.set(signal, handler)
+    process.once(signal, handler)
+  }
+  const cleanupHandlers = () => {
+    for (const [signal, handler] of handlers) process.removeListener(signal, handler)
+  }
+
+  let child
+  try {
+    child = spawn(env.codexBin, invocation.args, {
+      cwd: env.cwd,
+      env: env.baseEnv,
+      detached: true,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
-    if (timeoutTimer) clearTimeout(timeoutTimer)
-    if (killTimer) {
-      clearTimeout(killTimer)
-      // The Codex parent may exit on TERM while a detached descendant closes
-      // the pipes and stays alive. The process group still exists under the
-      // original pgid, so finish the promised group-wide termination before
-      // returning even though the direct child has already closed.
-      if (this.timedOut || this.interruptedCode !== null) this.terminateChild('SIGKILL')
-    }
-    // Whatever never terminated with a newline still belongs in the log, or a
-    // final unterminated event would be echoed but not recorded.
-    for (const [stream, pending] of buffers.entries()) {
-      if (!pending) continue
-      streamChildLine(pending)
-      try { appendFileSync(this.log, `${pending}\n`) } catch { /* reported below if it also broke the stream writes */ }
-      if (stream === 'stdout') this.stdoutEventBuffer += `${pending}\n`
-    }
-    this.removeSignalHandlers()
-    if (this.interruptedCode !== null) {
-      this.terminateChild('SIGKILL')
-      this.currentChild = null
-      die(this.interruptedCode)
-    }
-    if (archiveError) {
-      // Before currentChild is cleared, so the group-wide kill still has a
-      // pid to aim at: the direct child closing its pipes does not mean the
-      // commands codex spawned are gone.
-      this.terminateChild('SIGKILL')
-      this.currentChild = null
-      this.discardResult()
-      die(4,
-        `error: could not write the progress log at ${this.log} (${flat(archiveError.message)}).`,
-        `error: the ${this.state.runNoun} was stopped, because a log this script cannot append to can no longer be trusted to hold the invocation it reports on.`,
-        'hint: check free space and that TMPDIR still exists, then rerun.')
-    }
-    this.currentChild = null
-    return result
+  } catch (error) {
+    cleanupHandlers()
+    discard()
+    die(4, `error: could not start ${flat(env.codexBin)}: ${flat(error.message)}`)
   }
+  activeChild = child
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', archive('stdout'))
+  child.stderr.on('data', archive('stderr'))
 
-  // Removes the result file AND the private directory holding it. Exit 4 and
-  // exit 5 both mean no usable result exists, and leaving the mkdtemp
-  // directory behind littered TMPDIR with an empty `codex-<mode>-*` per
-  // failed run. The log directory is deliberately not touched: the log is the
-  // artifact those exits tell the caller to go read.
-  discardResult() {
-    rmSync(this.out, { force: true })
-    if (this.outDir) rmSync(this.outDir, { recursive: true, force: true })
+  let killTimer = null
+  const timeoutTimer = setTimeout(() => {
+    timedOut = true
+    terminateActiveChild('SIGTERM')
+    killTimer = setTimeout(() => terminateActiveChild('SIGKILL'), 1000)
+  }, timeout * 1000)
+
+  const result = await new Promise((resolvePromise) => {
+    child.once('error', () => resolvePromise({ status: 127 }))
+    child.once('close', (code, signal) => resolvePromise({ status: code ?? (signal ? 1 : 0) }))
+  })
+  clearTimeout(timeoutTimer)
+  if (killTimer) clearTimeout(killTimer)
+  for (const [stream, pending] of buffers) {
+    if (pending) emitLine(stream, pending)
   }
+  cleanupHandlers()
+  // The direct child closing its pipes does not mean the detached group is
+  // gone; finish the promised group-wide termination.
+  if (timedOut || interruptedCode !== null) terminateActiveChild('SIGKILL')
+  activeChild = null
 
-  readLog() {
-    try { return readFileSync(this.log, 'utf8') } catch { return '' }
+  if (interruptedCode !== null) {
+    discard()
+    die(interruptedCode)
   }
-
-  readStdoutEvents() {
-    return this.stdoutEventBuffer
-  }
-
-  tailLog() {
-    const lines = this.readLog().split(/\r?\n/).slice(-21)
-      .filter((line) => line !== '')
-    for (const line of lines) streamChildLine(line)
-  }
-
-  strictConfigHint() {
-    if (!this.readLog().includes('unknown configuration field')) return
-    process.stderr.write('hint: codex rejected an unrecognized configuration field. --strict-config is deliberate: it stops a renamed config key from silently disabling the read-only sandbox.\n')
-    process.stderr.write("hint: the error line names the field. A key this script sets — sandbox_mode, notify, model_reasoning_effort, or an mcp_servers.<id>.enabled override — means the codex CLI drifted and the safety keys need updating; any other field is your own config.toml.\n")
-  }
-
-  timeoutExit() {
-    process.stderr.write(`error: ${this.state.runNoun} exceeded ${this.state.timeout}s and was terminated\n`)
-    process.stderr.write(`hint: raise --timeout, or check the log for where it stalled: ${this.log}\n`)
-    this.tailLog()
-    this.discardResult()
+  if (timedOut) {
+    process.stderr.write(`error: ${runNoun} exceeded ${timeout}s and was terminated\n`)
+    process.stderr.write(`hint: raise --timeout, or check the log for where it stalled: ${log}\n`)
+    tail()
+    discard()
     die(5)
   }
-
-  async run(invocation) {
-    const result = await this.execute(invocation.command, invocation.args, invocation.diagnostic)
-    if (this.timedOut) this.timeoutExit()
-
-    if (result.status !== 0) {
-      process.stderr.write(`error: codex ${this.state.runNoun} failed; raw output at ${this.log}\n`)
-      this.strictConfigHint()
-      this.tailLog()
-      this.discardResult()
-      die(4)
+  if (result.status !== 0) {
+    process.stderr.write(`error: codex ${runNoun} failed; raw output at ${log}\n`)
+    if (readLogFile(log).includes('unknown configuration field')) {
+      process.stderr.write('hint: codex rejected a configuration key this script sets (--strict-config is deliberate); the installed codex CLI may have drifted from the keys in lib/runtime.mjs.\n')
     }
-
-    let output = ''
-    try { output = readFileSync(this.out, 'utf8') } catch {}
-    if (!output.trim()) {
-      process.stderr.write(`error: codex produced no ${this.state.resultNoun}; raw output at ${this.log}\n`)
-      this.tailLog()
-      this.discardResult()
-      die(4)
-    }
-    let logSize = -1
-    try { logSize = statSync(this.log).size } catch {}
-    if (logSize <= 0) {
-      process.stderr.write(`warning: progress log ${this.log} is missing or empty; session and diagnostic details may be lost\n`)
-    } else if (!hasRecognizedEvent(this.readStdoutEvents())) {
-      process.stderr.write(`warning: codex's --json stdout stream carried no line this script recognizes as a JSON event (both streams are archived at ${this.log}).\n`)
-      process.stderr.write('warning: this usually means the installed codex-cli changed its event format; model/session metadata reported below may be silently wrong -- recheck references/internals.md against the version in use.\n')
-    }
-    if (this.state.modelSelection.kind === 'inherit') {
-      const model = effectiveModel(this.readStdoutEvents())
-      if (model) process.stderr.write(`note: inherited model in effect: ${model}\n`)
-      else process.stderr.write('note: the model was inherited from your codex config; the event stream did not name it, so report it as inherited rather than naming a tier\n')
-    }
+    tail()
+    discard()
+    die(4)
   }
-
-  emitResult() {
-    const output = readFileSync(this.out, 'utf8')
-    process.stdout.write(output)
-    if (!output.endsWith('\n')) process.stdout.write('\n')
-    process.stderr.write(`${this.state.resultNoun}: ${this.out}\n`)
-    process.stderr.write(`log: ${this.log}\n`)
+  let output = ''
+  try {
+    output = readFileSync(out, 'utf8')
+  } catch {}
+  if (!output.trim()) {
+    process.stderr.write(`error: codex produced no ${resultNoun}; raw output at ${log}\n`)
+    tail()
+    discard()
+    die(4)
   }
+  return { output, events: stdoutEvents, discard, tail }
+}
+
+export function emitResult(run, artifacts, resultNoun) {
+  process.stdout.write(run.output)
+  if (!run.output.endsWith('\n')) process.stdout.write('\n')
+  process.stderr.write(`${resultNoun}: ${artifacts.out}\n`)
+  process.stderr.write(`log: ${artifacts.log}\n`)
 }

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const result = spawnSync(process.execPath, ['--test', join(here, 'unit.test.mjs')], {
+const result = spawnSync(process.execPath, ['--test', join(here, 'smoke.test.mjs')], {
   stdio: 'inherit',
   env: process.env,
 })

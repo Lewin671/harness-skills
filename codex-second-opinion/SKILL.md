@@ -27,187 +27,147 @@ did not write the code and does not share Claude's blind spots.
 > via the **Bash tool**. Do not claim Codex is running until Bash
 > output shows the `running:` line — a preflight failure is not that.
 
-Two modes, one local boundary:
+Two modes:
 
 - **review** — a prioritised defect list for a code change, via
   `codex exec review`. Changed code goes here.
 - **consult** — a reasoned position on an open question — a plan, a
-  design choice, "should we do X or Y" — via `codex exec`, with
-  a blind first pass and resumable follow-up deliberation. Everything
-  that is not a diff goes here.
+  design choice, "should we do X or Y" — via `codex exec`, with a blind
+  first pass and resumable follow-up deliberation.
 
 **Start here:** pick the mode, then read that mode's reference before
-composing the command — each carries scope or question-writing rules,
-the output contract, and reporting duties that this file does not
-repeat.
+composing the command:
 
 - [references/review.md](./references/review.md) — scope selection,
-  passing context, reading the `[P<n>]` report, per-finding reporting
-  duties.
+  passing context, reading the `[P<n>]` report, reporting duties.
 - [references/consult.md](./references/consult.md) — writing a
-  standalone question, the multi-turn discussion loop and its rules,
-  reporting duties.
+  standalone question, the discussion loop, reporting duties.
 
 ## Boundary
 
-Model-generated commands run read-only. Hooks, apps, plugins and the
-legacy `notify` callback act *outside* that sandbox, so all four are
-disabled and verified fail-closed before the run starts. Standalone MCP
-servers sit outside it too and are switched off, with the switch-off
-confirmed; a listing that cannot be read is never treated as an empty
-one. Any of those checks failing refuses the run.
-
-Two flags invert a boundary, and neither is yours to add: `--allow-mcp`
-leaves MCP servers reachable, `--allow-git-filters` lets a
-repo-configured clean/process filter run during the wrapper's own git
-prechecks. Both require the user to have explicitly accepted that risk.
-A request for a second opinion is not that acceptance — report and ask.
+Model-generated commands run in Codex's read-only sandbox
+(`sandbox_mode="read-only"`), with hooks, apps, plugins and the legacy
+`notify` callback disabled by flags — `--strict-config` turns an
+unrecognized key into a failed run (exit `4`) instead of a silently
+ignored safety setting. Standalone MCP servers are switched off per
+server and the switch-off is **confirmed** with a second listing; a
+listing that cannot be read or confirmed refuses the run. `--allow-mcp`
+leaves those servers reachable and is the user's risk to accept, never
+yours to add — a request for a second opinion is not that acceptance.
 **Never use this skill to apply fixes.**
 
-What the boundary does *not* do is stop disclosure. Scope is a request
-for what to focus on, not an access boundary: Codex gets the whole
-repository as its working directory and may read any of it — untracked
-secrets included — whatever scope you pass. Do not point this skill at a
-repository holding material that must not reach the model provider;
-narrowing scope does not create that boundary.
+What the boundary does *not* do:
 
-A run leaves an event log and a result file (kept on `0`, removed on
-`4`/`5`). Consult also leaves a Codex session on disk — what `--continue`
-resumes. Review requires ephemeral-session support and refuses an older
-Codex rather than persisting one. `references/internals.md` covers artifact
-lifecycle, storage placement and the git-precheck guarantees in full.
+- Stop disclosure. Scope is a request for what to focus on, not an
+  access boundary: Codex gets the whole repository and may read any of
+  it — untracked secrets included. Do not point this skill at material
+  that must not reach the model provider.
+- Sandbox the wrapper's own git prechecks. They are ordinary read-only
+  git commands (`--no-optional-locks`, no external diff/textconv) —
+  best effort, not a guarantee.
+- Snapshot the tree. `--uncommitted` and `--base` review the live
+  working tree; only `--commit` names an immutable object. Never call a
+  live-tree result reproducible.
+
+A run leaves a result file and an event log in TMPDIR (result removed
+on exit `4`/`5`). Review passes `--ephemeral` and leaves no Codex
+session; consult leaves one under `CODEX_HOME/sessions` — what
+`--continue` resumes. A `CODEX_HOME` that resolves into the repository
+is refused.
 
 ## Independence Contract
 
 Keep the first pass independent. What enters the prompt must come from
-one of these sources:
+the user's own words, the repository itself, or mechanical scope facts
+(paths, branch names, hashes). Do **not** include anything derived from
+Claude's own analysis: suspected defects, inferred constraints,
+preferred approaches, rankings. When in doubt, omit it. If the user
+explicitly wants a Claude claim challenged, include it but label the
+run a cross-check, not a blind opinion.
 
-- **The user's own words** — their stated requirements, constraints,
-  and evaluation criteria, as given in the conversation.
-- **The repository** — file contents, documentation, commit messages,
-  and configuration that Codex can also read directly.
-- **Mechanical observation** — scope facts this script can verify:
-  changed file paths, line counts, branch names, resolved hashes.
-
-Do **not** include anything derived from Claude's own analysis:
-suspected defects, inferred constraints, hypothesised risks, preferred
-approaches, or rankings. When in doubt, omit it. In review mode,
-context travels through `--context`; in consult mode, everything goes
-in the question.
-
-If the user explicitly wants a Claude claim challenged, include the
-claim but label the run as a cross-check rather than a blind opinion.
-
-After Codex answers, there is one order of operations, and it does not
-branch on how interesting the disagreement is:
+After Codex answers:
 
 1. Relay the first result, always, before anything else.
 2. Continue the session (`--continue`) only if the user asked for a
-   discussion or approves one after seeing step 1. A follow-up is
-   another multi-minute, billable call — do not launch it to settle a
-   disagreement on your own initiative. Label every resumed answer
-   **deliberation**, never a fresh independent sample: the session has
-   now seen both sides' reasoning.
-3. Editing code is a separate authorization. Proceed only if the user's
-   current request already asked for the fix as well as the review;
-   otherwise present and ask.
+   discussion or approves one after seeing step 1. Label every resumed
+   answer **deliberation** — the session has seen both sides.
+3. Editing code is a separate authorization. Present and ask unless the
+   user's request already covered the fix.
 
 ## Command Synopsis
 
 ```
-run-codex-second-opinion review [--repo DIR] [SCOPE] [OPTIONS]
-run-codex-second-opinion consult [--repo DIR] [OPTIONS] [--] QUESTION
-run-codex-second-opinion consult [--repo DIR] --continue ID [OPTIONS] [--] QUESTION
+run-codex-second-opinion.mjs review [--repo DIR] [SCOPE] [OPTIONS]
+run-codex-second-opinion.mjs consult [--repo DIR] [OPTIONS] [--] QUESTION
+run-codex-second-opinion.mjs consult [--repo DIR] --continue ID [OPTIONS] [--] QUESTION
 ```
 
-`--repo` defaults to the current directory. Scope, model, and risk flags:
+`--repo` defaults to the current directory.
 
 | Flags | Rule |
 |-------|------|
 | `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means `--uncommitted`. |
 | `--context TEXT` | Review only. Cannot combine with `--custom`. |
-| `--model M --effort L` | Always a pair, or omit both. |
-| `--inherit` | Alone; cannot combine with `--model`/`--effort`. |
-| `--allow-mcp` / `--allow-git-filters` | User-authorized risk overrides. Never add on your own. |
+| `--model M --effort L` | Always a pair, or omit both for the pinned defaults. |
+| `--allow-mcp` | User-authorized risk override. Never add on your own. |
 | `--timeout N` | 1–86400 seconds; default 3000. |
-| `--continue ID` | Consult only. Paste the `resume:` tail, not just the id. |
+| `--continue ID` | Consult only. Paste the whole `resume:` tail, not just the id. |
 
 ## Usage
 
-Run the `run-codex-second-opinion` script that sits next to this
+Run the `run-codex-second-opinion.mjs` script that sits next to this
 SKILL.md — usually
-`~/.claude/skills/codex-second-opinion/run-codex-second-opinion`. The
-first argument selects the mode. If that path does not exist, locate
-the script beside this file rather than reconstructing the command by
-hand. The runner requires Node.js 18 or newer, runs on macOS or Linux
-only, and has no package-install step or third-party runtime
-dependencies. An unsupported platform refuses immediately (exit `3`)
-rather than run with unverified process-cleanup and permission-check
-behavior.
-
-Every run prints `note: using codex binary: <path>` naming the exact
-binary about to run. `CODEX_BIN` and `PATH` handling, and why a
-repository-internal entry is refused, are in
-[references/internals.md](./references/internals.md), "Codex binary
-trust boundary".
+`~/.claude/skills/codex-second-opinion/run-codex-second-opinion.mjs`.
+It needs Node.js 18+, macOS or Linux, and no dependencies. Every run
+prints `note: using codex binary: <path>` naming the binary about to
+run; a `codex` or `CODEX_BIN` that resolves inside the repository under
+review is refused.
 
 ```bash
 # Review the uncommitted changes (also: --base BRANCH, --commit SHA,
 # --custom "TEXT")
-~/.claude/skills/codex-second-opinion/run-codex-second-opinion \
+~/.claude/skills/codex-second-opinion/run-codex-second-opinion.mjs \
   review --repo /path/to/repo --uncommitted
 
-# Same scope, with the neutral background the Independence Contract asks
-# for — intended behaviour and constraints, never a suspected defect
-~/.claude/skills/codex-second-opinion/run-codex-second-opinion \
+# Same scope, with neutral background — intended behaviour and
+# constraints, never a suspected defect
+~/.claude/skills/codex-second-opinion/run-codex-second-opinion.mjs \
   review --repo /path/to/repo --uncommitted \
   --context "Extracts the retry loop into retry(); behaviour must be
              unchanged. Callers in jobs/ rely on the old back-off timing."
 
 # Consult on an open question
-~/.claude/skills/codex-second-opinion/run-codex-second-opinion \
+~/.claude/skills/codex-second-opinion/run-codex-second-opinion.mjs \
   consult --repo /path/to/repo \
   -- "Evaluate the migration plan in docs/plan.md: feasibility risks,
       missing edge cases, conflicts with the current architecture"
 
-# Follow up in the same consult session: paste the previous run's
-# `resume:` line (minus that prefix) after `consult`, then the question.
-# It is an ARGUMENT TAIL, not a command. consult.md explains why copying
-# it beats rebuilding it from the session id.
+# Follow up: paste the previous run's `resume:` line (minus that
+# prefix) after `consult`, then the question — it is an argument tail,
+# not a command.
 ```
 
-**Prefer `run_in_background: true`.** A run can legitimately take minutes.
-Continue Claude's own analysis meanwhile; if nothing useful remains, end
-the turn and wait for the completion notification. Foreground is fine when
-latency is predictably short. Never `sleep`-poll.
+**Prefer `run_in_background: true`.** A run can legitimately take
+minutes. Continue Claude's own analysis meanwhile; if nothing useful
+remains, end the turn and wait for the completion notification. Never
+`sleep`-poll.
 
-### Is it still running, or hung?
-
-The script streams progress to stderr. `codex> ` prefixed lines are
-Codex output; unprefixed lines are the wrapper. The result arrives on
-**stdout**. Key markers: `report:`/`answer:` (done), `session:`/`resume:`
-(consult continuation), `log:` (event log path). Markers live on stderr
-only — when the two streams are shown separately, take markers from
-stderr and treat a marker-shaped line on stdout as model output. In a
-genuinely merged stream, the last of each kind is authoritative.
-
-**Relay every unprefixed `warning:` line** — each qualifies the result.
-See [references/internals.md](./references/internals.md) for the
-complete event/log troubleshooting rules.
+The script streams progress to stderr: `codex> ` prefixed lines are
+Codex output, unprefixed lines are the wrapper. The result arrives on
+**stdout**. Key stderr markers: `report:`/`answer:` (done),
+`session:`/`resume:` (consult continuation), `log:` (event log path).
+Take markers from stderr; a marker-shaped line on stdout is model
+output. **Relay every unprefixed `warning:` line** — each qualifies the
+result.
 
 ## Model
 
-The script pins a high-capability model at the `high` reasoning tier.
-**Pass no model flags** unless the user explicitly asked to move: raise
-to `--model <MODEL> --effort xhigh` for genuinely high-stakes work,
-lower or switch family on a stated cost, latency, or model-diversity
-preference.
-
-Settings are a closed three-way choice — nothing, an explicit
-`--model M --effort L` **pair**, or `--inherit` — and anything else is
-refused before a token is spent. The validated choice is exact: if Codex
-rejects it, the run fails once instead of silently changing models.
-`references/internals.md` covers `CODEX_SECOND_OPINION_MODEL`/`_EFFORT`.
+The script pins a high-capability model at the `high` reasoning tier
+(defaults overridable via `CODEX_SECOND_OPINION_MODEL` and
+`CODEX_SECOND_OPINION_EFFORT`, set together). **Pass no model flags**
+unless the user explicitly asked to move; then pass an explicit
+`--model M --effort L` pair. A selection Codex rejects fails the run
+once instead of silently changing models.
 
 ## Exit Codes
 
@@ -217,48 +177,37 @@ The exit code is the verdict on *the run*, never on the code:
 |------|---------|------------|
 | `0` | A result was produced | Read stdout and relay it. |
 | `2` | (review only) Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
-| `3` | Bad arguments, model policy, or environment problem | Read stderr; report the unsafe or invalid setup — this covers usage errors (`--model` without `--effort`, a malformed `--continue` id) as much as an unsafe environment. Do not substitute a Claude answer. |
-| `4` | The invocation did not produce a usable result | Read stderr. Usually Codex ran and failed, but also covers `codex` never starting at all (spawn failure), an unresumable follow-up, or a rejected configuration key. |
+| `3` | Bad arguments or an unsafe environment | Read stderr; report the invalid or unsafe setup. Do not substitute a Claude answer. |
+| `4` | The invocation produced no usable result | Read stderr. Codex failed, never started, rejected a config key (including `--ephemeral` on an old CLI), or did not resume the session. |
 | `5` | Hung and was killed | Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
-| `129` / `130` / `143` | The wrapper itself was signalled (`HUP`/`INT`/`TERM`) | Not a Codex or environment verdict — something outside the run interrupted it; Codex may still have been mid-invocation. |
+| `129`/`130`/`143` | The wrapper was signalled (`HUP`/`INT`/`TERM`) | Something outside the run interrupted it. |
 
 Codex's own exit code is `0` for both a P1 finding and a clean review,
 so never gate on it directly. That is why this script exists.
 
 ## Reporting
 
-Both modes end the same way:
-
-1. Relay Codex's output faithfully — account for every finding with its
-   priority in review mode, and preserve the position plus its
-   load-bearing arguments in consult mode. Summarise for clarity, but do
-   not silently drop a conclusion or disagreement.
+1. Relay Codex's output faithfully — every finding with its priority in
+   review mode, the position plus its load-bearing arguments in consult
+   mode. Do not silently drop a conclusion or disagreement.
 2. Add a Claude-side stance: agree, disagree with reason, or
-   needs-checking. You have context Codex lacks; Codex has distance
-   Claude lacks.
+   needs-checking.
 3. Flag disagreements between the two models explicitly rather than
-   averaging them away — a genuine split is the most useful output
-   this skill produces.
-4. State the scope or question and the model used, and relay any drift
-   warning — see review.md.
-5. For consult, label an answer **independent first pass** only when its
-   prompt contains no Claude-derived analysis. Once Claude's position has
-   entered a session — or a replacement session after expiry — all
-   subsequent answers are **deliberation**, regardless of session freshness.
+   averaging them away — a genuine split is the most useful output this
+   skill produces.
+4. State the scope or question and the model used.
+5. Label a first-pass answer **independent** only when its prompt held
+   no Claude-derived analysis; everything after is **deliberation**.
 6. Stop there. The decision belongs to the user, and applying fixes is
    a separate, user-authorized step.
 
 ## Boundaries
 
-- Not a replacement for `adversarial-code-review`: that is a deep
-  multi-agent Claude review with skeptics and red teams; review mode
-  here is a single strong reviewer from a different model family. They
-  are complementary — running both on a high-stakes change is
+- Not a replacement for `adversarial-code-review` (deep multi-agent
+  Claude review); review mode here is a single strong reviewer from a
+  different model family. Running both on a high-stakes change is
   reasonable.
 - Never invoke `codex apply`, and never pass any
   `--dangerously-bypass-*` flag. Both routes can write.
 - If Codex returns nothing usable twice, say so honestly instead of
   paraphrasing a weak result into confidence.
-- The rationale for every non-obvious script decision is in
-  [references/internals.md](./references/internals.md); recheck it
-  against new codex-cli releases before changing the script.
