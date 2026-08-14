@@ -278,7 +278,10 @@ async function runReview(args) {
   } finally {
     snapshot?.cleanup()
   }
-  emitResult(run, artifacts, 'report')
+  await emitResult(run, artifacts, 'report')
+  // Reprinted after the result body so the merged-stream rule holds for it
+  // too: the last marker of each kind is the wrapper's, not model text.
+  if (snapshot) process.stderr.write(`snapshot: ready ${snapshot.fingerprint}\n`)
 }
 
 function parseConsultArgs(policy, args) {
@@ -325,7 +328,7 @@ function parseConsultArgs(policy, args) {
   return question
 }
 
-function emitResume(policy, env, run, artifacts) {
+async function emitResume(policy, env, run, artifacts) {
   let session = lastThreadId(run.events)
   if (policy.sessionId && session.toLowerCase() !== policy.sessionId) {
     process.stderr.write(`error: codex did not resume session ${policy.sessionId} (stream reported '${flat(session) || 'no thread id'}').\n`)
@@ -342,7 +345,7 @@ function emitResume(policy, env, run, artifacts) {
     process.stderr.write('warning: the stream reported a thread id that is not a session UUID; not advertising a resume command for it\n')
     session = ''
   }
-  emitResult(run, artifacts, 'answer')
+  await emitResult(run, artifacts, 'answer')
   if (!session) {
     // Printed even when unavailable: the answer body is model-controlled, so
     // a run that printed no session:/resume: line at all would leave whatever
@@ -369,7 +372,7 @@ async function runConsult(args) {
   const run = await runCodex(env, { args: cmdArgs, diagnostic }, {
     ...artifacts, timeout: policy.timeout, runNoun: 'consultation', resultNoun: 'answer',
   })
-  emitResume(policy, env, run, artifacts)
+  await emitResume(policy, env, run, artifacts)
 }
 
 async function main(argv) {

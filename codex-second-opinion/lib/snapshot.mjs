@@ -229,8 +229,17 @@ function materialize(env, snapshotRepo, state) {
   for (const path of state.paths) copyEntry(env.repoRoot, snapshotRepo, path)
 }
 
-function guardSnapshotSymlinks(review, env, state) {
-  const candidates = new Set(state.paths)
+function guardSnapshotSymlinks(review, env, state, sourceRoot) {
+  const changed = new Set(state.paths)
+  // state.paths diffs against HEAD only; a --base review also covers what
+  // the branch commits changed since the merge base, so those paths are
+  // reviewed content too.
+  if (review.resolvedBase) {
+    for (const path of nulList(mustGit(env,
+      ['diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', review.resolvedBase, '--'],
+      'list the base-review changes in the snapshot'))) changed.add(path)
+  }
+  const candidates = new Set(changed)
   for (const record of nulList(mustGit(env, ['ls-files', '--stage', '-z'], 'inspect snapshot symlinks'))) {
     const match = /^120000 [0-9a-f]+ \d+\t(.*)$/s.exec(record)
     if (match) candidates.add(match[1])
@@ -252,8 +261,16 @@ function guardSnapshotSymlinks(review, env, state) {
       die(3, `error: cannot inspect snapshot symlink ${flat(path)}: ${flat(error.message)}`)
     }
     if (!stat.isSymbolicLink()) continue
-    const target = resolve(dirname(link), readlinkSync(link))
-    if (!isInside(root, bestRealpath(target))) {
+    const target = bestRealpath(resolve(dirname(link), readlinkSync(link)))
+    // A changed symlink is part of the reviewed content and must stay inside
+    // the clone. An unchanged one is tolerated wherever it points — the same
+    // exposure a live-repository review has — unless it resolves back into
+    // the live source repository, where it would alias files the caller may
+    // still be editing.
+    const breaksIsolation = changed.has(path)
+      ? !isInside(root, target)
+      : isInside(sourceRoot, target)
+    if (breaksIsolation) {
       die(3,
         `error: snapshot symlink ${flat(path)} resolves outside the isolated review repository.`,
         'hint: replace it with a repository-local link, or review an immutable commit with --commit.')
@@ -320,7 +337,7 @@ export function createReviewSnapshot(review, env) {
       const snapshotEnv = { ...env, cwd: snapshotRepo, repoRoot: snapshotRepo }
       const copied = captureState(review, snapshotEnv)
       if (before.fingerprint === after.fingerprint && copied.fingerprint === after.fingerprint) {
-        guardSnapshotSymlinks(review, snapshotEnv, after)
+        guardSnapshotSymlinks(review, snapshotEnv, after, env.repoRoot)
         stable = after
         break
       }

@@ -24,14 +24,20 @@ for `--uncommitted`), preserves the index separately, verifies the source
 and copied bytes, and prints `snapshot: ready`. Edits to the source
 repository are safe after that marker. The temporary clone is removed
 after the run. Unresolved merges and live changes inside submodules fail
-closed. So do embedded repositories and symlinks that resolve outside
-the clone; make those paths repository-local, or commit them and use
-`--commit`.
+closed. So do embedded repositories, changed symlinks that resolve
+outside the clone, and any symlink that resolves back into the live
+source repository; make those paths repository-local, or review an
+immutable commit with `--commit`. An unchanged symlink pointing
+elsewhere — a dotfiles repository linking into `$HOME`, say — is
+tolerated: the same exposure a live-repository review has.
 
 Pick `--custom` only when the user has a specific concern that the
 built-in review prompt would not prioritise. It replaces the built-in
 prompt rather than supplementing it — say what to look at inside the
-text itself.
+text itself. Narrowing to a path is such a concern: for "review only
+`foo.py`'s uncommitted changes", use `--custom` naming the paths and
+the comparison base — accepting that `--custom` has no empty-scope
+precheck and reads the live repository.
 
 Keep an independent first review unseeded: provide the change and its
 intended behaviour without Claude's suspected findings. If the user

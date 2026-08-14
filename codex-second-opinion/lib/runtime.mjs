@@ -435,8 +435,15 @@ export async function runCodex(env, invocation, options) {
 }
 
 export function emitResult(run, artifacts, resultNoun) {
-  process.stdout.write(run.output)
-  if (!run.output.endsWith('\n')) process.stdout.write('\n')
-  process.stderr.write(`${resultNoun}: ${artifacts.out}\n`)
-  process.stderr.write(`log: ${artifacts.log}\n`)
+  const body = run.output.endsWith('\n') ? run.output : `${run.output}\n`
+  // The trailing markers wait for stdout to flush: when both fds feed one
+  // merged pipe, a body larger than the pipe buffer would otherwise still be
+  // queued when the stderr markers land, splicing them into the model text.
+  return new Promise((resolvePromise) => {
+    process.stdout.write(body, () => {
+      process.stderr.write(`${resultNoun}: ${artifacts.out}\n`)
+      process.stderr.write(`log: ${artifacts.log}\n`)
+      resolvePromise()
+    })
+  })
 }

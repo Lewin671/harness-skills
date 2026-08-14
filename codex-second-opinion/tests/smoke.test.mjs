@@ -72,7 +72,9 @@ case "$1" in
     fi
     echo '{"type":"thread.started","thread_id":"'"\${FAKE_THREAD_ID:-11111111-2222-3333-4444-555555555555}"'"}'
     echo 'free text from codex' >&2
-    if [ -z "$FAKE_NO_RESULT" ] && [ -n "$out" ]; then
+    if [ -n "$FAKE_BIG_RESULT" ] && [ -n "$out" ]; then
+      awk 'BEGIN{for(i=0;i<20000;i++)print "model text line " i}' > "$out"
+    elif [ -z "$FAKE_NO_RESULT" ] && [ -n "$out" ]; then
       if [ -n "$FAKE_RESULT_PATH" ]; then
         echo "finding at $PWD/tracked.txt" > "$out"
       else
@@ -208,6 +210,11 @@ test('live review uses an isolated startup snapshot while source edits continue'
     })
     assert.equal(result.status, 0, result.stderr)
     assert.match(result.stderr, /^snapshot: ready [0-9a-f]{64}$/m)
+    // the marker reprints after the result so that in a merged stream the
+    // last marker of each kind is the wrapper's, not model text
+    assert.equal(result.stderr.match(/^snapshot: ready [0-9a-f]{64}$/gm).length, 2)
+    assert.ok(result.stderr.lastIndexOf('snapshot: ready') > result.stderr.indexOf('report: '),
+      'the final snapshot marker must print after the report marker')
     const observed = readFileSync(capture, 'utf8')
     const cwd = /^cwd=(.*)$/m.exec(observed)[1]
     assert.notEqual(cwd, repo, 'codex must run outside the live source repository')
@@ -334,6 +341,42 @@ test('snapshot refuses a tracked file replaced by an external symlink', () => {
   }
 })
 
+test('snapshot tolerates an unchanged committed symlink to an unrelated external target', () => {
+  const dotRepo = join(root, 'dotfiles-repo')
+  const outside = join(root, 'outside-home')
+  mkdirSync(dotRepo)
+  mkdirSync(outside)
+  writeFileSync(join(outside, 'rc'), 'external\n')
+  sh('git init -q', { cwd: dotRepo })
+  writeFileSync(join(dotRepo, 'tracked.txt'), 'committed\n')
+  symlinkSync(join(outside, 'rc'), join(dotRepo, 'link'))
+  sh('git add tracked.txt link && git -c user.email=t@t -c user.name=t commit -q -m init', { cwd: dotRepo })
+  writeFileSync(join(dotRepo, 'tracked.txt'), 'changed\n')
+
+  const result = run(['review', '--uncommitted'], {}, dotRepo)
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stderr, /^snapshot: ready [0-9a-f]{64}$/m)
+})
+
+test('base review fails closed on a branch-introduced external symlink', () => {
+  const baseRepo = join(root, 'base-symlink-repo')
+  const outside = join(root, 'outside-base')
+  mkdirSync(baseRepo)
+  mkdirSync(outside)
+  writeFileSync(join(outside, 'file.txt'), 'external\n')
+  sh('git init -q', { cwd: baseRepo })
+  writeFileSync(join(baseRepo, 'a.txt'), 'one\n')
+  sh('git add a.txt && git -c user.email=t@t -c user.name=t commit -q -m base', { cwd: baseRepo })
+  const baseSha = sh('git rev-parse HEAD', { cwd: baseRepo }).stdout.trim()
+  symlinkSync(join(outside, 'file.txt'), join(baseRepo, 'link'))
+  sh('git add link && git -c user.email=t@t -c user.name=t commit -q -m link', { cwd: baseRepo })
+
+  const result = run(['review', '--base', baseSha], {}, baseRepo)
+  assert.equal(result.status, 3, result.stderr)
+  assert.match(result.stderr, /resolves outside the isolated review repository/)
+  assert.equal(result.argv.length, 0, 'codex must not run on an unsafe snapshot')
+})
+
 test('review --commit works on a clean tree and --context reaches the prompt', () => {
   const result = run(['review', '--commit', 'HEAD', '--context', 'behaviour must be unchanged'])
   assert.equal(result.status, 0, result.stderr)
@@ -344,6 +387,33 @@ test('review --commit works on a clean tree and --context reaches the prompt', (
   // with a prompt, no scope flag may be passed to codex
   const exec = result.argv.find((line) => line.startsWith('exec review'))
   assert.ok(!exec.includes('--commit'), `scope flag and prompt together in: ${exec}`)
+})
+
+test('trailing markers print after a large result body in a merged pipe stream', () => {
+  const merged = join(mkdtempSync(join(root, 'merged-')), 'merged.txt')
+  const argvLog = join(mkdtempSync(join(root, 'argv-')), 'argv.log')
+  // A real pipe (not a file) so stdout writes are asynchronous: a body larger
+  // than the pipe buffer stays queued while stderr would otherwise cut in.
+  const result = spawnSync('/bin/sh', ['-c',
+    `"${process.execPath}" "${SCRIPT}" review --commit HEAD 2>&1 | cat > "${merged}"`], {
+    cwd: repo,
+    encoding: 'utf8',
+    timeout: 60000,
+    env: {
+      PATH: process.env.PATH,
+      HOME: join(root, 'home'),
+      TMPDIR: root,
+      CODEX_BIN: codexBin,
+      FAKE_ARGV_LOG: argvLog,
+      FAKE_BIG_RESULT: '1',
+    },
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const observed = readFileSync(merged, 'utf8')
+  const bodyEnd = observed.indexOf('model text line 19999')
+  assert.ok(bodyEnd >= 0, 'the large result body must reach the merged stream')
+  assert.ok(observed.lastIndexOf('\nreport: ') > bodyEnd, 'the report marker must follow the whole result body')
+  assert.ok(observed.lastIndexOf('\nlog: ') > bodyEnd, 'the final log marker must follow the whole result body')
 })
 
 test('MCP servers are left untouched — no listing, no overrides', () => {
