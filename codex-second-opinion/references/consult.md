@@ -13,7 +13,9 @@ should read, state the decision criteria, and say what a useful answer
 looks like (a ranked choice, a risk list, a counter-proposal). Codex
 starts with zero conversation context — everything it needs must be in
 the question or in the repo. A repository is not required: `--repo` may
-point at any directory when the question stands entirely on its own.
+point at any directory when the question stands entirely on its own
+(outside a git work tree the wrapper passes codex's
+`--skip-git-repo-check`; the read-only sandbox still applies).
 
 If the material under discussion exists only in the conversation, get
 it to Codex one of two ways. Short material (up to a screenful) goes in

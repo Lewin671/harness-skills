@@ -376,6 +376,10 @@ async function runConsult(args) {
   const artifacts = createArtifacts(env, 'consult')
   const cmdArgs = policy.sessionId ? ['exec', 'resume', policy.sessionId] : ['exec']
   cmdArgs.push(...safetyArgs('consult', policy, artifacts.out))
+  // codex refuses to start outside a git work tree unless told to skip the
+  // check; consult promises repository-free questions, so honour that here.
+  // The read-only sandbox applies either way.
+  if (!env.repoRoot) cmdArgs.push('--skip-git-repo-check')
   const diagnostic = `running: ${env.codexBin} ${cmdArgs.join(' ')} -- <question: ${question.length} chars>`
   cmdArgs.push('--', question)
   const run = await runCodex(env, { args: cmdArgs, diagnostic }, {

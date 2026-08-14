@@ -490,6 +490,9 @@ test('consult prints a resume line that is a complete runnable command', () => {
   const resume = /^resume: (.*)$/m.exec(result.stderr)[1]
   assert.ok(resume.includes('run-codex-second-opinion.mjs'), resume)
   assert.ok(resume.includes(` consult --continue ${id}`), resume)
+  // inside a work tree, codex's own git check stays active
+  const exec = result.argv.find((line) => line.startsWith('exec'))
+  assert.ok(!exec.includes('--skip-git-repo-check'), exec)
   assert.ok(resume.includes('--model gpt-5.6-sol --effort high'), resume)
   assert.ok(resume.includes('--repo '), resume)
 
@@ -562,6 +565,9 @@ test('consult runs outside a git work tree; review refuses', () => {
   const consult = run(['consult', '--', 'question'], {}, plain)
   assert.equal(consult.status, 0, consult.stderr)
   assert.match(consult.stdout, /the fake result body/)
+  // the real codex refuses non-git directories unless told to skip the check
+  const exec = consult.argv.find((line) => line.startsWith('exec'))
+  assert.ok(exec.includes('--skip-git-repo-check'), exec)
   const review = run(['review', '--uncommitted'], {}, plain)
   assert.equal(review.status, 3, review.stderr)
   assert.match(review.stderr, /not a git work tree/)
