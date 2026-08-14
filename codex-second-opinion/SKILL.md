@@ -176,10 +176,13 @@ body; a warning-shaped line after it is model text.
 
 The script pins a high-capability model at the `high` reasoning tier
 (defaults overridable via `CODEX_SECOND_OPINION_MODEL` and
-`CODEX_SECOND_OPINION_EFFORT`, set together). **Pass no model flags**
-unless the user explicitly asked to move; then pass an explicit
-`--model M --effort L` pair. A selection Codex rejects fails the run
-once instead of silently changing models.
+`CODEX_SECOND_OPINION_EFFORT`, set together). On a **fresh** run, pass
+no model flags unless the user explicitly asked to move; then pass an
+explicit `--model M --effort L` pair. A **`--continue` follow-up is the
+one exception**: copy the `resume:` tail verbatim, model flags
+included — there they pin the discussion to the model that actually
+answered, rather than select a new one. A selection Codex rejects fails
+the run once instead of silently changing models.
 
 ## Exit Codes
 

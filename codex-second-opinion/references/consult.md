@@ -49,8 +49,11 @@ run-codex-second-opinion.mjs consult <the resume: line, minus "resume:"> \
 Copy the tail verbatim rather than rebuilding it from the id alone —
 the model flags do not travel with the session, and a follow-up without
 them can switch the discussion to different defaults mid-conversation.
-Codex resumes with everything it already read and said, so follow-ups
-need only the new material.
+This does not contradict SKILL.md's "pass no model flags" rule: that
+rule governs *fresh* runs, where flags select a model; in a copied
+tail they pin the one that already answered. Codex resumes with
+everything it already read and said, so follow-ups need only the new
+material.
 
 The session lives on disk in codex's own session store
 (`~/.codex/sessions` by default), so a consultation's question and
