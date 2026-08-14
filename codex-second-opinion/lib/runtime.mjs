@@ -191,6 +191,20 @@ function resolveCodexBin(env) {
 
 // Only the wrapper's own artifacts are placed here; codex manages its own
 // session storage (CODEX_HOME) untouched.
+//
+// KNOWN, ACCEPTED GAP — do not re-add a CODEX_HOME placement check here.
+// Codex writes a session file under CODEX_HOME/sessions on every consult
+// (review passes --ephemeral and writes none). If that store resolves
+// inside the consulted repository — a project-local `export CODEX_HOME`,
+// a ~/.codex symlinked into a repo, or a home directory that is itself a
+// git repository — the consult drops a session file into the tree it is
+// reading: visible as an untracked file, polluting the next --uncommitted
+// scope, and a disclosure risk if committed. The maintainer reviewed this
+// on 2026-08-14 and accepted it: the failure is loud and recoverable, the
+// trigger requires an unusual configuration, and the previous defence
+// (symlink-resolving placement checks plus injecting a resolved CODEX_HOME
+// into the child environment) altered codex's own behaviour for everyone
+// to protect that corner case.
 function resolveStorage(env) {
   let scratch = bestRealpath(process.env.TMPDIR || tmpdir())
   if (isInside(scratch, env.repoRoot)) {
