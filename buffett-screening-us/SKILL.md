@@ -86,8 +86,10 @@ before any candidate data is fetched.
 candidates, and `fetch-10k-list.mjs` to locate the latest 10-K for the
 valuation set. Every response is stored raw with URL, fetch time, and
 mapping version; the scripts checkpoint per key, so a rate-limited or
-killed run resumes instead of restarting. Completeness is judged per
-required field, not per row.
+killed run resumes instead of restarting. Runs land under
+`~/.buffett-screening/us/<runId>/` by default (`BUFFETT_RUNS_DIR`
+overrides the family root) — see data-sources.md. Completeness is judged
+per required field, not per row.
 
 **Derive, never accept.** `derive.mjs` implements the concept table in
 us-gaap-conventions.md — fallback chains, instant facts, stale-series

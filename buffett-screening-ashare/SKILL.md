@@ -85,7 +85,9 @@ gates, `fetch-prices.mjs` for price-gate candidates, and
 `fetch-cninfo.mjs` for the annual reports and announcement record of
 survivors. Every response is stored raw with URL, fetch time, and
 mapping version; the scripts checkpoint per company-period, so a
-rate-limited or killed run resumes instead of restarting. A row count
+rate-limited or killed run resumes instead of restarting. Runs land
+under `~/.buffett-screening/ashare/<runId>/` by default (`BUFFETT_RUNS_DIR`
+overrides the family root) — see data-sources.md. A row count
 is not a population count: the bulk table mixes NEEQ and B-share rows
 into the same pages, and one company can appear in several market
 buckets across its life — deduplicate on code, keep the latest period.

@@ -11,7 +11,7 @@
 // null counts as zero (cas-conventions.md § Null Semantics), and every
 // such substitution is counted and reported.
 //
-// Output: runs/<runId>/derived.json plus per-field coverage and
+// Output: <runId>/derived.json plus per-field coverage and
 // null-as-zero counts. This script is the exact stage's arithmetic; it
 // is not the funnel — gates, scoring and valuation belong to the run.
 import { loadRaw, writeJson, parseArgs, fiscalYears, keyFor } from "./lib/http.mjs";

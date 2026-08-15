@@ -8,6 +8,18 @@ mapping can be re-verified, not recalled. Every response is stored raw
 with URL, fetch time and the mapping-version string; scripts checkpoint
 per key, so a killed or rate-limited run resumes instead of restarting.
 
+## Run Storage
+
+Runs land under `~/.buffett-screening/us/<runId>/` by default — outside
+the skill tree, so checkpoints survive skill re-links and are shared
+across harness installs. Override the family root with the
+`BUFFETT_RUNS_DIR` environment variable; this adapter appends its own
+name (`us`, while the A-share adapter uses `ashare`). `<runId>` defaults
+to the as-of date; pass `--run <id>` to name a run explicitly.
+Structure: `<runId>/raw/` holds the checkpointed raw bodies (facts per
+CIK, price series), `<runId>/derived/<cik>.json` the derived stages, and
+the run's report sits beside them.
+
 ## SEC EDGAR (population mapping + raw facts + filings)
 
 Base: `https://data.sec.gov` and `https://www.sec.gov/Archives`.

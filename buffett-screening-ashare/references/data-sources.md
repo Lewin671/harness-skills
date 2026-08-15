@@ -10,6 +10,18 @@ and the mapping-version string; scripts checkpoint per
 company-period, so a killed or rate-limited run resumes instead of
 restarting.
 
+## Run Storage
+
+Runs land under `~/.buffett-screening/ashare/<runId>/` by default —
+outside the skill tree, so checkpoints survive skill re-links and are
+shared across harness installs. Override the family root with the
+`BUFFETT_RUNS_DIR` environment variable; this adapter appends its own
+name (`ashare`, while the US adapter uses `us`). `<runId>` defaults to
+the as-of date; pass `--run <id>` to name a run explicitly. Structure:
+`<runId>/raw/` holds the checkpointed raw bodies, `<runId>/population.json`
+and `<runId>/derived.json` the derived stages, and the run's report sits
+beside them.
+
 ## Eastmoney (bulk + statements)
 
 Base: `https://datacenter-web.eastmoney.com/api/data/v1/get`.

@@ -3,10 +3,8 @@
 // its URL, fetch time, and any stage metadata — the doctrine contract
 // requires a figure to walk back to a stored record.
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
@@ -94,11 +92,16 @@ function backoffMs(attempt) {
 
 // ---------- checkpointed raw storage ----------
 
-// runs/<runId>/raw/<key>.json — one record per key.
+// Run storage lives outside the skill tree: default
+// ~/.buffett-screening/ashare/<runId>/ (per-user, shared across harness
+// installs so checkpoints resume anywhere). Override the family root
+// with the BUFFETT_RUNS_DIR env var; this adapter appends its name.
+// Structure: <runId>/raw/<key>.json — one record per key.
 // saveRaw is atomic (tmp + rename) so a killed run never leaves a
 // half-written record; loadRaw is the resume predicate.
 export function runDir(runId) {
-  return path.resolve(HERE, "..", "runs", runId);
+  const root = process.env.BUFFETT_RUNS_DIR ?? path.join(os.homedir(), ".buffett-screening");
+  return path.resolve(root, "ashare", runId);
 }
 
 export function keyFor(parts) {

@@ -5,7 +5,7 @@
 //
 // For each code: the full announcement record over the window (titles
 // only, for governance keyword classification) and the latest annual
-// report PDF. Raw bodies stored under runs/<runId>/raw/:
+// report PDF. Raw bodies stored under <runId>/raw/:
 //   cninfo__<code>__p<page>.json   (announcement query pages)
 //   cninfo__<code>__<id>.pdf       (annual report, if found)
 //

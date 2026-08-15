@@ -10,7 +10,7 @@
 // decision, not a typo. Checkpointing makes partial runs resumable.
 //
 // One request per (code, year, statement); raw bodies stored under
-// runs/<runId>/raw/stmt__<code>__<year>__<table>.json. Checkpointed:
+// <runId>/raw/stmt__<code>__<year>__<table>.json. Checkpointed:
 // re-running skips completed keys. Uses the annual report-type rows
 // only — never quarterly rows, never row order.
 import {

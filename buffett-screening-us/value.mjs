@@ -2,7 +2,7 @@
 // Stage 7: low/base/high valuation for the frozen budget (top of the
 // pending set in `lo` order). Frozen model parameters from
 // lib/frozen.mjs; maintenance-capex guesses are injected from
-// runs/<runId>/maint-capex-guesses.json (each with its 10-K source);
+// <runId>/maint-capex-guesses.json (each with its 10-K source);
 // freeze defaults apply where undisclosed.
 //
 //   node value.mjs --run 2026-08-15

@@ -6,7 +6,7 @@
 //
 // Fetches both 前复权 (fqt=1, price gate) and 后复权 (fqt=2, the
 // one-dollar test) series. Raw CSV bodies stored under
-// runs/<runId>/raw/price__<code>__<fqt>.txt. Suspended days are absent
+// <runId>/raw/price__<code>__<fqt>.txt. Suspended days are absent
 // from the series — never zero, never interpolated.
 import { fetchText, saveRaw, loadRaw, parseArgs, keyFor } from "./lib/http.mjs";
 

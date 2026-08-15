@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Stage 2: fetch SEC submissions.json + companyfacts.json per CIK.
-// Stores the raw bodies under runs/<runId>/raw/<cik>/, plus a
+// Stores the raw bodies under <runId>/raw/<cik>/, plus a
 // fetch-manifest with URL, fetch time, bytes and sha256 per request.
 // Polite rate ~4 req/s (SEC asks <= 10/s), exponential backoff on
 // retry, checkpointed per (CIK, file) so a killed run resumes.

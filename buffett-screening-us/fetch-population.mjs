@@ -6,7 +6,7 @@
 //
 //   node fetch-population.mjs --run 2026-08-15
 //
-// Writes, under runs/<runId>/:
+// Writes, under <runId>/:
 //   raw/population__wikipedia.json      (constituent page, raw)
 //   raw/population__sec_tickers.json    (ticker->CIK map, raw)
 //   population.json                     (derived: one row per entity)

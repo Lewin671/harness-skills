@@ -3,7 +3,7 @@
 //
 //   node fetch-population.mjs --run 2026-08-15
 //
-// Writes, under runs/<runId>/:
+// Writes, under <runId>/:
 //   raw/lico__<year>__<market>__p<page>.json   (raw pages)
 //   raw/orginfo__p<page>.json                  (raw profile pages)
 //   population.json                            (derived: one row per code)
