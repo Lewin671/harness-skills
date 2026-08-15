@@ -27,8 +27,11 @@ used as proxies with a 20% margin. Both are unbounded:
   the minority interest is. Measured across 2,390 entity-years, the
   99th percentile of relative deviation was 31.7%, and 2.4% of the
   sample exceeded the 20% margin outright.
-- Period-end total equity exceeds average parent equity by however
-  much the minority stake and the period's equity movement are.
+- Period-end total equity and average parent equity differ by the
+  minority stake and the period's equity movement combined — and not
+  even in a guaranteed direction: a large enough decline in parent
+  equity can put the period-end total below the average. Unbounded in
+  magnitude *and* unsigned, which is the point of the example.
 
 One entity had a 51% minority interest. Its proxied return looked
 mediocre, its bound was cut, it was never fetched. Its actual value on
@@ -45,18 +48,51 @@ same field, a criterion computed only from those fields gives the same
 answer in both. Then a `fail` in the cheap pass is a `fail` in the
 exact pass, and pruning on it is sound.
 
-Do not assume identity from matching column names. Verify it: join the
-two sources over every entity-period already fetched both ways and
-assert the maximum relative difference is zero. Record the sample size
-and the result — it is the load-bearing claim under the completeness
-statement, and it belongs in the report.
+Do not assume identity from matching column names — and do not accept
+an empirical join as proof either. Joining the two sources over every
+entity-period fetched both ways and asserting zero maximum relative
+difference is *validation*, not a guarantee: the overlap is exactly the
+part you did fetch, and a scope- or template-specific divergence can
+live entirely in the tail you did not. A screen pruned on that evidence
+alone can drop the divergent entities while still reporting
+completeness.
 
-**Monotone relations.** Occasionally a proxy is provably one-sided —
-a denominator that can only be larger yields a value that can only be
-smaller, so a proxy `pass` implies a real `pass`. Useful for *raising*
-confidence, but note the direction: a one-sided bound in the wrong
-direction cannot justify dropping anything. Deciding a candidate
-*cannot qualify* needs a bound on the optimistic side.
+Require a population-wide invariant as well, and state which one:
+
+- a documented shared definition (both endpoints specify the same
+  field, the same scope, the same aggregation), or
+- a common canonical origin (one source is derived from the other, or
+  both from the same upstream record), or
+- a structural argument covering every sub-population — including the
+  ones served by a *different* source template, which is where these
+  guarantees usually break.
+
+Then run the join as a check on that claim. Record the invariant, the
+sample size, and the observed maximum difference; all three belong in
+the report, because together they are the load-bearing support under
+the completeness statement.
+
+**Monotone relations.** Occasionally a proxy is provably one-sided. But
+"one-sided" is a claim about three things at once, and stating fewer
+than three gets the direction wrong:
+
+1. **The operand sign domain.** A larger denominator lowers `n/d` only
+   while `n >= 0`. With a negative numerator a larger denominator moves
+   the ratio *up*, toward zero. Establish that the operands cannot
+   change sign over the population — or exclude the sign-crossing
+   entities from this argument and handle them exactly.
+2. **The comparator.** A proxy that can only understate proves a `pass`
+   for a minimum threshold (`ratio >= T`) and proves nothing for a
+   maximum threshold (`ratio <= T`), where it is the overstating proxy
+   that proves the `pass`.
+3. **Which side you need.** Deciding that a candidate *cannot qualify*
+   requires a bound on the optimistic side. A one-sided bound in the
+   pessimistic direction raises confidence in a `pass` and justifies
+   dropping nothing.
+
+Get any of the three wrong and the construction will mark a hard gate
+proven while the exact value fails — the same silent admission the
+whole contract exists to prevent.
 
 Everything else — different scope, different aggregation, a field the
 bulk source simply lacks — is unusable for pruning. Mark the criterion
@@ -82,9 +118,20 @@ top score, placement is decided by the tie-break rule, so a bound on
 the *score* is too weak — an unresolved candidate can tie on score and
 still lose on the tie-break, or win it.
 
-Build the full sort key under the most favourable assumption for the
-unresolved candidate, and compare it against the actual key of the one
-currently in last place of the shortlist:
+**First, there has to be a cutoff.** It is the key of the candidate
+holding *N*-th place, and it only exists once N candidates are
+**guaranteed admissible** — every hard gate proven `pass`, every scored
+criterion settled, so their keys cannot move. With N=5 and only two
+such candidates, second place is not a fifth-place bound; comparing
+challengers against it prunes exactly the candidates that belong in
+slots three through five. A provisional incumbent is no better: if it
+later fails a gate it leaves the shortlist, and every pruning decision
+taken against its key was invalid. Until N guaranteed incumbents exist,
+**nothing may be dropped on placement** — resolve candidates in
+best-case-key order and let the set fill.
+
+**Then compare best case against it.** Build the challenger's full sort
+key under the most favourable assumption available to it:
 
 - Unknown criteria contribute their **maximum** possible atom count.
 - Unknown tie-break values take the **most favourable** value, not zero
@@ -92,11 +139,22 @@ currently in last place of the shortlist:
   optimistically `+inf`. Defaulting it to zero silently declares the
   candidate a loser and is the same class of error as the proxy margin.
 
-A candidate can be set aside only when its best-case key still loses.
+A challenger can be set aside only when this best-case key still loses
+to the cutoff. "Loses" needs care: if the sort key ends in a unique
+discriminator (an id), the keys form a total order and strict
+comparison is exact. Without such a discriminator, keys can tie, and a
+challenger tying the cutoff can still take *N*-th place — so compare
+with *reaches or ties*, not *strictly beats*. Prefer the unique
+discriminator; it makes the test decidable.
+
 Two counters must both reach zero:
 
-1. Evaluated candidates whose best-case key beats the cutoff.
-2. Never-fetched candidates whose coarse bound reaches the cutoff.
+1. **Unresolved challengers** — candidates outside the guaranteed
+   incumbent set whose best-case key reaches the cutoff. Scope this to
+   challengers deliberately: counting all evaluated candidates includes
+   the incumbents themselves, whose keys beat the cutoff by
+   construction, and the counter can then never reach zero.
+2. **Never-fetched candidates** whose coarse bound reaches the cutoff.
 
 Report both. Non-zero on either means provisional, and saying so costs
 far less than being caught claiming otherwise.
@@ -108,9 +166,10 @@ everything whose bound is 100" is only correct while the shortlist's
 last place actually scores 100. If it scores 80, every candidate bounded
 at 80 belongs in the pool, and the hardcoded run will never notice.
 
-Compute the threshold from the current shortlist each round, re-run
-until the two counters are zero, and let the loop — not a constant —
-decide when to stop.
+Compute the threshold from the current *guaranteed* shortlist each
+round — treating "no cutoff yet" as "fetch everything" — re-run until
+both counters are zero, and let the loop, not a constant, decide when
+to stop.
 
 ## Order Of Operations
 
@@ -119,7 +178,8 @@ decide when to stop.
 2. Compute the provable-bound criteria from the bulk source. Prune only
    on a proven `fail`.
 3. Fetch the survivors exactly; compute every criterion.
-4. Resolve the expensive checks in best-case-key order.
+4. Resolve the expensive checks in best-case-key order, until N
+   candidates are guaranteed admissible and a cutoff exists.
 5. Recompute the threshold and repeat from 3 until both counters
    are zero.
 

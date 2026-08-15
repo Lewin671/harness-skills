@@ -2,18 +2,32 @@
 
 ## Four States
 
-| State | Meaning | Score contribution | Admission |
-|---|---|---|---|
-| `pass` | Checked, satisfied | Full | Allowed |
-| `fail` | Checked, not satisfied | None | Blocked |
-| `unknown` | Not checked, or data missing | None to `lo`, full to `hi` | **Blocked** |
-| `na` | Structurally inapplicable | None to either | Not blocked |
+A verdict means different things depending on which kind of check
+produced it, so fix the kind first. A **hard gate** decides admission
+and carries no points. A **scored criterion** contributes points and
+never decides admission. Collapsing the two into one rule produces
+either a shortlist that throws out anyone who loses a single point, or
+one that admits candidates through gates they never satisfied.
 
-`unknown` blocking admission is the point of the scheme. The instinct
-is to let a candidate through on the grounds that nothing disqualifying
-was found; that converts every gap in the data into a pass. `fail` and
-`unknown` both keep a candidate out — they differ only in what the
-report says about why.
+| State | Meaning | At a hard gate | At a scored criterion |
+|---|---|---|---|
+| `pass` | Checked, satisfied | Admits | Full points |
+| `fail` | Checked, not satisfied | Blocks | Zero points, no effect on admission |
+| `unknown` | Not checked, or data missing | Blocks | Zero to `lo`, full to `hi` |
+| `na` | Structurally inapplicable | **Blocks** — inapplicable is not proven | Zero to both `lo` and `hi` |
+
+Only `pass` admits at a hard gate. The instinct to let a candidate
+through because nothing disqualifying turned up converts every gap in
+the data into a pass; `fail`, `unknown` and `na` all keep it out, and
+differ only in what the report says about why. `na` at a hard gate
+deserves particular care — a candidate the gate cannot be evaluated
+against has not satisfied it, and the honest outcome is either
+exclusion with the reason stated, or an explicit, disclosed decision
+by the user to waive that gate for that sub-population.
+
+At a scored criterion the three non-`pass` states diverge: `fail` and
+`na` are settled at zero, while `unknown` keeps the candidate's `hi`
+alive and therefore keeps it in the work queue.
 
 `na` is for a criterion that cannot exist for this candidate, not one
 that happens to be missing. A margin test against a business with no
@@ -54,9 +68,13 @@ Some gates have no queryable dataset — regulatory history, reputational
 checks, anything living in documents. Three rules:
 
 **Scope it to candidates that could still place.** Verifying the whole
-population is not feasible; verifying the shortlist plus everyone whose
-best-case key still beats the cutoff is, and is sufficient by the same
-argument that justifies pruning.
+population is not feasible; verifying the shortlist plus every
+challenger whose best-case key still reaches the cutoff is, and is
+sufficient by the same argument that justifies pruning. Note the
+circularity to avoid: an unverified gate leaves the candidate
+unresolved, so it cannot be one of the guaranteed incumbents that
+establish the cutoff in the first place. Resolve in best-case-key order
+until N are guaranteed, then let the cutoff bound the remaining work.
 
 **Separate the halves that behave differently.** Within one gate, some
 sub-checks are reliably visible in cheap metadata and others are not.

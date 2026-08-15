@@ -8,8 +8,8 @@ description: >-
   answers first and then fits the metrics around them, producing a
   result that reads as rigorous and is fabricated. This skill supplies
   the contract that makes the output defensible: criteria frozen before
-  the candidates are visible, three-state verdicts where missing data
-  blocks a candidate instead of quietly passing it, pruning that rests
+  the candidates are visible, verdicts where missing data blocks a
+  candidate at a hard gate instead of quietly passing it, pruning that rests
   on a provable bound rather than a plausible approximation, an
   explicit convergence test, and per-number provenance. Do not trigger
   for one-off lookups, for ranking a handful of items the user already
@@ -42,13 +42,22 @@ The contract below exists to make each of those detectable.
    tie-break order all go into a constants module first. Adjusting any
    of them after seeing the shortlist is answer-fitting, whatever the
    justification.
-2. **Three states, not two.** Every check yields `pass` / `fail` /
-   `unknown`. `unknown` is never scored as 0 and never as full marks —
-   it widens the candidate's `[lo, hi]` score interval.
-3. **`unknown` blocks like `fail` does.** A candidate may enter the
-   final list only when every hard gate is *proven* passed. `fail`
-   means checked and unqualified; `unknown` means not checked. Neither
-   is a reason to include.
+2. **Four states, not two.** Every check yields `pass` / `fail` /
+   `unknown` / `na`. `unknown` is never scored as 0 and never as full
+   marks — it widens the candidate's `[lo, hi]` score interval. `na`
+   means the check cannot exist for this candidate; it scores nothing
+   and claims nothing.
+3. **`unknown` blocks admission the way `fail` does — at hard gates.**
+   Separate the two kinds of check first: a *hard gate* decides
+   admission, a *scored criterion* only contributes points. At a hard
+   gate a candidate is admitted only on `pass`; `fail` means checked
+   and unqualified, `unknown` means not checked, `na` means not proven
+   either way, and none of the three is a reason to include. A scored
+   criterion never disqualifies — its `fail` simply earns zero. Wiring
+   these two together in one rule is the most common way to get either
+   a shortlist that discards anyone who loses a single point, or one
+   that walks candidates through gates they never satisfied. See
+   [references/verification.md](references/verification.md).
 4. **Prune only on a provable bound.** See
    [references/pruning.md](references/pruning.md). If a cheap proxy
    might disagree with the exact computation by an unbounded amount,
@@ -81,8 +90,10 @@ exclusion counts are mutually exclusive and can be summed.
 **Iterate to convergence.** Compute `[lo, hi]` for everything
 evaluated, resolve expensive checks in upper-bound order, and stop only
 when the test in [references/pruning.md](references/pruning.md) passes.
-Two numbers must reach zero before the result is complete: candidates
-whose bound still reaches the cutoff, and candidates never fetched
+No cutoff exists until N candidates are *guaranteed* admissible — until
+then nothing may be dropped on placement. Once it does, two counters
+must reach zero: unresolved challengers outside that guaranteed set
+whose best case still reaches the cutoff, and never-fetched candidates
 whose coarse bound still reaches it. Non-zero means the list is
 provisional, and it must be reported as provisional.
 
@@ -104,7 +115,7 @@ knowing what the other candidates died of.
 |---|---|
 | Familiar names appear, then metrics justify them | Publish population size, per-gate exclusion counts, and per-candidate computation before naming anyone |
 | A cheap proxy decides what to drop | Prune only on fields proven identical to the exact ones; verify the claim, do not assume it |
-| Missing value silently becomes 0 or full marks | Three-state verdicts; `unknown` blocks admission |
+| Missing value silently becomes 0 or full marks | Four-state verdicts; at a hard gate only `pass` admits |
 | "Searched and found nothing" written as "does not exist" | Word it as not detected in the named sources, and list them |
 | A structural impossibility recorded as missing data | Distinguish `na` from `unknown`; `na` scores nothing and claims nothing |
 | Current low value presented as a low historical percentile | Persist the historical series and the percentile formula; check for look-ahead bias |
