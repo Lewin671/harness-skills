@@ -211,9 +211,16 @@ at conservative value, which is the case Buffett explicitly rules out —
 than its price, we're not interested in buying" (1992 letter). He
 published no percentage, so the size is author's policy; it must rise
 with the width of the low-to-high valuation range, since a wide range
-means the low case is itself uncertain. Runs **last**, over survivors
-only. If value cannot be estimated within a useful range, the verdict is
-`unknown`, which blocks — not "cheap".
+means the low case is itself uncertain. If value cannot be estimated
+within a useful range, the verdict is `unknown`, which blocks — not
+"cheap".
+
+Runs **last**, and over candidates that have tripped no gate — no `fail`
+and no `na`. Gates still `unknown` do not exclude a candidate from being
+valued; requiring every other gate to `pass` first would mean nothing is
+ever valued, because the moat and management gates stay `unknown` until
+a human resolves them. Valuation is expensive, so it is bounded by the
+frozen budget and worked in `lo` order.
 
 ## Scored Criteria
 

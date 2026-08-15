@@ -212,8 +212,14 @@ to stop.
    on a proven `fail`.
 3. Fetch the survivors' filings; compute every criterion exactly.
 4. Resolve the qualitative gates in best-case-key order.
-5. Value the candidates that have cleared every other gate, and apply
-   the price gate. **Only here can a candidate become guaranteed
+5. Value the candidates that have tripped no gate — that is, none has
+   returned `fail` or `na`; gates still `unknown` do not disqualify them
+   from being valued. Reading this step as "every other gate `pass`"
+   makes it unreachable, since the moat and management gates sit at
+   `unknown` until someone adjudicates them, and the valuation would
+   then never run at all. Work down the pending set in `lo` order until
+   the budget is spent. Then apply the price gate. **Only here can a
+   candidate become guaranteed
    admissible**, because price is itself a hard gate: a candidate whose
    price gate is unresolved has not passed every hard gate, so it
    cannot be one of the N incumbents that establish the cutoff. A
