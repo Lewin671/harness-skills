@@ -194,7 +194,7 @@ then what remains unresolved on each survivor.
 | P/E or P/B used to shrink the population | Price never prunes; it runs last over survivors |
 | Ties presented as a ranking | State how many share the top score and that the order comes from the tie-break rule |
 | A ratio flips sign because two filers disagree on a convention | Check each operand's sign domain; take magnitudes where the criterion means one |
-| A discontinued tag's last value silently pairs with current data | Require the series to reach the compared period; stale is `unknown`, not a number |
+| A discontinued field's last value silently pairs with current data | Require the series to reach the compared period; stale is `unknown`, not a number |
 
 ## Reporting
 
