@@ -187,11 +187,11 @@ then what remains unresolved on each survivor.
 | Depreciation substituted for maintenance capex | Mark `unknown` unless asset age, capacity and replacement projects were reconciled |
 | Every non-cash charge added back | Recurring stock compensation and real impairments are costs; state the add-back policy in the freeze |
 | ROE inflated by buybacks, leverage or a negative equity base | Report return on tangible operating capital alongside; `na` on non-positive average equity |
-| Bank or insurer measured with an industrial leverage rule | Only the ordinary non-financial model exists; classify first, mark `na`, and report the excluded count population-wide |
+| Bank or insurer measured with an industrial leverage rule | Only the ordinary non-financial model exists; classify first, mark `na`, count population-wide |
 | Price gate applied late, but incumbents declared "guaranteed" before it | Price is a hard gate; no cutoff exists until N candidates have cleared it too |
-| A distribution added to value created *and* deducted from capital retained | Counts it twice; the one-dollar numerator excludes both dividends and repurchases, or the same policy scores differently depending on how cash was returned |
+| A distribution added to value created *and* deducted from capital retained | Counts it twice; the one-dollar numerator excludes dividends and repurchases alike, or identical policies score differently |
 | Net-income-based owner earnings discounted, then debt subtracted | Charges financing twice; build the valuation input from NOPAT |
-| Cyclical peak normalized as earning power | Fix the normalization rule in the freeze; excluding weak years as one-offs after seeing them is answer-fitting |
+| Cyclical peak normalized as earning power | Fix the rule in the freeze; excluding weak years after seeing them is answer-fitting |
 | A DCF with invented growth and discount assumptions | Freeze horizon, terminal growth and required return; report low/base/high, not a point estimate |
 | P/E or P/B used to shrink the population | Price never prunes; it runs last over survivors |
 | Ties presented as a ranking | State how many share the top score and that the order comes from the tie-break rule |
