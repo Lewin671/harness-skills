@@ -62,16 +62,23 @@ seeing results is answer-fitting.
 
 In funnel order. Each blocks on anything other than `pass`.
 
-**1. Circle of competence.** The user's declared industry or
-business-model allow-list, applied as an intrinsic-attribute filter.
-This runs first because it involves no accounting and no judgment call
-by the model. Do not implement it as a model self-assessment — see
-[adjudication.md](adjudication.md).
+**1. Applicability.** The candidate's accounting model is one this skill
+implements — ordinary non-financial operating companies — and the
+required fields exist. Banks, insurers, regulated utilities and other
+specialised financial models get `na`; an unclassifiable candidate gets
+`unknown`. Both block. See
+[applicability.md](applicability.md) for the classification rule and
+the disclosure it owes.
 
-**2. Applicability.** The candidate fits an available sector model and
-the required fields exist for it. A bank measured with an industrial
-leverage rule produces a confident wrong answer; the honest verdict is
-`na` with the gap disclosed, or exclusion pending an adapter.
+This runs **before** the competence gate, even though competence is the
+cheaper filter. Otherwise a competence exclusion absorbs candidates the
+accounting model could never have evaluated, and the report can no
+longer say how much of the universe this skill actually covers.
+
+**2. Circle of competence.** The user's declared industry or
+business-model allow-list, applied as an intrinsic-attribute filter. No
+accounting and no judgment call by the model. Do not implement it as a
+model self-assessment — see [adjudication.md](adjudication.md).
 
 **3. Demonstrated earning power, not a turnaround.** Normalized pre-tax
 income from continuing operations, defined as pre-tax income from
@@ -88,22 +95,60 @@ differently and must be resolved separately; see
 [adjudication.md](adjudication.md). Expect it to remain `unknown` on
 most candidates after an automated pass, and report it that way.
 
-**5. Financial survivability.** No going-concern qualification, no
-unresolved default or covenant breach, and a disclosed debt-service
-stress test passed. This is a floor, not the whole leverage view —
-"little or no debt" beyond survival is a scored criterion, because
-Buffett's preference for it is a matter of degree.
+**5. Financial survivability.** No going-concern qualification and no
+unresolved default or covenant breach, plus a debt-service stress test
+that must be written down rather than left to the implementer. A gate
+stated as "passes a stress test" is not a gate: two implementations
+will not agree, and the usual resolution is to invent a pass. The
+default policy, all of it author's choice and all of it to be frozen
+and disclosed:
 
-**6. Integrity review completed.** The named filing, audit, regulator
-and adjudication sources were reviewed and no unresolved material
-disqualifier was found. This gate certifies that the review happened,
-not that management is honest — no evidence can prove that. Word the
-verdict accordingly.
+- Adjusted EBIT over cash interest at least 3× in **each** of the last
+  five years, not on average. Three times allows roughly a two-thirds
+  fall in EBIT before coverage reaches 1×.
+- Gross debt no more than 3× the three-year median owner-earnings
+  proxy — a deliberately short repayment horizon.
+- No more than 25% of gross debt maturing within twelve months without
+  cash and committed facilities to cover it, so the test does not rest
+  on refinancing that may not be available.
 
-**7. Sensible price.** Current price at or below the conservative
-intrinsic-value case. Runs **last**, over survivors only. If value
-cannot be estimated within a useful range, the verdict is `unknown`,
-which blocks — not "cheap".
+Any of the three unmeasurable leaves the gate `unknown`, which blocks.
+This is a floor, not the whole leverage view — "little or no debt"
+beyond survival is a scored criterion, because Buffett's preference for
+it is a matter of degree.
+
+**6. Management: integrity reviewed, and no disqualifying capability
+record.** Buffett asks for businesses "operated by honest **and
+competent** people" (1977), so a gate covering only honesty leaves half
+the criterion unenforced and admits demonstrably poor operators on a
+clean compliance record. Both halves must clear:
+
+- *Integrity* — the named filing, audit, regulator and adjudication
+  sources were reviewed and no unresolved material disqualifier was
+  found. This certifies that the review happened, not that management is
+  honest; no evidence can prove that. Word the verdict accordingly.
+- *Capability* — no unresolved evidence of value-destroying capital
+  allocation: acquisitions later written off, repurchases executed well
+  above contemporaneous estimated value, serial issuance without
+  matching value received. This is a floor against disqualifying
+  evidence, not a demonstration of skill — the positive record stays
+  scored, because outcomes cannot separate skill from an inherited
+  franchise.
+
+Expect this gate to rest at `unknown` after an automated pass, for the
+same reason the moat gate does. See [adjudication.md](adjudication.md).
+
+**7. Sensible price, with a real margin.** Current price at or below the
+low-case intrinsic value **less a required discount**. The discount is
+not optional trim: `price <= low case` admits a candidate priced exactly
+at conservative value, which is the case Buffett explicitly rules out —
+"If we calculate the value of a common stock to be only slightly higher
+than its price, we're not interested in buying" (1992 letter). He
+published no percentage, so the size is author's policy; it must rise
+with the width of the low-to-high valuation range, since a wide range
+means the low case is itself uncertain. Runs **last**, over survivors
+only. If value cannot be estimated within a useful range, the verdict is
+`unknown`, which blocks — not "cheap".
 
 ## Scored Criteria
 
@@ -162,9 +207,15 @@ pruning bound on the literal definition — the two differ by an unbounded
 amount in an unknown direction.
 
 **Owner-earnings conversion.** Cumulative five-year owner-earnings
-proxy over cumulative five-year normalized income attributable to
-common, computed only when the denominator is positive and every
-component is present.
+proxy over cumulative five-year normalized **consolidated** net income,
+computed only when the denominator is positive and every component is
+present. Both sides must sit in the same ownership scope: the proxy is
+built from consolidated cash flow and consolidated capital expenditure,
+so pairing it with parent-attributable income puts the minority owners'
+cash in the numerator and not the denominator, which inflates
+conversion by exactly the minority share. Where non-controlling
+interests are material, either deduct their share on both sides or mark
+the metric `unknown` — do not mix the two scopes and report a ratio.
 
 **Incremental return on capital.** The change in average NOPAT between
 two smoothed windows, divided by the change in average net tangible
@@ -183,22 +234,51 @@ their own adapters.
 against contemporaneous estimated value; issuance proceeds against
 value surrendered; stock compensation as a share of owner earnings.
 
-**The one-dollar test.** Over a frozen window, value created as the
-change in market capitalization plus dividends plus repurchases minus
-external equity issuance, over capital retained as cumulative income
-attributable to common minus dividends minus repurchases. Compute only
-when retained capital is positive. Multiple expansion and market cycles
+**The one-dollar test.** Over a frozen window:
+
+```
+value created    = Δ market capitalisation + repurchases − equity issued
+capital retained = Σ (normalised income to common − dividends − repurchases)
+```
+
+Compute only when retained capital is positive. **Do not add dividends
+to the numerator.** A dividend is earnings handed straight to
+shareholders, not value produced by retained capital; crediting it above
+the line while deducting it below counts the same distribution twice and
+inflates the ratio. Worked check: opening market capitalisation 100,
+income 20, dividends 10, closing market capitalisation 110. The retained
+10 produced exactly 10 of market value, so the ratio is
+`10 / 10 = 1`. Adding dividends to the numerator would report 2.
+Repurchases *are* added back, because the cash left the company and
+depressed market capitalisation while still reaching shareholders. Multiple expansion and market cycles
 contaminate it, and Buffett himself qualified the naive five-year
 market-value formulation — so treat it as a scored signal, never a
 gate.
 
 ## Intrinsic Value Is A Model, Not A Field
 
-Discount unlevered owner earnings over a frozen horizon, add a terminal
-value with the terminal growth rate strictly below the required return,
-then add excess cash and non-operating investments and subtract debt,
-lease obligations, pension deficits and minority interests, and divide
-by diluted shares.
+Discount **unlevered** owner earnings over a frozen horizon, add a
+terminal value with the terminal growth rate strictly below the
+required return, then add excess cash and non-operating investments and
+subtract debt, lease obligations, pension deficits and minority
+interests, and divide by diluted shares.
+
+*Unlevered* is load-bearing and is **not** the owner-earnings figure
+defined above. That one starts from net income, which is already net of
+interest, so discounting it and then subtracting debt charges the
+financing twice and understates equity value on every leveraged
+company. Build the valuation input from operating profit instead:
+
+```
+unlevered owner earnings = NOPAT + DD&A + qualifying non-cash charges
+                           − maintenance capex − required ΔWC
+```
+
+with NOPAT as adjusted EBIT times one minus the normalised tax rate.
+The alternative is internally consistent too — discount the levered,
+net-income-based owner earnings at a cost of equity and subtract no
+debt — but the two must not be mixed. State which one the freeze
+selected.
 
 Freeze every one of these before running it: horizon, starting
 normalized earnings, the maintenance-versus-growth split, the growth

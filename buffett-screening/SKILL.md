@@ -76,8 +76,9 @@ investee's return on equity.
 ## The Contract
 
 1. **Freeze the criteria before the candidates are visible.**
-   Thresholds, period definitions, accounting conventions, sector
-   adapters and the tie-break order go into a constants module first,
+   Thresholds, period definitions, accounting conventions, the
+   accounting-model classification rule and the tie-break order go into
+   a constants module first,
    with each entry marked *Buffett-stated*, *implied*, or *author's
    policy*. Adjusting any of them after seeing the shortlist is
    answer-fitting, whatever the justification.
@@ -110,8 +111,10 @@ These are where an LLM implementation of this particular screen breaks.
 Do not ask the model whether it understands a business — it will always
 say yes, in fluent detail. Have the user declare the boundary during
 the freeze, as an industry or business-model allow-list, and run it as
-the first intrinsic-attribute gate in the funnel. A self-assessed
-competence gate passes everything and is worse than no gate.
+an intrinsic-attribute gate near the front of the funnel — after the
+accounting-model classification, so that scope coverage stays
+measurable. A self-assessed competence gate passes everything and is
+worse than no gate.
 
 **The moat gate makes this a referral list, not a buy list.** Its
 outcome half — the level and stability of returns on tangible operating
@@ -133,8 +136,8 @@ bound intrinsic value by nothing.
 ## Workflow
 
 **Freeze.** Write the constants module: the competence allow-list, the
-fiscal-year window, the sector adapters, every threshold with its
-provenance label, and the tie-break order. State the as-of instant.
+fiscal-year window, the accounting-model classification rule, every
+threshold with its provenance label, and the tie-break order. State the as-of instant.
 Where two conventions exist for one word, say which applies —
 consolidated versus parent-attributable profit, average versus
 period-end capital, gross versus net debt. A ratio whose numerator and
@@ -147,10 +150,14 @@ Derive structured tables from that, never straight from the wire.
 Deduplicate on entity plus period plus revision and keep the latest
 restatement; a summary endpoint's row count is not a population count.
 
-**Fan out through the funnel.** Competence allow-list first, then the
-gates resting on intrinsic attributes, then the computed ones, then the
-qualitative ones, then price. Record the *first* gate each candidate
-trips, so exclusion counts are mutually exclusive and can be summed.
+**Fan out through the funnel.** Accounting-model classification first,
+then the competence allow-list, then the remaining intrinsic-attribute
+gates, then the computed ones, then the qualitative ones, then price.
+Record the *first* gate each candidate trips, so exclusion counts are
+mutually exclusive and can be summed — with one exception: out-of-scope
+counts are reported population-wide, not first-gate, or a competence
+exclusion hides how much of the universe this skill cannot read. See
+[references/applicability.md](references/applicability.md).
 
 **Iterate to convergence.** Compute `[lo, hi]` for everything
 evaluated, resolve expensive checks in upper-bound order, and stop only
@@ -175,7 +182,10 @@ then what remains unresolved on each survivor.
 | Depreciation substituted for maintenance capex | Mark `unknown` unless asset age, capacity and replacement projects were reconciled |
 | Every non-cash charge added back | Recurring stock compensation and real impairments are costs; state the add-back policy in the freeze |
 | ROE inflated by buybacks, leverage or a negative equity base | Report return on tangible operating capital alongside; `na` on non-positive average equity |
-| Bank or insurer measured with an industrial leverage rule | Sector adapter, or `na` with the gap disclosed |
+| Bank or insurer measured with an industrial leverage rule | Only the ordinary non-financial model exists; classify first, mark `na`, and report the excluded count population-wide |
+| Price gate applied late, but incumbents declared "guaranteed" before it | Price is a hard gate; no cutoff exists until N candidates have cleared it too |
+| Dividends added to value created *and* deducted from capital retained | Counts the distribution twice; the one-dollar numerator excludes dividends |
+| Net-income-based owner earnings discounted, then debt subtracted | Charges financing twice; build the valuation input from NOPAT |
 | Cyclical peak normalized as earning power | Fix the normalization rule in the freeze; excluding weak years as one-offs after seeing them is answer-fitting |
 | A DCF with invented growth and discount assumptions | Freeze horizon, terminal growth and required return; report low/base/high, not a point estimate |
 | P/E or P/B used to shrink the population | Price never prunes; it runs last over survivors |
@@ -183,8 +193,10 @@ then what remains unresolved on each survivor.
 
 ## Reporting
 
-The output owes the reader five things beyond the ranked table: the
-funnel with mutually-exclusive counts; which criteria were computed
+The output owes the reader six things beyond the ranked table: the
+scope counts, population-wide, naming what the accounting model could
+not read and stating that those companies were *not evaluated* rather
+than rejected; the funnel with mutually-exclusive counts; which criteria were computed
 exactly, which used a documented proxy, and which were not covered;
 which gates remain `unknown` on each survivor — the moat causal half
 normally among them; whether the list converged or is provisional; and

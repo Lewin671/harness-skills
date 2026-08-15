@@ -13,12 +13,22 @@ classes, and the constants module must label which:
 
 A citation attached to a rule the model actually invented is the worst
 failure this skill exists to prevent, because it is the one a reader
-cannot detect. So the canon below was checked against the original
-text at berkshirehathaway.com rather than recalled: every quoted phrase
-appears verbatim in the letter named. Three attributions that felt
-right did not survive that check and were corrected — they are recorded
-under *Corrected Attributions* at the end, because the corrections are
-themselves evidence about how this domain fails.
+cannot detect. So the canon below was checked against the source text
+rather than recalled, and the corpus it was checked against is in
+`../sources/`.
+
+Two conventions make the check auditable. Text in quotation marks is
+**verbatim** — it can be grepped out of the named file, and if a
+quotation spans an omission that is marked with an ellipsis. Text
+without quotation marks is a **restatement** in this file's words, and
+carries no claim about wording. Where a row names more than one source,
+the quotation comes from the first; the others state the same principle
+differently.
+
+Three attributions that felt right did not survive the check and were
+corrected — they are recorded under *Corrected Attributions* at the
+end, because the corrections are themselves evidence about how this
+domain fails.
 
 Hold anything added later to the same standard. Model recall of a
 Buffett quotation is not evidence for it, and a second model agreeing
@@ -31,12 +41,13 @@ is no excuse for shipping an unverified citation.
 | Element | Position | Source |
 |---|---|---|
 | Fractional-business view | "We select our marketable equity securities in much the same way we would evaluate a business for acquisition in its entirety." | 1977 letter |
-| The four-part formulation | The business should be "(1) one that we can understand, (2) with favorable long-term prospects, (3) operated by honest and competent people, and (4) available at a very attractive price". Restated in 2007 as "a business we understand; favorable long-term economics; able and trustworthy management; and a sensible price tag" — note *attractive* becoming *sensible* | 1977 letter; 2007 letter, p. 6 |
+| The four-part formulation | The business should be "(1) one that we can understand, (2) with favorable long-term prospects, (3) operated by honest and competent people, and (4) available at a very attractive price". Restated in 2007 as companies that have "a) a business we understand; b) favorable long-term economics; c) able and trustworthy management; and d) a sensible price tag" — note *attractive* becoming *sensible* | 1977 letter; 2007 letter, p. 6 |
 | Circle of competence | "You only have to be able to evaluate companies within your circle of competence. The size of that circle is not very important; knowing its boundaries, however, is vital." | 1996 letter |
 | Economic franchise | Arises from a product or service that "(1) is needed or desired; (2) is thought by its customers to have no close substitute and; (3) is not subject to price regulation" — demonstrated by the ability to price aggressively and earn high returns on capital. A franchise "can tolerate mis-management"; a mere business earns exceptional profits "only if it is the low-cost operator or if supply of its product or service is tight" | 1991 letter |
 | Economic goodwill | "What a business can be expected to earn on **unleveraged net tangible assets**, excluding any charges against earnings for amortization of Goodwill, is the best guide to the economic attractiveness of the operation." | 1983 letter, appendix *Goodwill and its Amortization: The Rules and The Realities* |
 | Owner earnings | "(a) reported earnings plus (b) depreciation, depletion, amortization, and certain other non-cash charges … less (c) the average annual amount of capitalized expenditures for plant and equipment, etc. that the business requires to fully maintain its long-term competitive position and its unit volume", plus any additional working capital required for the same purpose. He adds that "(c) must be a guess — and one sometimes very difficult to make" | 1986 letter, appendix *Purchase-Price Accounting Adjustments and the "Cash Flow" Fallacy* |
-| The one-dollar premise | "Unrestricted earnings should be retained only when there is a reasonable prospect — backed preferably by historical evidence or … by a thoughtful analysis of the future — that for every dollar retained by the corporation, at least one dollar of market value will be created for owners." | 1984 letter; Owner's Manual |
+| The one-dollar premise | "Unrestricted earnings should be retained only when there is a reasonable prospect — backed preferably by historical evidence or … by a thoughtful analysis of the future — that for every dollar retained by the corporation, at least one dollar of market value will be created for owners." The Owner's Manual states it as a test Berkshire applies to itself, in different words and "on a five-year rolling basis" | 1984 letter (quotation); Owner's Manual (restatement) |
+| Margin of safety | "we insist on a margin of safety in our purchase price. If we calculate the value of a common stock to be only slightly higher than its price, we're not interested in buying." Attributed by Buffett to Ben Graham as "the cornerstone of investment success" | 1992 letter |
 | Intrinsic value | "the discounted value of the cash that can be taken out of a business during its remaining life" — and an estimate rather than a precise figure, which two honest analysts looking at the same facts will compute differently | Owner's Manual |
 | Risk factors | Predictability of economics, management's ability, management's owner-orientation, purchase price, and inflation and tax effects — and these cannot be extracted from a database | 1993 letter |
 | The turn from cigar butts | "It's far better to buy a wonderful company at a fair price than a fair company at a wonderful price. Charlie understood this early; I was a slow learner." | 1989 letter, *Mistakes of the First Twenty-five Years (A Condensed Version)* |
@@ -161,6 +172,11 @@ supplies the load-bearing clause about knowing the circle's boundaries.
 sentence beginning "the discounted value of the cash that can be taken
 out of a business" is in the Owner's Manual. The 1992 letter discusses
 intrinsic value, but does not define it in those words.
+
+Do not over-correct from this into treating the 1992 letter as unused:
+it is the primary source for the **margin of safety**, in the canon
+above. Two wrong citations to a letter say nothing about what that
+letter does contain.
 
 **The one-dollar test was said to have been "later corrected" because
 market prices distort it.** No support was found. The Owner's Manual

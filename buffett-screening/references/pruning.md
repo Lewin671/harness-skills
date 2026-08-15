@@ -17,7 +17,12 @@ error is a distribution, not a bound. A margin absorbs the typical case
 and silently drops the tail — and the tail is exactly where the
 unusual, interesting companies live.
 
-A worked example from a real run. A screen needed
+A worked example. The figures below come from a run whose artifacts are
+not published with this skill, so treat them as an illustration of the
+failure mode rather than as evidence you can audit — this file demands
+provenance for reported numbers, and these do not have it here. The
+mechanism is what matters, and it reproduces on any screen with the same
+shape. A screen needed
 `operating cash flow / consolidated net profit` and
 `net profit / average parent equity`, but the bulk table carried only
 *parent-attributable* profit and *period-end total* equity. Both were
@@ -200,18 +205,33 @@ to stop.
 
 ## Order Of Operations
 
-1. The competence allow-list and other intrinsic-attribute gates. No
-   accounting, no interpretation, no proxy risk.
+1. Classify the accounting model, then the competence allow-list and
+   the other intrinsic-attribute gates. No accounting, no
+   interpretation, no proxy risk.
 2. Compute the provable-bound criteria from the bulk source. Prune only
    on a proven `fail`.
 3. Fetch the survivors' filings; compute every criterion exactly.
-4. Resolve the qualitative gates in best-case-key order, until N
-   candidates are guaranteed admissible and a cutoff exists — or until
-   it is established that none can be, and the run is reported as
-   converged over the computable gates only.
-5. Value the survivors and apply the price gate.
+4. Resolve the qualitative gates in best-case-key order.
+5. Value the candidates that have cleared every other gate, and apply
+   the price gate. **Only here can a candidate become guaranteed
+   admissible**, because price is itself a hard gate: a candidate whose
+   price gate is unresolved has not passed every hard gate, so it
+   cannot be one of the N incumbents that establish the cutoff. A
+   cutoff built before this step rests on provisional incumbents —
+   exactly the error this file warns about — and every pruning decision
+   taken against it is invalid. Until step 5 has produced N guaranteed
+   incumbents, nothing may be dropped on placement.
 6. Recompute the threshold and repeat from 3 until both counters are
    zero.
+
+That ordering has a cost worth stating rather than hiding: valuation is
+the most expensive step and it cannot be used to narrow the field,
+because no cheap multiple bounds intrinsic value. The pool arriving at
+step 5 is therefore limited only by the quality gates. When it is too
+large to value, the honest responses are to tighten a threshold *in the
+freeze* and rerun, or to report the run as converged over the quality
+gates with price left unresolved. Pre-filtering on a multiple to make
+the arithmetic fit is the one response that is not available.
 
 Log what each stage dropped and why. A pipeline that reports only
 survivors cannot be audited, and the exclusion counts are the part a

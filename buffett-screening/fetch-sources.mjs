@@ -45,6 +45,33 @@ function decompress(buf) {
   return buf;
 }
 
+// The letters are written in Windows-1252, where 0x80-0x9F carry the
+// curly quotes, dashes and ellipsis. Both input paths land there: the
+// pre-1989 HTML pages are served in that encoding, and PDF content
+// streams are read as latin1, which leaves the same bytes as control
+// characters. Get this wrong and `it's` becomes `it<fffd>s` or
+// `enduring "moat"` carries two unprintable bytes -- the phrase is then
+// unfindable, which defeats the only purpose these files have.
+const CP1252 = {
+  0x82: "‚", 0x83: "ƒ", 0x84: "„", 0x85: "…", 0x86: "†",
+  0x87: "‡", 0x88: "ˆ", 0x89: "‰", 0x8a: "Š", 0x8b: "‹",
+  0x8c: "Œ", 0x8e: "Ž", 0x91: "‘", 0x92: "’", 0x93: "“",
+  0x94: "”", 0x95: "•", 0x96: "–", 0x97: "—", 0x98: "˜",
+  0x99: "™", 0x9a: "š", 0x9b: "›", 0x9c: "œ", 0x9e: "ž",
+  0x9f: "Ÿ", 0x80: "€",
+};
+
+const fixEncoding = (s) => s.replace(/[\x80-\x9f]/g, (c) => CP1252[c.charCodeAt(0)] ?? " ");
+
+// Decode a page body. UTF-8 first, since the modern pages are UTF-8; a
+// replacement character means the guess was wrong, so fall back to
+// Windows-1252 rather than shipping text with holes in it.
+function decodeText(buf) {
+  const utf8 = buf.toString("utf8");
+  if (!utf8.includes("�")) return utf8;
+  return fixEncoding(buf.toString("latin1"));
+}
+
 // The letters are typeset to a fixed column width, so a sentence is
 // split across several physical lines. grep is line-oriented, which means
 // a quotation that spans a line break cannot be found -- and looking
@@ -70,7 +97,7 @@ function unwrap(text) {
 // ---------- html ----------
 
 function htmlToText(buf) {
-  let s = decompress(buf).toString("utf8");
+  let s = decodeText(decompress(buf));
   s = s.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ");
   s = s.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|tr|h[1-6]|li)>/gi, "\n");
   s = s.replace(/<[^>]+>/g, " ");
@@ -100,22 +127,6 @@ function htmlToText(buf) {
 // rather than as space characters -- ignore those and the output comes out
 // as "AcquisitionCriteria", which no search will ever match.
 const GAP = 120; // kerning units below which a gap is a word break
-
-// Content streams are read as latin1, but the letters are typed in
-// Windows-1252, where 0x80-0x9F hold the curly quotes, dashes and ellipsis
-// that latin1 leaves as control characters. Skip this and a phrase like
-// `enduring "moat" that protects` contains two unprintable bytes and can
-// never be grepped, which is the whole point of keeping these files.
-const CP1252 = {
-  0x82: "‚", 0x83: "ƒ", 0x84: "„", 0x85: "…", 0x86: "†",
-  0x87: "‡", 0x88: "ˆ", 0x89: "‰", 0x8a: "Š", 0x8b: "‹",
-  0x8c: "Œ", 0x8e: "Ž", 0x91: "‘", 0x92: "’", 0x93: "“",
-  0x94: "”", 0x95: "•", 0x96: "–", 0x97: "—", 0x98: "˜",
-  0x99: "™", 0x9a: "š", 0x9b: "›", 0x9c: "œ", 0x9e: "ž",
-  0x9f: "Ÿ", 0x80: "€",
-};
-
-const fixEncoding = (s) => s.replace(/[\x80-\x9f]/g, (c) => CP1252[c.charCodeAt(0)] ?? " ");
 
 function pdfToText(buf) {
   const chunks = [];
