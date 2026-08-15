@@ -20,9 +20,11 @@ rather than recalled, and the corpus it was checked against is in
 Two conventions make the check auditable. Text in quotation marks is
 **Buffett's wording**, with an ellipsis marking any omission. Text
 without quotation marks is a **restatement** in this file's words and
-carries no claim about wording. Where a row names more than one source,
-the quotation comes from the first; the others state the same principle
-differently.
+carries no claim about wording. Where a row quotes two documents — the
+1977 formulation and its 2007 restatement, the 1984 letter and the
+Owner's Manual — the row is split in two, one source per row. That
+split is what lets the checker hold every row's quotations to the
+single file its source names.
 
 Quotations keep the source's own punctuation, including the curly
 apostrophes and the scare quotes Buffett puts around terms like
@@ -55,25 +57,32 @@ The promise is executable. After editing this table, run:
 node ../verify-citations.mjs
 ```
 
-It searches every quotation here against the corpus literally and exits
-non-zero on a miss. A miss means the quotation drifted from the source —
-usually by someone tidying an apostrophe or a dash — or that the
-attribution is wrong. Fix the quotation; do not relax the check. What it
-proves is narrow but real: the words appear in the corpus. It does not
-prove they appear in the letter this row names, nor that the claim built
-around them is a fair reading.
+It checks every quotation in `references/` and exits non-zero on a
+miss. A quotation inside a canon table row must appear, in order, in
+the letter the row names; a quotation anywhere else must appear
+somewhere in the corpus; and a set of fixed assertions pins the
+misattribution and corrected-attribution claims below — the 15%, the
+circle-of-competence vintage, the intrinsic-value definition, the
+acquisition-scale clauses — to their named files. A miss means the
+quotation drifted from the source — usually by someone tidying an
+apostrophe or a dash — or that the attribution is wrong. Fix the
+quotation; do not relax the check. What it proves is narrow but real:
+the words appear in the named letter. It does not prove that the claim
+built around them is a fair reading.
 
 ## Primary-Source Canon
 
 | Element | Position | Source |
 |---|---|---|
 | Fractional-business view | "We select our marketable equity securities in much the same way we would evaluate a business for acquisition in its entirety." | 1977 letter |
-| The four-part formulation | The business should be "(1) one that we can understand, (2) with favorable long-term prospects, (3) operated by honest and competent people, and (4) available at a very attractive price". Restated in 2007 as companies that have "a) a business we understand; b) favorable long-term economics; c) able and trustworthy management; and d) a sensible price tag" — note *attractive* becoming *sensible* | 1977 letter; 2007 letter, p. 6 |
+| The four-part formulation | The business should be "(1) one that we can understand, (2) with favorable long-term prospects, (3) operated by honest and competent people, and (4) available at a very attractive price". | 1977 letter |
+| The four-part formulation, restated | Companies that have "a) a business we understand; b) favorable long-term economics; c) able and trustworthy management; and d) a sensible price tag" — note *attractive* becoming *sensible*. | 2007 letter, p. 6 |
 | Circle of competence | "You only have to be able to evaluate companies within your circle of competence. The size of that circle is not very important; knowing its boundaries, however, is vital." | 1996 letter |
 | Economic franchise | Arises from a product or service that "(1) is needed or desired; (2) is thought by its customers to have no close substitute and; (3) is not subject to price regulation" — demonstrated by the ability to price aggressively and earn high returns on capital. A franchise "can tolerate mis-management"; a mere business earns exceptional profits "only if it is the low-cost operator or if supply of its product or service is tight" | 1991 letter |
 | Economic goodwill | "What a business can be expected to earn on unleveraged net tangible assets, excluding any charges against earnings for amortization of Goodwill, is the best guide to the economic attractiveness of the operation." | 1983 letter, appendix *Goodwill and its Amortization: The Rules and The Realities* |
 | Owner earnings | "(a) reported earnings plus (b) depreciation, depletion, amortization, and certain other non-cash charges … less ( c ) the average annual amount of capitalized expenditures for plant and equipment, etc. that the business requires to fully maintain its long-term competitive position and its unit volume", plus any additional working capital required for the same purpose. He adds that "( c ) must be a guess - and one sometimes very difficult to make" | 1986 letter, appendix *Purchase-Price Accounting Adjustments and the "Cash Flow" Fallacy* |
-| The one-dollar premise | "Unrestricted earnings should be retained only when there is a reasonable prospect - backed preferably by historical evidence or … by a thoughtful analysis of the future - that for every dollar retained by the corporation, at least one dollar of market value will be created for owners." The Owner's Manual states it as a test Berkshire applies to itself, in different words and "on a five-year rolling basis" | 1984 letter (quotation); Owner's Manual (restatement) |
+| The one-dollar premise | "Unrestricted earnings should be retained only when there is a reasonable prospect - backed preferably by historical evidence or … by a thoughtful analysis of the future - that for every dollar retained by the corporation, at least one dollar of market value will be created for owners." | 1984 letter |
+| The one-dollar premise, as Berkshire applies it | The Owner's Manual states the same test in different words, applied to Berkshire "on a five-year rolling basis". | Owner's Manual |
 | Growth is not automatically value | "growth can destroy value if it requires cash inputs in the early years of a project or enterprise that exceed the discounted value of the cash that those assets will generate in later years" — and dividend yield, P/E, P/B and growth rates "have nothing to do with valuation except to the extent they provide clues to the amount and timing of cash flows" | 2000 letter |
 | Margin of safety | "we insist on a margin of safety in our purchase price. If we calculate the value of a common stock to be only slightly higher than its price, we're not interested in buying." Attributed by Buffett to Ben Graham as "the cornerstone of investment success" | 1992 letter |
 | Intrinsic value | "the discounted value of the cash that can be taken out of a business during its remaining life" — and an estimate rather than a precise figure, which two honest analysts looking at the same facts will compute differently | Owner's Manual |
@@ -169,7 +178,7 @@ discards the part of the opportunity set most likely to contain what
 the doctrine is looking for.
 
 **A blanket technology exclusion.** The acquisition criteria ask for
-"Simple businesses (if there's lots of technology, we won't understand
+"Simple businesses (if there’s lots of technology, we won’t understand
 it)" — a statement about the buyer, not the industry, as the clause
 itself says. The transferable rule is predictability within the
 analyst's own circle, which is why the competence boundary belongs to

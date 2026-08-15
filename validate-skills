@@ -104,6 +104,28 @@ skill_files.each do |skill_path|
   end
 end
 
+# Per-skill executable self-checks. A skill may ship node checks next to
+# its SKILL.md; run them so that "validate" means what it says. Both
+# scripts resolve their own paths via import.meta.url, so they can be
+# invoked from any working directory.
+skill_files.each do |skill_path|
+  dir = File.dirname(skill_path)
+  %w[verify-citations.mjs check-links.mjs].each do |check|
+    check_path = File.join(dir, check)
+    next unless File.file?(check_path)
+
+    relative = check_path.delete_prefix("#{repo_root}/")
+    begin
+      out = IO.popen(["node", check_path], chdir: dir, err: [:child, :out]) { |io| io.read }
+      next if $?.success?
+
+      errors << "#{relative}: failed\n#{out.strip}"
+    rescue Errno::ENOENT
+      errors << "#{relative}: requires node to run"
+    end
+  end
+end
+
 if errors.empty?
   puts "ok #{skill_files.length} skills"
 else

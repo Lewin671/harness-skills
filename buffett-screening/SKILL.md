@@ -10,11 +10,10 @@ description: >-
   cites shareholder letters that state no such rules. This skill
   supplies the doctrine with its primary sources, separates what
   Buffett actually said from the threshold table popular screeners
-  invented, and carries the contract that makes the output auditable:
-  criteria frozen before the candidates are visible, missing evidence
-  blocking a hard gate instead of quietly passing it, pruning that
-  rests on a provable bound, and per-number provenance. Do not trigger
-  for valuing one company the user already named, for a general
+  invented, and carries an auditable contract: criteria frozen
+  before the candidates are visible, missing evidence blocking a hard
+  gate, pruning that rests on a provable bound, per-number provenance.
+  Do not trigger for valuing one company the user already named, for a general
   investment opinion, or when the user wants a quick take rather than
   a result they could be asked to defend.
 ---
@@ -23,10 +22,10 @@ description: >-
 
 Two things make this domain unusually easy to fake. The criteria are
 famous, so a plausible checklist is available without reading a single
-letter. And the load-bearing half of the doctrine — circle of
-competence, the durability of a moat, the honesty of management — has no
-queryable dataset, so a model asked to judge it always produces a
-paragraph, and the paragraph always passes.
+letter. And the load-bearing half — circle of competence, moat
+durability, management honesty — has no queryable dataset, so a model
+asked to judge it always produces a paragraph, and the paragraph always
+passes.
 
 The result looks like Buffett and is a fabrication: invented thresholds
 attributed to letters that never state them, whole-company acquisition
@@ -66,10 +65,9 @@ constraints, or a blanket rule against technology.
 **Buffett published no threshold table.** No ROE floor, no
 debt-to-equity ceiling, no P/E limit, no fixed margin of safety. Every
 number in the implementation is the screen author's policy and must be
-labelled as such. See doctrine.md for the ones commonly misattributed
-to him — including the 15% that belongs to Berkshire's own
-intrinsic-value growth objective and has nothing to do with an
-investee's return on equity.
+labelled as such. See doctrine.md for the ones commonly misattributed —
+including the 15% that is Berkshire's own growth objective, not an
+investee's ROE floor.
 
 ## The Contract
 
@@ -100,7 +98,7 @@ investee's return on equity.
 
 ## Three Rules That Decide Whether This Works
 
-These are where an LLM implementation of this particular screen breaks.
+These are where an LLM implementation of this screen breaks.
 [references/adjudication.md](references/adjudication.md) develops them.
 
 **Circle of competence is the user's property, not the candidate's.**
