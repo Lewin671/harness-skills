@@ -156,7 +156,15 @@ wherever the valuation range was too wide to decide.
 That is the correct result, not a shortfall. Report it as a ranked set
 of candidates worth reading, with each survivor's unresolved gates
 listed beside it, and state plainly that the ranking orders the
-computable evidence only. A pipeline that instead returns a clean
+computable evidence only.
+
+Such a candidate is **pending, not excluded** — blocked from admission
+while remaining in the population and in the output. It never appears in
+the exclusion counts, which belong to `fail` and `na`. And because these
+gates rarely resolve without human work, a run that adjudicates none of
+them yields no guaranteed incumbents at all, so it terminates on the
+frozen budget rather than on convergence, and says so. See
+[pruning.md](pruning.md) § Termination. A pipeline that instead returns a clean
 buy list has resolved those gates by writing prose, and the prose is
 indistinguishable from analysis to every reader including its author.
 

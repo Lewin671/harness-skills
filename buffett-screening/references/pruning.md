@@ -227,11 +227,40 @@ to stop.
 That ordering has a cost worth stating rather than hiding: valuation is
 the most expensive step and it cannot be used to narrow the field,
 because no cheap multiple bounds intrinsic value. The pool arriving at
-step 5 is therefore limited only by the quality gates. When it is too
-large to value, the honest responses are to tighten a threshold *in the
-freeze* and rerun, or to report the run as converged over the quality
-gates with price left unresolved. Pre-filtering on a multiple to make
-the arithmetic fit is the one response that is not available.
+step 5 is therefore limited only by the quality gates, and may be larger
+than the budget can value.
+
+The response is the budget, not a new threshold. Tightening a criterion
+because the survivor pool turned out inconvenient is answer-fitting by
+the contract's own definition — the shortlist is already visible when
+the decision gets made, and the tightened rule will look principled in
+the writeup. If a policy genuinely needs changing, that is a **new run
+under a new freeze**, disclosed as such, not a continuation of this one.
+Pre-filtering on a multiple is likewise unavailable.
+
+## Termination
+
+Two ways a run ends, and both must be reported for what they are.
+
+**Converged.** Both counters reach zero. This requires N candidates with
+every hard gate proven `pass`, price included.
+
+**Budget exhausted.** The frozen work budget for qualitative
+adjudication and valuation runs out first. The result is **provisional**:
+ranked on the evidence actually resolved, with each candidate's
+outstanding gates listed.
+
+The second is the normal outcome on this doctrine, not a degraded one.
+The moat's causal half has no structured source, so a run that resolves
+nothing by hand produces zero guaranteed incumbents, no cutoff ever
+exists, and convergence is unreachable by construction. A pipeline
+without a budget therefore does not terminate. Freeze one alongside `N`.
+
+Two things the budget must not become. It is not licence to prune —
+with no cutoff, nothing may be dropped on placement, so the budget
+bounds *how much work is done*, never *who is eliminated*. And falling
+short of N guaranteed incumbents is reported as a short list, never
+padded from the pending set to reach N.
 
 Log what each stage dropped and why. A pipeline that reports only
 survivors cannot be audited, and the exclusion counts are the part a

@@ -22,6 +22,16 @@ the data into a pass — and in this domain the gaps are systematic, not
 random: maintenance capex is undisclosed by almost everyone, and no
 filing states whether a moat will last.
 
+**Blocking is not excluding, and the two are counted differently.**
+`fail` and `na` are terminal: the candidate is out, work on it stops,
+and it is counted under the first gate it tripped. `unknown` is pending:
+admission is blocked, but the candidate keeps its `[lo, hi]`, stays in
+the work queue, and appears in the referral list with the unresolved
+gate named. Merging the two loses the distinction the whole four-state
+scheme exists to preserve — file the pending candidates as exclusions
+and the live ones vanish from the output; file them as passes and the
+silent admission is back.
+
 `na` is for a criterion that cannot exist for this candidate, not one
 that happens to be missing. A gross-margin test against a business with
 no cost-of-sales line is `na`; one missing fiscal year is a fetch
@@ -59,18 +69,39 @@ seeing results is answer-fitting.
 - The non-cash add-back policy, named line by line. Recurring stock
   compensation is a real cost; so is an impairment that reflects
   capital genuinely destroyed. "Non-cash" does not mean costless.
+- **Adjusted EBIT** and the **normalised tax rate**, defined at field
+  level. Both feed return on capital, interest coverage and the
+  valuation, so an unstated definition propagates everywhere. Providers
+  disagree on each of these, and none of the answers is wrong — only
+  unstated: whether EBIT includes or excludes unusual and non-recurring
+  items, the interest component of lease payments, stock compensation,
+  discontinued operations, and share of associates' profit. Likewise
+  whether the tax rate is statutory, current effective, cash, or a
+  multi-year average, and what is done with a year whose pre-tax result
+  is negative. Write the chosen answer for each, and derive both from
+  the stored raw layer rather than accepting a provider's pre-computed
+  field, which is a different definition wearing the same name.
 
 ## Hard Gates
 
 In funnel order. Each blocks on anything other than `pass`.
 
 **1. Applicability.** The candidate's accounting model is one this skill
-implements — ordinary non-financial operating companies — and the
-required fields exist. Banks, insurers, regulated utilities and other
-specialised financial models get `na`; an unclassifiable candidate gets
-`unknown`. Both block. See
+implements — ordinary non-financial operating companies. Banks,
+insurers, regulated utilities and other specialised financial models get
+`na`; an unclassifiable candidate gets `unknown`. Both block. See
 [applicability.md](applicability.md) for the classification rule and
 the disclosure it owes.
+
+This gate asks a **structural** question — does the company's statement
+model fit these definitions — and nothing else. A missing observation is
+not a scope question: a company whose statements are the right shape but
+whose 2019 figure failed to fetch is `ordinary_nonfinancial` here, and
+`unknown` at whichever criterion needs that figure, where a retry can
+still resolve it. Conflating the two either files fetchable gaps as
+permanently out of scope, inflating the coverage failure, or drags
+observation-level retries into a gate that is supposed to be settled
+once.
 
 This runs **before** the competence gate, even though competence is the
 cheaper filter. Otherwise a competence exclusion absorbs candidates the
@@ -109,7 +140,13 @@ and disclosed:
   five years, not on average. Three times allows roughly a two-thirds
   fall in EBIT before coverage reaches 1×.
 - Gross debt no more than 3× the three-year median owner-earnings
-  proxy — a deliberately short repayment horizon.
+  proxy — a deliberately short repayment horizon. The denominator can be
+  zero or negative, so branch explicitly rather than evaluating the
+  ratio: with debt outstanding and a non-positive proxy the verdict is
+  `fail`, because a company burning cash cannot repay borrowings from
+  operations at any multiple. A naive `ratio <= 3` either divides by
+  zero or, with both sides negative, returns a comfortable-looking
+  positive number and passes the worst case in the population.
 - No more than 25% of gross debt maturing within twelve months without
   cash and committed facilities to cover it, so the test does not rest
   on refinancing that may not be available.

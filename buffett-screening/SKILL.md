@@ -44,9 +44,9 @@ files are a condensation and drop most of the reasoning behind each
 rule. Search there before answering from memory, and *always* before
 attributing a rule or a number to Buffett: recalling a quotation is not
 evidence for it, and this is a domain where a fabricated citation reads
-exactly like a real one. See [sources/README.md](sources/README.md) for
-the search patterns and the two traps (curly apostrophes; a miss proves
-only that the phrase is absent from this corpus).
+exactly like a real one. [sources/README.md](sources/README.md) gives
+the search patterns and the pitfalls, including why a miss is weak
+evidence.
 
 ## The Doctrine
 
@@ -76,12 +76,10 @@ investee's return on equity.
 ## The Contract
 
 1. **Freeze the criteria before the candidates are visible.**
-   Thresholds, period definitions, accounting conventions, the
-   accounting-model classification rule and the tie-break order go into
-   a constants module first,
-   with each entry marked *Buffett-stated*, *implied*, or *author's
-   policy*. Adjusting any of them after seeing the shortlist is
-   answer-fitting, whatever the justification.
+   Everything the run depends on goes into a constants module first,
+   each entry marked *Buffett-stated*, *implied*, or *author's policy*.
+   Adjusting any of them after seeing the shortlist is answer-fitting,
+   whatever the justification.
 2. **Four states, not two.** Every check yields `pass` / `fail` /
    `unknown` / `na`. `unknown` is never scored as 0 and never as full
    marks — it widens the candidate's `[lo, hi]` score interval. `na`
@@ -137,7 +135,9 @@ bound intrinsic value by nothing.
 
 **Freeze.** Write the constants module: the competence allow-list, the
 fiscal-year window, the accounting-model classification rule, every
-threshold with its provenance label, and the tie-break order. State the as-of instant.
+threshold with its provenance label, the tie-break order, the shortlist
+size `N`, and the work budget that bounds qualitative adjudication and
+valuation. State the as-of instant.
 Where two conventions exist for one word, say which applies —
 consolidated versus parent-attributable profit, average versus
 period-end capital, gross versus net debt. A ratio whose numerator and
@@ -153,17 +153,23 @@ restatement; a summary endpoint's row count is not a population count.
 **Fan out through the funnel.** Accounting-model classification first,
 then the competence allow-list, then the remaining intrinsic-attribute
 gates, then the computed ones, then the qualitative ones, then price.
-Record the *first* gate each candidate trips, so exclusion counts are
-mutually exclusive and can be summed — with one exception: out-of-scope
-counts are reported population-wide, not first-gate, or a competence
-exclusion hides how much of the universe this skill cannot read. See
+
+Blocking is not excluding. `fail` and `na` are **terminal** — record the
+first gate tripped, stop work, count it. `unknown` is **pending**: it
+blocks admission, but the candidate stays in the population and in the
+referral list with that gate named. Counting them together either buries
+live candidates in the exclusion table or reports as converged a run
+that resolved nothing. Out-of-scope counts are population-wide; see
 [references/applicability.md](references/applicability.md).
 
-**Iterate to convergence.** Compute `[lo, hi]` for everything
-evaluated, resolve expensive checks in upper-bound order, and stop only
-when the test in [references/pruning.md](references/pruning.md) passes.
-No cutoff exists until N candidates are *guaranteed* admissible — until
-then nothing may be dropped on placement.
+**Iterate to convergence, or to the budget.** Compute `[lo, hi]`,
+resolve expensive checks in upper-bound order, and stop when the test in
+[references/pruning.md](references/pruning.md) passes — or when the
+frozen work budget runs out, whichever comes first. On this doctrine the
+budget is the usual terminator, because an unresolved moat gate means no
+candidate is guaranteed admissible and the convergence test cannot pass.
+That result is **provisional** and says so. pruning.md defines both
+paths.
 
 **Report the exclusions before the winners.** Lead with the population
 size and the mutually-exclusive exclusion counts, then the shortlist,
