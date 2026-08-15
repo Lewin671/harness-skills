@@ -3,6 +3,7 @@
 //
 //   node fetch-cninfo.mjs --run 2026-08-15 600519 000002 300750
 //   node fetch-cninfo.mjs --run 2026-08-15 --max-pages 15 002625
+//   node fetch-cninfo.mjs --run 2026-08-15 --no-early-stop 002625
 //
 // For each code: the full announcement record over the window (titles
 // only, for governance keyword classification) and the latest annual
@@ -22,8 +23,12 @@
 // (default 30 pages = 900 rows, far beyond a normal 6-year record);
 // (2) every stored page records secCode-match counts in meta so the
 // governance pass can drop polluted rows and the report can show how
-// much was dropped. A page with zero rows whose secCode matches the
-// target is treated as pollution and stops the record early.
+// much was dropped. Early stop fires only after TWO consecutive pages
+// with zero matching rows (a single sparse page amid an interleaved
+// record should not truncate); --no-early-stop disables it. The stop
+// reason is recorded in the last page's meta, so a resume reproduces
+// the same outcome; re-running with --no-early-stop resumes past a
+// recorded pollution stop (raw pages are kept regardless).
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
@@ -66,8 +71,9 @@ function form(code, page, category, seDate) {
 
 async function main() {
   const args = parseArgs(process.argv);
+  const earlyStop = !process.argv.includes("--no-early-stop");
   if (args.help || !args.positionals.length) {
-    console.log("usage: node fetch-cninfo.mjs [--run <id>] [--years N] [--max-pages N] [codes...]");
+    console.log("usage: node fetch-cninfo.mjs [--run <id>] [--years N] [--max-pages N] [--no-early-stop] [codes...]");
     process.exit(args.help ? 0 : 1);
   }
   const runId = args.runId;
@@ -79,6 +85,10 @@ async function main() {
   // positionals include "--max-pages"/"--years" and their values; keep only
   // bare codes (6-digit) so option values never leak into the code list.
   const codes = args.positionals.filter((a) => /^\d{6}$/.test(a));
+  if (!codes.length) {
+    console.error("no 6-digit codes given");
+    process.exit(1);
+  }
   const seDate = `${Number(runId.slice(0, 4)) - windowYears}-01-01~${runId.slice(0, 10)}`;
 
   for (const code of codes) {
@@ -87,14 +97,26 @@ async function main() {
     let matched = 0;
     let dropped = 0;
     let truncated = false;
+    let stopReason = null;
+    let consecutivePollution = 0;
     for (; page <= maxPages; page++) {
       const key = keyFor(["cninfo", code, `p${page}`]);
-      if (await loadRaw(runId, key)) {
-        // already fetched: reuse its pollution stats for the tally
-        const rec = await loadRaw(runId, key);
+      let rec = await loadRaw(runId, key);
+      if (rec) {
+        // already fetched: reuse its per-page stats for the tally and honor
+        // its recorded stop reason so a resume reproduces the same outcome —
+        // unless --no-early-stop is given, which ignores a recorded pollution
+        // stop and keeps fetching (the raw pages are kept regardless, so a
+        // user can always resume past a stop by re-running with that flag).
         matched += rec.meta?.sec_matched ?? 0;
         dropped += rec.meta?.sec_dropped ?? 0;
-        if (rec.meta?.record_ended) break;
+        if (rec.meta?.stop_reason === "natural") break;
+        if (rec.meta?.stop_reason === "budget" || (rec.meta?.stop_reason === "pollution" && earlyStop)) {
+          truncated = true;
+          stopReason = rec.meta.stop_reason;
+          break;
+        }
+        if (rec.meta?.page_polluted) consecutivePollution++;
         continue;
       }
       const body = await fetchJson(QUERY, {
@@ -113,20 +135,30 @@ async function main() {
       const pageDropped = anns.length - pageMatched;
       matched += pageMatched;
       dropped += pageDropped;
-      const recordEnded = !pageMatched && pageDropped > 0 && page > 1;
+      const pagePolluted = pageMatched === 0 && pageDropped > 0;
+      if (pagePolluted) consecutivePollution++;
+      else consecutivePollution = 0;
+      const total = body?.totalAnnouncement ?? 0;
+      const pages = body?.totalpages ?? 0;
+      // Decide the stop reason for THIS page before storing it, so the
+      // stored meta is the single source of truth on resume.
+      let thisStop = null;
+      if (!total || page >= pages) thisStop = "natural";
+      else if (earlyStop && consecutivePollution >= 2) thisStop = "pollution";
+      else if (page >= maxPages) thisStop = "budget";
       await saveRaw(runId, key, {
         url: QUERY,
         body,
-        meta: { stage: "cninfo", code, page, seDate, sec_matched: pageMatched, sec_dropped: pageDropped, record_ended: recordEnded },
+        meta: { stage: "cninfo", code, page, seDate, sec_matched: pageMatched, sec_dropped: pageDropped, page_polluted: pagePolluted, stop_reason: thisStop },
       });
-      const total = body?.totalAnnouncement ?? 0;
-      const pages = body?.totalpages ?? 0;
-      if (!total || page >= pages) break;
-      if (recordEnded) { truncated = true; break; } // pure-pollution page: stop early
-      if (page >= maxPages) { truncated = true; break; } // budget cap
+      if (thisStop) {
+        if (thisStop !== "natural") { truncated = true; stopReason = thisStop; }
+        break;
+      }
     }
-    if (page > maxPages) truncated = true;
-    console.log(`  ${code}: ${matched} matched / ${dropped} dropped${truncated ? " (record truncated by budget or pollution)" : ""}`);
+    if (page > maxPages) { truncated = true; stopReason = "budget"; }
+    const why = truncated ? ` (truncated: ${stopReason ?? "budget"})` : "";
+    console.log(`  ${code}: ${matched} matched / ${dropped} dropped${why}`);
 
     // 2. latest annual report PDF (category filter, first hit wins)
     const key = keyFor(["cninfo_ar", code]);

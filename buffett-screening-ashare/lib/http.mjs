@@ -15,7 +15,7 @@ export const CNINFO_REFERER = "http://www.cninfo.com.cn/";
 // Version of the endpoint/field mapping this build was written against.
 // Recorded on every stored raw body so a derived figure can always
 // state which mapping produced it.
-export const MAPPING_VERSION = "2026-08-15.1";
+export const MAPPING_VERSION = "2026-08-15.2";
 
 // ---------- rate limiting ----------
 

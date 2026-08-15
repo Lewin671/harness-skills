@@ -36,8 +36,11 @@ verdict class; none of it converts `unknown` into `pass` by itself.
   announcement page carries `meta.sec_matched` / `meta.sec_dropped`
   counts (fetch-cninfo.mjs) and the governance pass must keep only
   rows whose `secCode` equals the target, reporting the dropped count.
-  A page with zero matching rows is treated as pure pollution and stops
-  the record early; `--max-pages` caps the budget regardless.
+  The fetch script stops early only after **two consecutive** pages
+  with zero matching rows (a sparse page amid an interleaved record
+  must not truncate) and records the stop reason in meta, so a resume
+  reproduces the outcome; `--no-early-stop` resumes past a recorded
+  pollution stop. `--max-pages` caps the budget regardless.
 - **The one-direction rule.** These sources can push a gate from
   `unknown` to `fail` or keep it `unknown`; they cannot push it to
   `pass`. An honest automated run ends with the management gate named

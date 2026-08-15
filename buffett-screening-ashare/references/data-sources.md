@@ -124,12 +124,14 @@ recipe, both exchanges:
   pages) including other companies' rows (鹏鼎控股, 中电科芯片). The
   announcement-record query is therefore *polluted*: filter every row
   on `secCode === <code>` (fetch-cninfo.mjs records
-  `meta.sec_matched` / `meta.sec_dropped` per page and stops early on
-  a pure-pollution page), and cap the record with `--max-pages`
-  (default 30 pages ≈ 900 rows, far beyond a normal 6-year record) so
-  an announcement-heavy code cannot blow the work budget. The annual
-  report query (`category=category_ndbg_szsh`) is category-filtered and
-  did not exhibit the pollution.
+  `meta.sec_matched` / `meta.sec_dropped` per page, stops early only
+  after two consecutive pollution-only pages, and records the stop
+  reason in meta; `--no-early-stop` resumes past a recorded pollution
+  stop), and cap the record with `--max-pages` (default 30 pages ≈ 900
+  rows, far beyond a normal 6-year record) so an announcement-heavy
+  code cannot blow the work budget. The annual report query
+  (`category=category_ndbg_szsh`) is category-filtered and did not
+  exhibit the pollution.
 - Annual-report PDF: `https://static.cninfo.com.cn/<adjunctUrl>`.
 - Announcement record (governance): same query without the category
   filter over the window, filter titles locally for the governance

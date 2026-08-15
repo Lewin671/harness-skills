@@ -104,6 +104,9 @@ buckets across its life — deduplicate on code, keep the latest period.
    returned ~192 polluted pages in verification). Every cninfo page
    records `sec_matched`/`sec_dropped` counts; the governance pass
    filters on `secCode` and reports the dropped share (governance.md).
+   Early stop fires only after two consecutive pollution-only pages
+   (`--no-early-stop` disables it and resumes past a recorded stop;
+   the stop reason is stored in the last page's meta).
 
 **Derive, never accept.** `derive.mjs` computes the frozen metrics from
 the stored raw bodies — adjusted EBIT, RONTOA, ROE, the owner-earnings
