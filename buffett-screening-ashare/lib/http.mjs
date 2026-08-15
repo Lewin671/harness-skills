@@ -52,8 +52,9 @@ export async function fetchText(url, { headers = {}, method = "GET", body, retri
       }
       throw new Error(`HTTP ${res.status} for ${url}`);
     } catch (err) {
+      // Terminal HTTP statuses rethrow; network errors are retryable.
+      if (err instanceof Error && err.message.startsWith("HTTP")) throw err;
       lastErr = err;
-      // empty reply / network errors are retryable
     }
   }
   throw lastErr ?? new Error(`fetch failed: ${url}`);

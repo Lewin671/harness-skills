@@ -59,6 +59,26 @@ freeze violation under the doctrine contract. Where the template says
 | Margin of safety | price ≤ low case × (1 − 20%); discount rises to 30% when the low-to-high range width exceeds 50% | Author's policy; the requirement itself is Buffett-stated (1992 letter) |
 | Output | low / base / high; the low case decides the gate; a point estimate alone is the fabricated-valuation signature | Author's policy |
 
+## Accounting-Model Classification (Gate 1)
+
+The doctrine layer implements only the ordinary non-financial model;
+the A-share adapter inherits that and fixes its classification rule.
+Default, author's policy unless noted:
+
+- CSRC industry (`INDUSTRYCSRC1`, org-info table) in 金融业-货币金融服务
+  (banks and deposit-takers), 金融业-资本市场服务 (brokers), 金融业-保险业,
+  金融业-其他金融业 → `na`, out of scope.
+- 电力、热力、燃气及水生产和供应业 (rate-regulated utilities) → `na`,
+  out of scope, per the doctrine layer's default.
+- Belt-and-braces: a candidate whose full-statement fetch returns no
+  rows in the industrial G-tables is a classification `unknown`
+  (blocks) — never evaluated from empty data. Verified: banks have no
+  rows in `RPT_F10_FINANCE_G*`, because Eastmoney serves financial
+  filers a different statement model.
+- 房地产业 → `ordinary_nonfinancial`, with the separate subgroup
+  reporting in cas-conventions.md.
+- Everything else → `ordinary_nonfinancial`.
+
 ## Thresholds Never Imported
 
 No ROE floor, no debt-to-equity ceiling, no P/E or P/B cutoff, no
