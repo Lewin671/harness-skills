@@ -74,9 +74,9 @@ What the boundary does *not* do:
   edits until the run ends when a stable reading matters.
 
 A run leaves a result file and an event log in TMPDIR (result removed
-on exit `4`/`5`). Review passes `--ephemeral` and leaves no Codex
-session; consult leaves one in codex's own session store — what
-`--continue` resumes.
+on exit `4`/`5` and on a signalled exit). Review passes `--ephemeral`
+and leaves no Codex session; consult leaves one in codex's own session
+store — what `--continue` resumes.
 
 ## Independence Contract
 

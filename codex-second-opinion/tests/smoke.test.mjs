@@ -171,6 +171,22 @@ test('review of a clean tree exits 2 before any codex invocation', () => {
   assert.equal(result.argv.length, 0)
 })
 
+test('base review with no changes since the merge base exits 2', () => {
+  const result = run(['review', '--base', 'HEAD'])
+  assert.equal(result.status, 2, result.stderr)
+  assert.match(result.stderr, /nothing to review: no changes since the merge base with HEAD/)
+  assert.equal(result.argv.length, 0, 'codex must not run for an empty base scope')
+})
+
+test('review of an empty commit exits 2 before any codex invocation', () => {
+  // The fixture's root commit was created with --allow-empty.
+  const empty = sh('git rev-list --max-parents=0 HEAD', { cwd: repo }).stdout.trim()
+  const result = run(['review', '--commit', empty])
+  assert.equal(result.status, 2, result.stderr)
+  assert.match(result.stderr, /is an empty commit/)
+  assert.equal(result.argv.length, 0, 'codex must not run for an empty commit')
+})
+
 test('review of a change succeeds with safety args, markers and prefixes', () => {
   writeFileSync(join(repo, 'untracked.txt'), 'new\n')
   try {
@@ -374,6 +390,37 @@ test('snapshot tolerates an unchanged committed symlink to an unrelated external
   const result = run(['review', '--uncommitted'], {}, dotRepo)
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stderr, /^snapshot: ready [0-9a-f]{64}$/m)
+})
+
+test('snapshot refuses a working tree with unresolved merge entries', () => {
+  const mergeRepo = join(root, 'merge-conflict-repo')
+  mkdirSync(mergeRepo)
+  sh('git init -q && echo base > f.txt && git add f.txt && git -c user.email=t@t -c user.name=t commit -q -m base', { cwd: mergeRepo })
+  sh('git checkout -q -b side && echo side > f.txt && git -c user.email=t@t -c user.name=t commit -q -am side', { cwd: mergeRepo })
+  sh('git checkout -q - && echo main > f.txt && git -c user.email=t@t -c user.name=t commit -q -am main', { cwd: mergeRepo })
+  const merge = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'merge', 'side'], { cwd: mergeRepo, encoding: 'utf8' })
+  assert.notEqual(merge.status, 0, 'the merge must conflict')
+
+  const result = run(['review', '--uncommitted'], {}, mergeRepo)
+  assert.equal(result.status, 3, result.stderr)
+  assert.match(result.stderr, /unresolved merge entries/)
+  assert.equal(result.argv.length, 0, 'codex must not run on a conflicted tree')
+})
+
+test('snapshot refuses live changes inside a submodule', () => {
+  const subSource = join(root, 'submodule-source')
+  const superRepo = join(root, 'submodule-super')
+  mkdirSync(subSource)
+  sh('git init -q && echo one > s.txt && git add s.txt && git -c user.email=t@t -c user.name=t commit -q -m init', { cwd: subSource })
+  mkdirSync(superRepo)
+  sh('git init -q && echo top > top.txt && git add top.txt && git -c user.email=t@t -c user.name=t commit -q -m init', { cwd: superRepo })
+  sh(`git -c protocol.file.allow=always submodule add -q "${subSource}" mysub && git -c user.email=t@t -c user.name=t commit -q -m sub`, { cwd: superRepo })
+  writeFileSync(join(superRepo, 'mysub', 's.txt'), 'dirty\n')
+
+  const result = run(['review', '--uncommitted'], {}, superRepo)
+  assert.equal(result.status, 3, result.stderr)
+  assert.match(result.stderr, /live changes inside submodule mysub/)
+  assert.equal(result.argv.length, 0, 'codex must not run with a dirty submodule')
 })
 
 test('a repository with no commits yet gets a make-an-initial-commit hint', () => {
