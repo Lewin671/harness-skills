@@ -17,10 +17,10 @@ description: >-
 # Buffett Screening — A-Share Implementation
 
 This skill is the A-share adapter for `buffett-screening`. The doctrine
-skill is normative here: its contract (freeze before candidates are
-visible), its four states, its gate-versus-scored split, its pruning
-bounds, and its reporting obligations all apply unchanged. Load it
-first; this file and `references/` state only what A-shares change.
+skill is normative here: its freeze-before-candidates contract, its four
+states, its gate-versus-scored split, its pruning bounds, and its
+reporting obligations all apply unchanged. Load it first; this file and
+`references/` state only what A-shares change.
 
 ## What A-Shares Change
 

@@ -14,6 +14,11 @@ export const UA =
 export const EASTMONEY_REFERER = "https://data.eastmoney.com/";
 export const CNINFO_REFERER = "http://www.cninfo.com.cn/";
 
+// Version of the endpoint/field mapping this build was written against.
+// Recorded on every stored raw body so a derived figure can always
+// state which mapping produced it.
+export const MAPPING_VERSION = "2026-08-15.1";
+
 // ---------- rate limiting ----------
 
 const lastStart = new Map(); // host -> timestamp of last request start
@@ -115,7 +120,17 @@ export async function saveRaw(runId, key, { url, body, meta = {} }) {
   const tmp = `${file}.tmp`;
   await fs.writeFile(
     tmp,
-    JSON.stringify({ url, fetched_at: new Date().toISOString(), meta, body }, null, 1),
+    JSON.stringify(
+      {
+        url,
+        fetched_at: new Date().toISOString(),
+        mapping_version: MAPPING_VERSION,
+        meta,
+        body,
+      },
+      null,
+      1,
+    ),
   );
   await fs.rename(tmp, file);
 }
