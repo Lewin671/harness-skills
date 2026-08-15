@@ -142,9 +142,15 @@ and amortization plus qualifying non-cash charges, minus **maintenance**
 capital expenditure and minus the additional working capital required
 to maintain competitive position and unit volume. This is Buffett's
 definition and it is **not computable from structured data**:
-maintenance capex is not a disclosed field. Depreciation is not a
-substitute for it, and neither is a management label — reconcile asset
-age, capacity and replacement projects, or return `unknown`.
+maintenance capex is not a disclosed field. He says so himself in the
+same appendix — the maintenance-capex term "must be a guess — and one
+sometimes very difficult to make" — and still calls the result the
+relevant figure for valuation, preferring to be "vaguely right" over
+"precisely wrong". A screen that reports a precise owner-earnings
+figure has therefore departed from the definition it claims to
+implement. Depreciation is not a substitute for the term, and neither
+is a management label — reconcile asset age, capacity and replacement
+projects, or return `unknown`.
 
 **Owner-earnings proxy.** Cash flow from operations minus total
 capitalized expenditure, under a frozen policy on what counts as
