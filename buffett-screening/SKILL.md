@@ -184,7 +184,7 @@ then what remains unresolved on each survivor.
 | ROE inflated by buybacks, leverage or a negative equity base | Report return on tangible operating capital alongside; `na` on non-positive average equity |
 | Bank or insurer measured with an industrial leverage rule | Only the ordinary non-financial model exists; classify first, mark `na`, and report the excluded count population-wide |
 | Price gate applied late, but incumbents declared "guaranteed" before it | Price is a hard gate; no cutoff exists until N candidates have cleared it too |
-| Dividends added to value created *and* deducted from capital retained | Counts the distribution twice; the one-dollar numerator excludes dividends |
+| A distribution added to value created *and* deducted from capital retained | Counts it twice; the one-dollar numerator excludes both dividends and repurchases, or the same policy scores differently depending on how cash was returned |
 | Net-income-based owner earnings discounted, then debt subtracted | Charges financing twice; build the valuation input from NOPAT |
 | Cyclical peak normalized as earning power | Fix the normalization rule in the freeze; excluding weak years as one-offs after seeing them is answer-fitting |
 | A DCF with invented growth and discount assumptions | Freeze horizon, terminal growth and required return; report low/base/high, not a point estimate |

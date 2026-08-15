@@ -55,19 +55,34 @@ const misses = [];
 
 for (const { text: line, n } of lines) {
   const label = line.startsWith("|") ? line.split("|")[1]?.trim() : `para ${n}`;
-  for (const m of line.matchAll(/"([^"]{25,})"/g)) {
+  // Every double-quoted span is a citation claim, including short ones
+  // like "An offering price". A length floor here is not a filter on
+  // prose, it is a hole: whatever sits under it can be corrupted later
+  // and still pass. Anything in this file that is not Buffett's wording
+  // must therefore avoid double quotes rather than rely on being short.
+  for (const m of line.matchAll(/"([^"]{4,})"/g)) {
     // An ellipsis marks an omission, so no single literal spans the whole
-    // quotation. Check **every** fragment: verifying only the longest
-    // lets anything on the short side of an ellipsis drift unnoticed.
+    // quotation. Every fragment is checked, at any length -- a filter
+    // here would leave short fragments unprotected, which is the same
+    // hole one level down.
     const fragments = m[1]
       .split(/\s*…\s*/)
       .map((s) => s.trim())
-      .filter((s) => s.length >= 12);
+      .filter(Boolean);
     if (!fragments.length) continue;
-    // One file must contain *all* the fragments. Checking each fragment
-    // against the corpus as a whole would let a quotation assembled from
-    // two different letters pass as a single citation.
-    const hit = Object.entries(corpus).find(([, t]) => fragments.every((f) => t.includes(f)));
+    // One file must contain all the fragments, **in order and without
+    // overlap**. Checking membership alone would accept a quotation
+    // assembled from two different letters, or one whose clauses were
+    // reordered into a sentence Buffett never wrote.
+    const hit = Object.entries(corpus).find(([, t]) => {
+      let from = 0;
+      return fragments.every((f) => {
+        const at = t.indexOf(f, from);
+        if (at < 0) return false;
+        from = at + f.length;
+        return true;
+      });
+    });
     if (hit) {
       ok++;
       if (LIST) console.log(`  ok    [${label}] -> ${hit[0]}`);

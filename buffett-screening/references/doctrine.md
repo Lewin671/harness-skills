@@ -208,7 +208,7 @@ it is the primary source for the **margin of safety**, in the canon
 above. Two wrong citations to a letter say nothing about what that
 letter does contain.
 
-**The one-dollar test was said to have been "later corrected" because
+**The one-dollar test was said to have been *later corrected* because
 market prices distort it.** No support was found. The Owner's Manual
 still applies the test on a five-year rolling basis in its current
 form. The claim was plausible, useful-sounding, and invented — the
