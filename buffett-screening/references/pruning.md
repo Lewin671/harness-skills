@@ -1,30 +1,30 @@
 # Provable Pruning And Convergence
 
-Evaluating every member of a large population exhaustively is usually
-impossible: the cheap bulk source carries a few fields, the complete
-per-entity source costs a request each. So the pipeline computes a
-score bound from the cheap source and only fetches entities whose bound
-could still place. That is sound — *if* the bound is provable. It is
-the step where a screen most often turns into a sample while still
-being described as complete.
+Evaluating every listed company exhaustively is usually impossible: the
+cheap bulk source carries a few fields, the complete per-company
+filings cost a request each. So the pipeline computes a score bound
+from the cheap source and only fetches companies whose bound could
+still place. That is sound — *if* the bound is provable. It is the step
+where a screen most often turns into a sample while still being
+described as complete.
 
 ## A Bound Is Not A Guess With Margin
 
 The tempting shortcut is to compute the criterion from whatever the
 bulk source happens to carry, then relax the threshold by a fixed
 margin to absorb the difference. It does not work, because a proxy's
-error is a distribution, not a bound. A margin absorbs the typical
-case and silently drops the tail — and the tail is exactly where
-unusual, interesting candidates live.
+error is a distribution, not a bound. A margin absorbs the typical case
+and silently drops the tail — and the tail is exactly where the
+unusual, interesting companies live.
 
-A worked example from a real run. A financial screen needed
+A worked example from a real run. A screen needed
 `operating cash flow / consolidated net profit` and
 `net profit / average parent equity`, but the bulk table carried only
 *parent-attributable* profit and *period-end total* equity. Both were
 used as proxies with a 20% margin. Both are unbounded:
 
 - Consolidated and parent-attributable profit diverge by however much
-  the minority interest is. Measured across 2,390 entity-years, the
+  the minority interest is. Measured across 2,390 company-years, the
   99th percentile of relative deviation was 31.7%, and 2.4% of the
   sample exceeded the 20% margin outright.
 - Period-end total equity and average parent equity differ by the
@@ -33,11 +33,31 @@ used as proxies with a 20% margin. Both are unbounded:
   equity can put the period-end total below the average. Unbounded in
   magnitude *and* unsigned, which is the point of the example.
 
-One entity had a 51% minority interest. Its proxied return looked
+One company had a 51% minority interest. Its proxied return looked
 mediocre, its bound was cut, it was never fetched. Its actual value on
 the exact definition was 78.6% — it should have ranked **first**. The
 pipeline had been reporting "this is pruning, not sampling" the whole
 time.
+
+## Two Bounds This Domain Will Tempt You Into
+
+**Price multiples do not bound intrinsic value.** P/E, P/B, EV/EBITDA
+and earnings yield relate to intrinsic value through the growth path,
+the reinvestment requirement, the capital structure and the required
+return — every one of them unobserved in the bulk source. A company
+trading at 40 times earnings can sit below a conservative intrinsic
+value and one at 8 times can sit far above it. Pre-filtering the
+population on a multiple is not pruning; it is replacing the doctrine
+with the cigar-butt vintage it repudiated. Price runs last, over
+survivors, and drops nobody before then.
+
+**The owner-earnings proxy does not bound literal owner earnings.**
+`CFO − total capex` differs from Buffett's definition by growth capex
+and by the maintenance working-capital term, in a direction that
+depends on how fast the company is expanding. A high-reinvestment
+compounder — the exact profile the doctrine is hunting — shows the
+worst proxy value in the population. Pruning on it selects against the
+thing being screened for.
 
 ## What Makes A Bound Provable
 
@@ -50,53 +70,51 @@ exact pass, and pruning on it is sound.
 
 Do not assume identity from matching column names — and do not accept
 an empirical join as proof either. Joining the two sources over every
-entity-period fetched both ways and asserting zero maximum relative
+company-period fetched both ways and asserting zero maximum relative
 difference is *validation*, not a guarantee: the overlap is exactly the
 part you did fetch, and a scope- or template-specific divergence can
-live entirely in the tail you did not. A screen pruned on that evidence
-alone can drop the divergent entities while still reporting
-completeness.
+live entirely in the tail you did not. Financial-sector filings are the
+usual place this breaks, because they use a different statement
+template and the bulk table maps them by best effort.
 
-Require a population-wide invariant as well, and state which one:
-
-- a documented shared definition (both endpoints specify the same
-  field, the same scope, the same aggregation), or
-- a common canonical origin (one source is derived from the other, or
-  both from the same upstream record), or
-- a structural argument covering every sub-population — including the
-  ones served by a *different* source template, which is where these
-  guarantees usually break.
+Require a population-wide invariant as well, and state which one: a
+documented shared definition (both sources specify the same field, the
+same scope, the same aggregation), a common canonical origin (one
+derived from the other, or both from the same filing), or a structural
+argument covering every sub-population — including the ones served by a
+different statement template.
 
 Then run the join as a check on that claim. Record the invariant, the
 sample size, and the observed maximum difference; all three belong in
 the report, because together they are the load-bearing support under
 the completeness statement.
 
-**Monotone relations.** Occasionally a proxy is provably one-sided. But
-"one-sided" is a claim about three things at once, and stating fewer
+**Monotone relations.** Occasionally a proxy is provably one-sided.
+"One-sided" is a claim about three things at once, and stating fewer
 than three gets the direction wrong:
 
 1. **The operand sign domain.** A larger denominator lowers `n/d` only
    while `n >= 0`. With a negative numerator a larger denominator moves
-   the ratio *up*, toward zero. Establish that the operands cannot
-   change sign over the population — or exclude the sign-crossing
-   entities from this argument and handle them exactly.
+   the ratio *up*, toward zero. Loss-making years and negative equity
+   are common in any wide screen, so establish that the operands cannot
+   change sign — or exclude the sign-crossing companies from the
+   argument and handle them exactly.
 2. **The comparator.** A proxy that can only understate proves a `pass`
    for a minimum threshold (`ratio >= T`) and proves nothing for a
    maximum threshold (`ratio <= T`), where it is the overstating proxy
    that proves the `pass`.
-3. **Which side you need.** Deciding that a candidate *cannot qualify*
+3. **Which side you need.** Deciding that a company *cannot qualify*
    requires a bound on the optimistic side. A one-sided bound in the
    pessimistic direction raises confidence in a `pass` and justifies
    dropping nothing.
 
 Get any of the three wrong and the construction will mark a hard gate
-proven while the exact value fails — the same silent admission the
-whole contract exists to prevent.
+proven while the exact value fails — the silent admission the whole
+contract exists to prevent.
 
 Everything else — different scope, different aggregation, a field the
 bulk source simply lacks — is unusable for pruning. Mark the criterion
-undetermined, give the entity the maximal bound, and fetch it. This
+undetermined, give the company the maximal bound, and fetch it. This
 costs requests. It is the price of the completeness claim.
 
 ## Score Intervals
@@ -105,9 +123,9 @@ Each evaluated candidate carries `[lo, hi]`:
 
 - `lo` — points from criteria *proven* satisfied.
 - `hi` — `lo` plus the points from every criterion still `unknown`.
-- `na` (structurally inapplicable) adds to neither. It is not a free
-  pass and not a penalty; it caps what that candidate can reach, which
-  is the honest consequence of a framework that does not fit it.
+- `na` adds to neither. It is not a free pass and not a penalty; it
+  caps what that candidate can reach, which is the honest consequence
+  of a framework that does not fit it.
 
 `lo` ranks. `hi` decides what still needs work.
 
@@ -130,10 +148,19 @@ taken against its key was invalid. Until N guaranteed incumbents exist,
 **nothing may be dropped on placement** — resolve candidates in
 best-case-key order and let the set fill.
 
+In this domain, be honest about what "guaranteed" costs. If the moat
+gate legitimately stays `unknown` on every candidate, then no candidate
+is guaranteed admissible, no cutoff exists, and nothing may be pruned
+on placement at all. The screen then converges only over the computable
+gates, and the report must say that the ranking is over the computable
+evidence with the qualitative gates outstanding. Declaring convergence
+by quietly treating an unresolved moat gate as a pass is the same
+silent admission in its most consequential form.
+
 **Then compare best case against it.** Build the challenger's full sort
 key under the most favourable assumption available to it:
 
-- Unknown criteria contribute their **maximum** possible atom count.
+- Unknown criteria contribute their **maximum** possible points.
 - Unknown tie-break values take the **most favourable** value, not zero
   and not the current value. A missing figure that ranks descending is
   optimistically `+inf`. Defaulting it to zero silently declares the
@@ -141,11 +168,11 @@ key under the most favourable assumption available to it:
 
 A challenger can be set aside only when this best-case key still loses
 to the cutoff. "Loses" needs care: if the sort key ends in a unique
-discriminator (an id), the keys form a total order and strict
-comparison is exact. Without such a discriminator, keys can tie, and a
-challenger tying the cutoff can still take *N*-th place — so compare
-with *reaches or ties*, not *strictly beats*. Prefer the unique
-discriminator; it makes the test decidable.
+discriminator, the keys form a total order and strict comparison is
+exact. Without one, keys can tie, and a challenger tying the cutoff can
+still take *N*-th place — so compare with *reaches or ties*, not
+*strictly beats*. Prefer the unique discriminator; it makes the test
+decidable.
 
 Two counters must both reach zero:
 
@@ -173,15 +200,18 @@ to stop.
 
 ## Order Of Operations
 
-1. Gate on intrinsic attributes (identity, membership, hard limits).
-   No accounting or interpretation, so no proxy risk.
+1. The competence allow-list and other intrinsic-attribute gates. No
+   accounting, no interpretation, no proxy risk.
 2. Compute the provable-bound criteria from the bulk source. Prune only
    on a proven `fail`.
-3. Fetch the survivors exactly; compute every criterion.
-4. Resolve the expensive checks in best-case-key order, until N
-   candidates are guaranteed admissible and a cutoff exists.
-5. Recompute the threshold and repeat from 3 until both counters
-   are zero.
+3. Fetch the survivors' filings; compute every criterion exactly.
+4. Resolve the qualitative gates in best-case-key order, until N
+   candidates are guaranteed admissible and a cutoff exists — or until
+   it is established that none can be, and the run is reported as
+   converged over the computable gates only.
+5. Value the survivors and apply the price gate.
+6. Recompute the threshold and repeat from 3 until both counters are
+   zero.
 
 Log what each stage dropped and why. A pipeline that reports only
 survivors cannot be audited, and the exclusion counts are the part a
