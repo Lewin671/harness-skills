@@ -22,7 +22,9 @@ themselves evidence about how this domain fails.
 
 Hold anything added later to the same standard. Model recall of a
 Buffett quotation is not evidence for it, and a second model agreeing
-is not either: the same secondary sources trained both.
+is not either: the same secondary sources trained both. The corpus is
+checked in at `../sources/` precisely so this costs one `grep` — there
+is no excuse for shipping an unverified citation.
 
 ## Primary-Source Canon
 

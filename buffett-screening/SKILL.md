@@ -37,6 +37,17 @@ Read [references/doctrine.md](references/doctrine.md) before writing
 any criterion down. It carries the primary-source canon, which vintage
 to encode, and the provenance of every number.
 
+**When the references do not answer the question, go to the letters.**
+`sources/` holds every shareholder letter from 1977 on, the Owner's
+Manual and the acquisition criteria, as plain text — because these
+files are a condensation and drop most of the reasoning behind each
+rule. Search there before answering from memory, and *always* before
+attributing a rule or a number to Buffett: recalling a quotation is not
+evidence for it, and this is a domain where a fabricated citation reads
+exactly like a real one. See [sources/README.md](sources/README.md) for
+the search patterns and the two traps (curly apostrophes; a miss proves
+only that the phrase is absent from this corpus).
+
 ## The Doctrine
 
 > An understandable and sufficiently predictable business, with durable
