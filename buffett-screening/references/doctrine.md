@@ -18,12 +18,25 @@ rather than recalled, and the corpus it was checked against is in
 `../sources/`.
 
 Two conventions make the check auditable. Text in quotation marks is
-**verbatim** — it can be grepped out of the named file, and if a
-quotation spans an omission that is marked with an ellipsis. Text
-without quotation marks is a **restatement** in this file's words, and
+**Buffett's wording**, with an ellipsis marking any omission. Text
+without quotation marks is a **restatement** in this file's words and
 carries no claim about wording. Where a row names more than one source,
 the quotation comes from the first; the others state the same principle
 differently.
+
+Quotations keep the source's own punctuation, including the curly
+apostrophes and the scare quotes Buffett puts around terms like
+“moat”, “castle” and “Roman Candles”. That is deliberate: it means a
+quotation from this file can be pasted into `grep -F` against
+`../sources/` and will match. Reflowing those marks into ASCII reads
+more cleanly and silently breaks the check, which is the whole reason
+the corpus is here.
+
+Two things still defeat a literal search — an ellipsis marking an
+omission, and a line break in the source, since the corpus is one
+paragraph per line but a quotation may start mid-sentence. If a search
+misses, retry on the longest run of words inside the quotation that
+contains neither, before concluding the citation is bad.
 
 Three attributions that felt right did not survive the check and were
 corrected — they are recorded under *Corrected Attributions* at the
@@ -36,6 +49,20 @@ is not either: the same secondary sources trained both. The corpus is
 checked in at `../sources/` precisely so this costs one `grep` — there
 is no excuse for shipping an unverified citation.
 
+The promise is executable. After editing this table, run:
+
+```bash
+node ../verify-citations.mjs
+```
+
+It searches every quotation here against the corpus literally and exits
+non-zero on a miss. A miss means the quotation drifted from the source —
+usually by someone tidying an apostrophe or a dash — or that the
+attribution is wrong. Fix the quotation; do not relax the check. What it
+proves is narrow but real: the words appear in the corpus. It does not
+prove they appear in the letter this row names, nor that the claim built
+around them is a fair reading.
+
 ## Primary-Source Canon
 
 | Element | Position | Source |
@@ -44,17 +71,18 @@ is no excuse for shipping an unverified citation.
 | The four-part formulation | The business should be "(1) one that we can understand, (2) with favorable long-term prospects, (3) operated by honest and competent people, and (4) available at a very attractive price". Restated in 2007 as companies that have "a) a business we understand; b) favorable long-term economics; c) able and trustworthy management; and d) a sensible price tag" — note *attractive* becoming *sensible* | 1977 letter; 2007 letter, p. 6 |
 | Circle of competence | "You only have to be able to evaluate companies within your circle of competence. The size of that circle is not very important; knowing its boundaries, however, is vital." | 1996 letter |
 | Economic franchise | Arises from a product or service that "(1) is needed or desired; (2) is thought by its customers to have no close substitute and; (3) is not subject to price regulation" — demonstrated by the ability to price aggressively and earn high returns on capital. A franchise "can tolerate mis-management"; a mere business earns exceptional profits "only if it is the low-cost operator or if supply of its product or service is tight" | 1991 letter |
-| Economic goodwill | "What a business can be expected to earn on **unleveraged net tangible assets**, excluding any charges against earnings for amortization of Goodwill, is the best guide to the economic attractiveness of the operation." | 1983 letter, appendix *Goodwill and its Amortization: The Rules and The Realities* |
-| Owner earnings | "(a) reported earnings plus (b) depreciation, depletion, amortization, and certain other non-cash charges … less (c) the average annual amount of capitalized expenditures for plant and equipment, etc. that the business requires to fully maintain its long-term competitive position and its unit volume", plus any additional working capital required for the same purpose. He adds that "(c) must be a guess — and one sometimes very difficult to make" | 1986 letter, appendix *Purchase-Price Accounting Adjustments and the "Cash Flow" Fallacy* |
-| The one-dollar premise | "Unrestricted earnings should be retained only when there is a reasonable prospect — backed preferably by historical evidence or … by a thoughtful analysis of the future — that for every dollar retained by the corporation, at least one dollar of market value will be created for owners." The Owner's Manual states it as a test Berkshire applies to itself, in different words and "on a five-year rolling basis" | 1984 letter (quotation); Owner's Manual (restatement) |
+| Economic goodwill | "What a business can be expected to earn on unleveraged net tangible assets, excluding any charges against earnings for amortization of Goodwill, is the best guide to the economic attractiveness of the operation." | 1983 letter, appendix *Goodwill and its Amortization: The Rules and The Realities* |
+| Owner earnings | "(a) reported earnings plus (b) depreciation, depletion, amortization, and certain other non-cash charges … less ( c ) the average annual amount of capitalized expenditures for plant and equipment, etc. that the business requires to fully maintain its long-term competitive position and its unit volume", plus any additional working capital required for the same purpose. He adds that "( c ) must be a guess - and one sometimes very difficult to make" | 1986 letter, appendix *Purchase-Price Accounting Adjustments and the "Cash Flow" Fallacy* |
+| The one-dollar premise | "Unrestricted earnings should be retained only when there is a reasonable prospect - backed preferably by historical evidence or … by a thoughtful analysis of the future - that for every dollar retained by the corporation, at least one dollar of market value will be created for owners." The Owner's Manual states it as a test Berkshire applies to itself, in different words and "on a five-year rolling basis" | 1984 letter (quotation); Owner's Manual (restatement) |
+| Growth is not automatically value | "growth can destroy value if it requires cash inputs in the early years of a project or enterprise that exceed the discounted value of the cash that those assets will generate in later years" — and dividend yield, P/E, P/B and growth rates "have nothing to do with valuation except to the extent they provide clues to the amount and timing of cash flows" | 2000 letter |
 | Margin of safety | "we insist on a margin of safety in our purchase price. If we calculate the value of a common stock to be only slightly higher than its price, we're not interested in buying." Attributed by Buffett to Ben Graham as "the cornerstone of investment success" | 1992 letter |
 | Intrinsic value | "the discounted value of the cash that can be taken out of a business during its remaining life" — and an estimate rather than a precise figure, which two honest analysts looking at the same facts will compute differently | Owner's Manual |
 | Risk factors | Predictability of economics, management's ability, management's owner-orientation, purchase price, and inflation and tax effects — and these cannot be extracted from a database | 1993 letter |
 | The turn from cigar butts | "It's far better to buy a wonderful company at a fair price than a fair company at a wonderful price. Charlie understood this early; I was a slow learner." | 1989 letter, *Mistakes of the First Twenty-five Years (A Condensed Version)* |
-| Durable moat | "A truly great business must have an enduring moat that protects excellent returns on invested capital." Capitalism guarantees that competitors "will repeatedly assault any business castle that is earning high returns", so a formidable barrier — low-cost production, or a powerful world-wide brand — is essential. "Business history is filled with Roman Candles, companies whose moats proved illusory and were soon crossed." | 2007 letter, p. 6 |
-| Enduring rules out rapid change | "Our criterion of 'enduring' causes us to rule out companies in industries prone to rapid and continuous change… A moat that must be continuously rebuilt will eventually be no moat at all." | 2007 letter, p. 6 |
-| No superstar dependency | "if a business requires a superstar to produce great results, the business itself cannot be deemed great." The premier brain surgeon's partnership loses its moat when the surgeon goes; the Mayo Clinic's endures "even though you can't name its CEO" | 2007 letter, p. 6 |
-| Consistent earning power, no turnarounds | "Demonstrated consistent earning power (future projections are of no interest to us, nor are turnaround situations)" | Acquisition criteria, 2017 annual report p. 23 |
+| Durable moat | "A truly great business must have an enduring “moat” that protects excellent returns on invested capital." Capitalism guarantees that competitors "will repeatedly assault any business “castle” that is earning high returns", so a formidable barrier — low-cost production, or a powerful world-wide brand — is essential. Business history, he adds, is full of "“Roman Candles,” companies whose moats proved illusory and were soon crossed". | 2007 letter, p. 6 |
+| Enduring rules out rapid change | "Our criterion of “enduring” causes us to rule out companies in industries prone to rapid and continuous change… A moat that must be continuously rebuilt will eventually be no moat at all." | 2007 letter, p. 6 |
+| No superstar dependency | "if a business requires a superstar to produce great results, the business itself cannot be deemed great." The premier brain surgeon's partnership loses its moat when the surgeon goes; the Mayo Clinic's endures "even though you can’t name its CEO" | 2007 letter, p. 6 |
+| Consistent earning power, no turnarounds | "Demonstrated consistent earning power (future projections are of no interest to us, nor are “turnaround” situations)" | Acquisition criteria, 2017 annual report p. 23 |
 | Good returns on equity with little or no debt | "Businesses earning good returns on equity while employing little or no debt" | Acquisition criteria, 2017 annual report p. 23 |
 
 ## What Must Not Be Copied From The Acquisition Criteria

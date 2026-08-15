@@ -21,9 +21,15 @@ question is unanswerable in a useful way and yields yes for everything.
 
 So do not implement it as a judgment at all. During the freeze, have
 the user declare the boundary — an allow-list of industries or business
-models, optionally with named exclusions — and run it as the first
-filter in the funnel, where it is an intrinsic-attribute test with no
-accounting and no interpretation.
+models, optionally with named exclusions — and run it near the front of
+the funnel, where it is an intrinsic-attribute test with no accounting
+and no interpretation.
+
+It runs *second*, after the accounting-model classification in
+[applicability.md](applicability.md). Putting competence first would let
+its exclusions absorb the companies this skill's accounting model cannot
+read at all, and the report could then no longer state what fraction of
+the universe was actually assessable.
 
 Two consequences worth stating in the report. The allow-list is the
 single most population-shaping decision in the screen, so publish it
@@ -122,9 +128,23 @@ shortlist plus every challenger whose best-case key still reaches the
 cutoff is, and is sufficient by the same argument that justifies
 pruning. Note the circularity to avoid: an unverified gate leaves the
 candidate unresolved, so it cannot be one of the guaranteed incumbents
-that establish the cutoff in the first place. Resolve in
-best-case-key order until N are guaranteed, then let the cutoff bound
-the remaining work. See [pruning.md](pruning.md).
+that establish the cutoff in the first place.
+
+So resolve in best-case-key order — but be precise about when a cutoff
+starts to exist, because the qualitative gates are not the last ones.
+Price is also a hard gate and runs after these, so clearing the moat and
+management gates does **not** make a candidate guaranteed admissible;
+only clearing price as well does. A cutoff drawn at the end of
+qualitative adjudication is built on provisional incumbents, and pruning
+against it can discard candidates that belonged in the shortlist. Until
+N candidates have cleared *every* hard gate including price, order the
+work by best-case key but drop nothing on placement. See
+[pruning.md](pruning.md), which carries the full convergence test.
+
+This is why the qualitative pass is bounded by the *fetch* budget rather
+than by a cutoff in the early rounds. Resolve the strongest candidates
+first because that is where a cutoff will come from, not because a
+cutoff already exists to prune against.
 
 ## The Output Is A Referral List
 

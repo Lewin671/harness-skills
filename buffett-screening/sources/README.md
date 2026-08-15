@@ -78,3 +78,10 @@ node ../fetch-sources.mjs --list     # show targets without fetching
 
 Targets come from the site's own letters index, so a newly published
 letter is picked up with no code change.
+
+After any refetch, re-run the citation check — a change in extraction
+can silently break a quotation the doctrine file depends on:
+
+```bash
+node ../verify-citations.mjs
+```

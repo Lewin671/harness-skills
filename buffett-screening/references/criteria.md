@@ -112,10 +112,19 @@ and disclosed:
   cash and committed facilities to cover it, so the test does not rest
   on refinancing that may not be available.
 
-Any of the three unmeasurable leaves the gate `unknown`, which blocks.
-This is a floor, not the whole leverage view — "little or no debt"
-beyond survival is a scored criterion, because Buffett's preference for
-it is a matter of degree.
+**A company with no debt passes all three.** With no borrowings, cash
+interest is zero and the coverage ratio is undefined — feed that into
+"unmeasurable leaves the gate `unknown`" and the gate blocks precisely
+the debt-free companies the doctrine most favours, which is the guard
+refusing the case it was built to admit. Zero gross debt and zero cash
+interest is a `pass`, recorded as such. `unknown` is reserved for
+interest or debt data that is *missing*, which is a different fact and
+must not be inferred to be zero.
+
+Any of the three genuinely unmeasurable leaves the gate `unknown`, which
+blocks. This is a floor, not the whole leverage view — "little or no
+debt" beyond survival is a scored criterion, because Buffett's
+preference for it is a matter of degree.
 
 **6. Management: integrity reviewed, and no disqualifying capability
 record.** Buffett asks for businesses "operated by honest **and
@@ -127,13 +136,22 @@ clean compliance record. Both halves must clear:
   sources were reviewed and no unresolved material disqualifier was
   found. This certifies that the review happened, not that management is
   honest; no evidence can prove that. Word the verdict accordingly.
-- *Capability* — no unresolved evidence of value-destroying capital
-  allocation: acquisitions later written off, repurchases executed well
-  above contemporaneous estimated value, serial issuance without
-  matching value received. This is a floor against disqualifying
-  evidence, not a demonstration of skill — the positive record stays
-  scored, because outcomes cannot separate skill from an inherited
-  franchise.
+- *Capability* — no unresolved disqualifying evidence on **either**
+  half of the job. Capital allocation: acquisitions later written off,
+  repurchases executed well above contemporaneous estimated value,
+  serial issuance without matching value received. Operations: sustained
+  erosion of margins or returns on capital against sector peers over the
+  window, repeated restructurings, or a persistent gap between stated
+  operating targets and delivered results. A management team that has
+  simply never made an acquisition or a repurchase must still clear the
+  operating half — otherwise the gate passes anyone inactive enough,
+  which is not what "competent" means.
+
+  This remains a floor against disqualifying evidence, not a
+  demonstration of skill. The positive record stays scored, because
+  outcomes cannot separate skill from an inherited franchise — and note
+  that peer comparison inherits whatever the peer set was frozen to be,
+  so it belongs in the constants module like any other choice.
 
 Expect this gate to rest at `unknown` after an automated pass, for the
 same reason the moat gate does. See [adjudication.md](adjudication.md).
@@ -212,10 +230,14 @@ computed only when the denominator is positive and every component is
 present. Both sides must sit in the same ownership scope: the proxy is
 built from consolidated cash flow and consolidated capital expenditure,
 so pairing it with parent-attributable income puts the minority owners'
-cash in the numerator and not the denominator, which inflates
-conversion by exactly the minority share. Where non-controlling
-interests are material, either deduct their share on both sides or mark
-the metric `unknown` — do not mix the two scopes and report a ratio.
+cash in the numerator and not the denominator. The overstatement is not
+equal to the minority share and cannot be corrected by a rule of thumb:
+with a consolidated proxy of 100, consolidated income of 100 and parent
+income of 80, conversion reads 1.25 rather than 1.00 — a 25% inflation
+from a 20% minority interest — and it moves further with the
+subsidiaries' own cash conversion. Where non-controlling interests are
+material, either deduct their share on both sides or mark the metric
+`unknown`; do not mix the two scopes and report a ratio.
 
 **Incremental return on capital.** The change in average NOPAT between
 two smoothed windows, divided by the change in average net tangible
@@ -237,23 +259,30 @@ value surrendered; stock compensation as a share of owner earnings.
 **The one-dollar test.** Over a frozen window:
 
 ```
-value created    = Δ market capitalisation + repurchases − equity issued
+value created    = Δ market capitalisation − equity issued
 capital retained = Σ (normalised income to common − dividends − repurchases)
 ```
 
-Compute only when retained capital is positive. **Do not add dividends
-to the numerator.** A dividend is earnings handed straight to
-shareholders, not value produced by retained capital; crediting it above
-the line while deducting it below counts the same distribution twice and
-inflates the ratio. Worked check: opening market capitalisation 100,
-income 20, dividends 10, closing market capitalisation 110. The retained
-10 produced exactly 10 of market value, so the ratio is
-`10 / 10 = 1`. Adding dividends to the numerator would report 2.
-Repurchases *are* added back, because the cash left the company and
-depressed market capitalisation while still reaching shareholders. Multiple expansion and market cycles
-contaminate it, and Buffett himself qualified the naive five-year
-market-value formulation — so treat it as a scored signal, never a
-gate.
+Compute only when retained capital is positive.
+
+**Neither dividends nor repurchases belong in the numerator.** Both are
+earnings handed to shareholders rather than value produced by retained
+capital, both depress market capitalisation by the cash that leaves, and
+both are already removed from the denominator. Adding either one back
+counts the same distribution twice. Only equity *issued* is adjusted
+for, because it raises market capitalisation with money shareholders
+put in rather than money the business earned.
+
+The two distributions must be treated identically or the measure reports
+different answers for economically equivalent policies. Take opening
+market capitalisation 100, income 20, closing 110. Return 10 as a
+dividend: `10 / (20 − 10) = 1`. Return the same 10 as a repurchase:
+`10 / (20 − 10) = 1`. Adding repurchases back — but not dividends —
+would report 2 for the buyback and 1 for the dividend, which is an
+artefact of the formula, not a fact about the companies.
+
+Multiple expansion and market cycles contaminate the result whatever the
+convention, so treat it as a scored signal, never a gate.
 
 ## Intrinsic Value Is A Model, Not A Field
 
@@ -275,6 +304,20 @@ unlevered owner earnings = NOPAT + DD&A + qualifying non-cash charges
 ```
 
 with NOPAT as adjusted EBIT times one minus the normalised tax rate.
+
+**If the forecast grows, deduct the reinvestment that buys the growth.**
+The definition above subtracts only *maintenance* investment, which is
+correct for the business as it stands — it is what Buffett's definition
+measures. Project rising earnings on top of it and the growth arrives
+free: the capital expenditure and working capital required to produce
+those earnings never leave the model, and every growth company values
+high enough to clear the price gate. Buffett states the mechanism
+directly — "growth can destroy value if it requires cash inputs in the
+early years of a project or enterprise that exceed the discounted value
+of the cash that those assets will generate in later years" (2000
+letter). Either deduct total reinvestment along the growth path, or
+restrict this formula to a no-growth base case and justify any premium
+separately.
 The alternative is internally consistent too — discount the levered,
 net-income-based owner earnings at a cost of equity and subtract no
 debt — but the two must not be mixed. State which one the freeze

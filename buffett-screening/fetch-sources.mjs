@@ -57,9 +57,17 @@ const CP1252 = {
   0x87: "‡", 0x88: "ˆ", 0x89: "‰", 0x8a: "Š", 0x8b: "‹",
   0x8c: "Œ", 0x8e: "Ž", 0x91: "‘", 0x92: "’", 0x93: "“",
   0x94: "”", 0x95: "•", 0x96: "–", 0x97: "—", 0x98: "˜",
-  0x99: "™", 0x9a: "š", 0x9b: "›", 0x9c: "œ", 0x9e: "ž",
+  0x99: "™", 0x9a: "š", 0x9b: "¢", 0x9c: "œ", 0x9e: "ž",
   0x9f: "Ÿ", 0x80: "€",
 };
+
+// 0x9B departs from the standard table, which maps it to a single
+// right-pointing angle quote. Every occurrence in this corpus is a cent
+// sign: "a split-adjusted price of 31<9b> per share" and "I sold out at
+// 48<9b> per share" (1995), "sell assets for 80<9b> that in fact are
+// worth 1 dollar" (Owner's Manual). All three were read in the raw bytes
+// before the mapping was changed. Re-check this if the site ever
+// republishes the pre-1998 pages.
 
 const fixEncoding = (s) => s.replace(/[\x80-\x9f]/g, (c) => CP1252[c.charCodeAt(0)] ?? " ");
 
