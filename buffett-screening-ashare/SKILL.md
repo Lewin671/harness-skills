@@ -92,6 +92,19 @@ is not a population count: the bulk table mixes NEEQ and B-share rows
 into the same pages, and one company can appear in several market
 buckets across its life — deduplicate on code, keep the latest period.
 
+ Two operational notes from the 2026-08-15 verification:
+ - The scripts are safe to run in parallel (checkpoints use unique temp
+   names; last writer wins per key), so a slow statement stage can be
+   split across two instances on disjoint code lists — but a parallel
+   instance must not duplicate the same code list, or the two will
+   fetch the same keys and only one's results survive.
+ - `fetch-cninfo.mjs` caps the announcement record at 30 pages/code by
+   default (`--max-pages N` to change): the `searchkey` query is
+   full-text and can return thousands of other companies' rows (002625
+   returned ~192 polluted pages in verification). Every cninfo page
+   records `sec_matched`/`sec_dropped` counts; the governance pass
+   filters on `secCode` and reports the dropped share (governance.md).
+
 **Derive, never accept.** `derive.mjs` computes the frozen metrics from
 the stored raw bodies — adjusted EBIT, RONTOA, ROE, the owner-earnings
 proxy, gross debt and coverage — and reports per-field coverage and

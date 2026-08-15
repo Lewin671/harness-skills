@@ -70,7 +70,19 @@ browser User-Agent.
 
 - Batchable without a filter (page through the whole table, ≈50 pages
   at 500/page). Fields used: `SECURITY_CODE`, `LISTING_DATE`,
-  `FORMERNAME`, `SECURITY_TYPE`, `TATOLNUMBER`, `ACCOUNTFIRM_NAME`.
+  `FORMERNAME`, `SECURITY_TYPE`, `TATOLNUMBER`, `ACCOUNTFIRM_NAME`,
+  `INDUSTRYCSRC1` (the Gate 1 accounting-model classification key —
+  fetch-population.mjs requests it so no supplementary fetch is needed).
+- **Columns trap (verified 2026-08-15):** this table has **no**
+  `INDUSTRYCSRC2` column. Listing it in `columns=` makes the API return
+  an empty result for the whole request (`result: null`), silently.
+  Request only the columns above, or `columns=ALL`. The failure was
+  first mistaken for a filter problem; it is a bad column name.
+- **`TATOLNUMBER` unit is ambiguous.** Observed values (600519=13,
+  300750=14) are neither shares nor 亿股 nor 万股; do not use it for
+  per-share math. Derive shares as `TOTAL_PARENT_EQUITY / BPS` from the
+  full statements instead (verified: 600519 → ≈12.52 亿股, consistent
+  with the published 2025 figure).
 
 ### Dividends: `RPT_SHAREBONUS_DET`
 
@@ -107,6 +119,17 @@ recipe, both exchanges:
   XMLHttpRequest`.
 - **Use `searchkey=<code>` for both markets**; the Shenzhen `stock=`
   parameter returned empty results in verification.
+- **`searchkey` is a full-text search, not a per-company filter.**
+  Verified 2026-08-15: 002625 returned ~5,600 announcements (~192
+  pages) including other companies' rows (鹏鼎控股, 中电科芯片). The
+  announcement-record query is therefore *polluted*: filter every row
+  on `secCode === <code>` (fetch-cninfo.mjs records
+  `meta.sec_matched` / `meta.sec_dropped` per page and stops early on
+  a pure-pollution page), and cap the record with `--max-pages`
+  (default 30 pages ≈ 900 rows, far beyond a normal 6-year record) so
+  an announcement-heavy code cannot blow the work budget. The annual
+  report query (`category=category_ndbg_szsh`) is category-filtered and
+  did not exhibit the pollution.
 - Annual-report PDF: `https://static.cninfo.com.cn/<adjunctUrl>`.
 - Announcement record (governance): same query without the category
   filter over the window, filter titles locally for the governance

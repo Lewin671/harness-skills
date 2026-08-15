@@ -166,6 +166,19 @@ this policy is frozen and audited:
   `TOTAL_PARENT_EQUITY`, `NETCASH_OPERATE`, `CONSTRUCT_LONG_ASSET`, and
   the five gross-debt fields: `null` makes the derived figure
   `unknown`, never zero.
+  - **Operational consequence (measured 2026-08-15 on a 43-company
+    universe):** `BOND_PAYABLE` is `null` for most filers without
+    bonds and `LEASE_LIAB` for many without leases — the API omits
+    zero lines — so the debt gate lands `unknown` on a large share of
+    the population (16/43 in that run, including 贵州茅台 and 迈瑞医疗,
+    which are near-zero-debt). This is the frozen semantics doing its
+    job (never invent a zero), but a run should *expect* it and the
+    report must not read as "these companies failed": they are
+    pending, and reading the annual report's debt note resolves them.
+    Consider a per-run policy decision (frozen before candidates are
+    visible) on whether `BOND_PAYABLE`/`LEASE_LIAB` `null` with
+    `SHORT_LOAN`/`LONG_LOAN`/`NONCURRENT_LIAB_1YEAR` present and zero
+    counts as provable zero debt; the default keeps it `unknown`.
 - **Adjustment and subtraction fields: `null` counts as zero.** The
   EBIT adjustments (other income, investment income, fair-value and
   disposal gains) and the NTOA subtraction list treat `null` as zero,

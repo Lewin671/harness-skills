@@ -120,7 +120,13 @@ export async function loadRaw(runId, key) {
 export async function saveRaw(runId, key, { url, body, meta = {} }) {
   const file = path.join(runDir(runId), "raw", `${key}.json`);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
+  // Unique temp name (pid + random): two processes may legally run in
+  // parallel against the same run dir (concurrency <= 2 per host, and a
+  // resume can overlap a live run). A fixed "<file>.tmp" made the second
+  // writer's rename fail with ENOENT when the first had already renamed it
+  // away (observed 2026-08-15). With a unique tmp the rename is atomic and
+  // last-writer-wins on the final name, so a checkpoint is never corrupted.
+  const tmp = `${file}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 8)}`;
   await fs.writeFile(
     tmp,
     JSON.stringify(
@@ -141,7 +147,7 @@ export async function saveRaw(runId, key, { url, body, meta = {} }) {
 export async function writeJson(runId, name, value) {
   const file = path.join(runDir(runId), name);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 8)}`;
   await fs.writeFile(tmp, JSON.stringify(value, null, 1));
   await fs.rename(tmp, file);
 }

@@ -66,7 +66,12 @@ function licoUrl(year, marketCode, page) {
 function orginfoUrl(page) {
   const q = new URLSearchParams({
     reportName: "RPT_F10_BASIC_ORGINFO",
-    columns: "SECURITY_CODE,LISTING_DATE,FORMERNAME,SECURITY_TYPE,TATOLNUMBER,ACCOUNTFIRM_NAME",
+    // INDUSTRYCSRC1 rides here so the accounting-model classification
+    // (Gate 1, freeze-template.md) can run without a supplementary fetch.
+    // NOTE: the table has no INDUSTRYCSRC2 column — requesting it makes the
+    // whole columns parameter fail and return an empty result (verified
+    // 2026-08-15). Only the columns below are valid.
+    columns: "SECURITY_CODE,LISTING_DATE,FORMERNAME,SECURITY_TYPE,TATOLNUMBER,ACCOUNTFIRM_NAME,INDUSTRYCSRC1",
     pageNumber: String(page),
     pageSize: "500",
     source: "HSF10",
@@ -200,6 +205,7 @@ async function derive(runId, years, asOf) {
         c.security_type = row.SECURITY_TYPE;
         c.total_shares = row.TATOLNUMBER;
         c.auditor = row.ACCOUNTFIRM_NAME;
+        c.industry_csrc1 = row.INDUSTRYCSRC1 ?? null;
       }
     }
     if (!rows.length) break;

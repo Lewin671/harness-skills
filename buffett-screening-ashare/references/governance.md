@@ -28,6 +28,16 @@ verdict class; none of it converts `unknown` into `pass` by itself.
   for the code over the window and classify titles locally; the
   full-text topical search is for population-wide sweeps, not
   per-company verdicts.
+- **The record is polluted; filter on `secCode`.** The cninfo
+  `searchkey=<code>` query is a full-text search, not a per-company
+  filter — a code can return thousands of other companies'
+  announcements (verified 2026-08-15: 002625 returned ~5,600 rows
+  including 鹏鼎控股 and 中电科芯片 items, ~192 pages). Every stored
+  announcement page carries `meta.sec_matched` / `meta.sec_dropped`
+  counts (fetch-cninfo.mjs) and the governance pass must keep only
+  rows whose `secCode` equals the target, reporting the dropped count.
+  A page with zero matching rows is treated as pure pollution and stops
+  the record early; `--max-pages` caps the budget regardless.
 - **The one-direction rule.** These sources can push a gate from
   `unknown` to `fail` or keep it `unknown`; they cannot push it to
   `pass`. An honest automated run ends with the management gate named

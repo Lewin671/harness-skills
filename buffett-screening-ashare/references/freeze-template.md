@@ -27,7 +27,7 @@ freeze violation under the doctrine contract. Where the template says
 |---|---|---|
 | Bulk stage | population + org-info + dividends, 112 requests measured 2026-08-15 (60 业绩报表 pages + 50 概况 pages + 2 风险警示板 samples), no manual work | Author's policy |
 | Statement stage | full statements for candidates that pass the cheap gates, up to the request cap | Author's policy |
-| cninfo stage | annual-report PDFs + announcement record for survivors only | Author's policy |
+| cninfo stage | annual-report PDFs + announcement record for survivors only; announcement record capped at 30 pages/code by default (see data-sources.md — searchkey is full-text and can return thousands of other companies' rows) | Author's policy |
 | Valuation | low/base/high for up to 20 candidates in `lo` order | Author's policy |
 | Manual adjudication | none in the default run — moat causal half and management gate stay `unknown`, the run is provisional and says so | Author's policy |
 | Request cap / wall-clock cap | *to declare*; exhaustion is the normal terminator and the result is provisional | Author's policy |
@@ -56,6 +56,7 @@ freeze violation under the doctrine contract. Where the template says
 |---|---|---|
 | Horizon / terminal growth / required return | 10y / 2.5% / 10% | Author's policy |
 | Maintenance-vs-growth capex | *to declare per candidate*; unreconciled → price gate `unknown` | Author's policy |
+| Shares | derived as `TOTAL_PARENT_EQUITY / BPS` from the full statements; `TATOLNUMBER` is unit-ambiguous (verified 2026-08-15: 600519=13, 300750=14) and must not feed per-share math | Author's policy |
 | Margin of safety | price ≤ low case × (1 − 20%); discount rises to 30% when the low-to-high range width exceeds 50% | Author's policy; the requirement itself is Buffett-stated (1992 letter) |
 | Output | low / base / high; the low case decides the gate; a point estimate alone is the fabricated-valuation signature | Author's policy |
 
