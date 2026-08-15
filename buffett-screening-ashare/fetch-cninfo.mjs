@@ -117,6 +117,7 @@ async function main() {
           break;
         }
         if (rec.meta?.page_polluted) consecutivePollution++;
+        else consecutivePollution = 0;
         continue;
       }
       const body = await fetchJson(QUERY, {
