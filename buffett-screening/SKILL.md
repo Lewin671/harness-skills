@@ -22,16 +22,15 @@ description: >-
 # Buffett Screening
 
 Two things make this domain unusually easy to fake. The criteria are
-famous, so a plausible-sounding checklist is available to anyone
-without reading a single letter. And the load-bearing half of the
-doctrine — circle of competence, the durability of a moat, the honesty
-of management — has no queryable dataset, so a model asked to judge it
-can always produce a paragraph, and the paragraph always passes.
+famous, so a plausible checklist is available without reading a single
+letter. And the load-bearing half of the doctrine — circle of
+competence, the durability of a moat, the honesty of management — has no
+queryable dataset, so a model asked to judge it always produces a
+paragraph, and the paragraph always passes.
 
-The result is a report that looks like Buffett and is a fabrication:
-invented thresholds attributed to letters that never state them,
-whole-company acquisition rules applied to a stock screen, and moats
-declared from a famous brand name.
+The result looks like Buffett and is a fabrication: invented thresholds
+attributed to letters that never state them, whole-company acquisition
+rules applied to a stock screen, moats declared from a brand name.
 
 Read [references/doctrine.md](references/doctrine.md) before writing
 any criterion down. It carries the primary-source canon, which vintage
@@ -39,14 +38,13 @@ to encode, and the provenance of every number.
 
 **When the references do not answer the question, go to the letters.**
 `sources/` holds every shareholder letter from 1977 on, the Owner's
-Manual and the acquisition criteria, as plain text — because these
-files are a condensation and drop most of the reasoning behind each
-rule. Search there before answering from memory, and *always* before
-attributing a rule or a number to Buffett: recalling a quotation is not
-evidence for it, and this is a domain where a fabricated citation reads
-exactly like a real one. [sources/README.md](sources/README.md) gives
-the search patterns and the pitfalls, including why a miss is weak
-evidence.
+Manual and the acquisition criteria as plain text, because these files
+are a condensation and drop most of the reasoning. Search there before
+answering from memory, and *always* before attributing a rule or a
+number to Buffett: recalling a quotation is not evidence for it, and a
+fabricated citation reads exactly like a real one.
+[sources/README.md](sources/README.md) gives the search patterns and
+why a miss is weak evidence.
 
 ## The Doctrine
 
@@ -115,19 +113,17 @@ measurable. A self-assessed competence gate passes everything and is
 worse than no gate.
 
 **The moat gate makes this a referral list, not a buy list.** Its
-outcome half — the level and stability of returns on tangible operating
-capital over a decade — is computable. Its causal half — the specific
-barrier, and why customers cannot substitute — has no structured
-source, so it stays `unknown` and blocks. The honest output is
-therefore a ranked set of candidates each carrying an unresolved moat
-gate, submitted for human adjudication. Report it that way. A screen
-that resolves the causal half by itself has fabricated it.
+outcome half — returns on tangible operating capital over a decade — is
+computable. Its causal half — the specific barrier, and why customers
+cannot substitute — has no structured source, so it stays `unknown` and
+blocks. The honest output is a ranked set of candidates each carrying an
+unresolved moat gate, for human adjudication. A screen that resolves the
+causal half by itself has fabricated it.
 
 **Price is evaluated last, and never prunes.** Intrinsic value is a
-model output, not a data field, so the price gate cannot run over a
-large population. Put it at the end of the funnel, over the survivors
-of every quality gate. Until then price is `unknown`: it does not rank,
-and it does not drop anyone. The instinct to pre-filter on P/E or P/B
+model output, not a data field, so the price gate cannot run over a large
+population. Put it at the end of the funnel. Until then price is
+`unknown`: it neither ranks nor drops anyone. Pre-filtering on P/E or P/B
 is exactly the unprovable pruning the contract forbids — those ratios
 bound intrinsic value by nothing.
 
@@ -146,9 +142,12 @@ are correct.
 
 **Land the raw layer.** Fetch filings into local storage, keeping the
 response body alongside fetch time, URL, and the field-mapping version.
-Derive structured tables from that, never straight from the wire.
-Deduplicate on entity plus period plus revision and keep the latest
-restatement; a summary endpoint's row count is not a population count.
+Derive structured tables from that, never straight from the wire. The
+mapping is where precise-looking wrong numbers are born; read
+[references/criteria.md](references/criteria.md) § Reading The Source
+Data before trusting a computed ratio.
+Deduplicate on entity, period and revision, keeping the latest
+restatement; a row count is not a population count.
 
 **Fan out through the funnel.** Accounting-model classification first,
 then the competence allow-list, then the remaining intrinsic-attribute
@@ -180,10 +179,10 @@ then what remains unresolved on each survivor.
 | Symptom | Control |
 |---|---|
 | A threshold table presented as Buffett's criteria | Every number labelled Buffett-stated, implied, or author's policy; doctrine.md names the misattributed ones |
-| Berkshire's acquisition criteria used to screen stocks | The size, management-in-place and offering-price clauses are whole-company constraints; the document itself excludes stock selection |
+| Berkshire's acquisition criteria used to screen stocks | Those clauses are whole-company constraints; the document excludes stock selection outright |
 | Famous Berkshire holdings appear, then metrics justify them | Publish population size and per-gate exclusion counts before naming anyone |
 | A moat declared from a brand, a margin, or market share | Name the causal barrier; a high ratio without a mechanism is `unknown`, and `unknown` blocks |
-| Management judged honest because nothing negative was found | Word it as not detected in the named sources; absence of evidence never admits |
+| Management judged honest because nothing turned up | Word it as not detected in the named sources; absence never admits |
 | `CFO − capex` reported as owner earnings | Call it the owner-earnings proxy and state that maintenance capex is undisclosed |
 | Depreciation substituted for maintenance capex | Mark `unknown` unless asset age, capacity and replacement projects were reconciled |
 | Every non-cash charge added back | Recurring stock compensation and real impairments are costs; state the add-back policy in the freeze |
@@ -196,6 +195,8 @@ then what remains unresolved on each survivor.
 | A DCF with invented growth and discount assumptions | Freeze horizon, terminal growth and required return; report low/base/high, not a point estimate |
 | P/E or P/B used to shrink the population | Price never prunes; it runs last over survivors |
 | Ties presented as a ranking | State how many share the top score and that the order comes from the tie-break rule |
+| A ratio flips sign because two filers disagree on a convention | Check each operand's sign domain; take magnitudes where the criterion means one |
+| A discontinued tag's last value silently pairs with current data | Require the series to reach the compared period; stale is `unknown`, not a number |
 
 ## Reporting
 

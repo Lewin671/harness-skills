@@ -82,6 +82,52 @@ seeing results is answer-fitting.
   the stored raw layer rather than accepting a provider's pre-computed
   field, which is a different definition wearing the same name.
 
+## Reading The Source Data
+
+This skill names no data source; any filing archive or vendor will do.
+But the layer between a filing and a structured table has failure modes
+of its own, and they are worse than missing data: each one yields a
+*number*, precise-looking and wrong, that flows into a gate and decides
+admission. The three below were all observed in a single 30-company run
+against a real filing archive, so treat them as expected rather than
+exotic.
+
+**Sign conventions differ between filers.** The same concept can be
+filed positive by one company and negative by another — interest
+expense reported as a deduction from income is the common case. Divide
+without checking and the ratio flips sign: a coverage of 7.4 becomes
+−7.4, fails a minimum threshold, and the company is excluded with a
+confident-looking figure beside it. Take magnitudes where the criterion
+means a magnitude, and say so in the freeze. More generally, verify the
+sign domain of every operand before it enters a ratio, exactly as
+[pruning.md](pruning.md) requires for bounds.
+
+**Tags are discontinued and migrate.** A company changes which concept
+it files under, and the old one simply stops — its last value sits
+years in the past. Nothing errors: a query returns rows, a median
+computes, and it silently compares a decade-old cash flow against
+today's balance sheet. In the observed run two companies' capital
+expenditure tags ended in 2010 and 2012, producing leverage ratios of
+12.7× and 14.7× that were pure period mismatch. **Check recency, not
+just presence**: require the series to reach the same period as the
+statement it is compared with, and return `unknown` when it does not.
+A stale series is not a small error, it is a different company.
+
+**Tag coverage is uneven across the population.** Not every filer uses
+the concept you queried; some report the same economics under another
+name. The absent tag is not a zero and not a fail — it is `unknown`,
+per the four-state rule. What it also is, though, is a **coverage
+statistic**: if a criterion resolves for 60% of the population, the
+screen ranks on a field most candidates never had, and the report owes
+the reader that percentage per criterion. A funnel that looks decisive
+because most candidates went `unknown` early is not a screen.
+
+Two consequences for the freeze. Map each criterion to its concepts
+explicitly, with the fallbacks named, rather than assuming one tag per
+concept. And derive figures from the stored raw layer, never from a
+vendor's pre-computed field — that field is a different definition
+wearing the same name, and its definition is not frozen with yours.
+
 ## Hard Gates
 
 In funnel order. Each blocks on anything other than `pass`.
