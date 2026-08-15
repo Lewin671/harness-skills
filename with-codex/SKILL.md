@@ -101,15 +101,23 @@ are claims, not verdicts:
 - **Uncertain** → investigate in proportion to priority. An unresolved
   P0/P1 blocks completion; an unresolved P2/P3 is reported as open.
 
-Only fixes from the initial review trigger the one permitted
-re-review, run over the same whole-task scope now containing the
-fixes. Findings confirmed in the re-review are still fixed, but those
-fixes end the gate Codex-unreviewed — disclose them as such; if one
-was P0/P1, stop and ask the user whether to spend a further round
-rather than claiming full code consensus. Code consensus is reached
-when every finding has an evidence-backed disposition and no
-confirmed-or-unresolved P0/P1 remains un-fixed; an unresolved P0/P1 at
-the cap likewise stops and goes to the user.
+Each round of fixes triggers a re-review of the same whole-task
+scope, now containing the fixes. The loop ends on the first round that
+confirms nothing new — refuted findings and open P2/P3s do not drive
+another round — or at the backstop of five review rounds total,
+whichever comes first. The user may set a different backstop at
+invocation — any positive finite number; more rounds can always be
+approved at a stop. Every code-gate review invocation, including a
+failed or unparseable attempt, consumes one backstop round; retries
+and reruns happen only while rounds remain, so the loop is bounded by
+construction. A convergent exit is fully Codex-reviewed. At the
+backstop, fixes from the last round end the gate Codex-unreviewed —
+disclose them as such — and a confirmed-or-unresolved P0/P1 stops the
+workflow and goes to the user: report the state and ask whether to
+spend further rounds, accept it, or rethink, rather than claiming full
+code consensus. Code consensus is reached when every finding has an
+evidence-backed disposition and no confirmed-or-unresolved P0/P1
+remains un-fixed.
 
 ### 6. Report
 
@@ -126,19 +134,21 @@ level:
 
 - Review exit `2` is an empty scope, not approval — fix the scope or
   report that the code gate found nothing in scope.
-- An initial gate run exiting `3`–`5`: at most one retry, and only
-  when the parent's exit-code table itself justifies it (e.g. a larger
-  timeout after a genuinely progressing stall); otherwise, or if the
-  retry also fails, stop and report — never substitute a Claude answer
-  for the missing gate.
+- A gate run — initial or re-review — exiting `3`–`5`: at most one
+  retry, and only when the parent's exit-code table itself justifies
+  it (e.g. a larger timeout after a genuinely progressing stall);
+  otherwise, or if the retry also fails, stop and report — never
+  substitute a Claude answer for the missing gate. In the code gate,
+  the failed attempt and any retry each consume one backstop round.
 - A failed follow-up (this takes precedence over the rule above): the
   session is contaminated — allow one fresh consult restating context,
   labelled **deliberation** and consuming one of the two follow-up
   slots; if that recovery fails, stop.
 - A review with no `[P<n>]` bullets and no affirmative zero-finding
   statement is unparseable — relay it verbatim; it is not a clean
-  review. One rerun, consuming the re-review allowance; still
-  unparseable → stop: code consensus was not reached.
+  review. One rerun, consuming one backstop round and only while
+  rounds remain; still unparseable, or no round left → stop: code
+  consensus was not reached.
 - A task that produces no reviewable repository change cannot satisfy
   the code gate — say so rather than claiming consensus.
 
