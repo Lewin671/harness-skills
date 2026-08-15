@@ -21,8 +21,11 @@ browser User-Agent.
 ### Population: 业绩报表 `RPT_LICO_FN_CPD`
 
 - Filter per fiscal year: `(REPORTDATE='YYYY-12-31')(TRADE_MARKET_CODE="…")`,
-  one request set per year per market, page size 500. Five years ×
-  three markets ≈ 120 requests for the whole population.
+  one request set per year per market, page size 500. Measured
+  2026-08-15: 10 page requests per year across the three markets
+  (60 for six periods), plus 50 profile pages and 2 risk-warning
+  samples — 112 requests for the whole population stage, under three
+  minutes at default spacing.
 - Market codes (verified): 上交所主板 `069001001001`, 上交所风险警示板
   `069001001003`, 深交所主板 `069001002001`, 深交所创业板
   `069001002002`, 深交所风险警示板 `069001002005`, 老三板

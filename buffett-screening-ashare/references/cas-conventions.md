@@ -153,3 +153,33 @@ totals). cninfo PDFs are typically in 万元 — the mapping version
 records every unit conversion. A ratio mixing yuan and 万元 is wrong
 by 10,000 and looks precise; every stored raw body records its unit
 alongside URL and fetch time.
+
+## Null Semantics (Frozen, Verified)
+
+Eastmoney omits zero-amount line items: in the G-tables a zero amount
+is usually returned as `null`, not `0` (verified across the 2020–2025
+sample: trading-asset fields are `null` in every row). The doctrine
+layer forbids treating a missing component as zero without a policy, so
+this policy is frozen and audited:
+
+- **Core fields must be present.** `OPERATE_PROFIT`, `TOTAL_ASSETS`,
+  `TOTAL_PARENT_EQUITY`, `NETCASH_OPERATE`, `CONSTRUCT_LONG_ASSET`, and
+  the five gross-debt fields: `null` makes the derived figure
+  `unknown`, never zero.
+- **Adjustment and subtraction fields: `null` counts as zero.** The
+  EBIT adjustments (other income, investment income, fair-value and
+  disposal gains) and the NTOA subtraction list treat `null` as zero,
+  because the API convention is omission-of-zero, not absence-of-line.
+  The directions differ and are disclosed: a missing NTOA subtraction
+  inflates the denominator and deflates returns (conservative), while
+  a missing EBIT adjustment overstates EBIT (optimistic). The latter is
+  bounded in practice — investment income is `null` in zero of the
+  verification rows, other income in six of eighteen — and the
+  per-field null counts travel with every derived output, so the bias
+  is visible rather than silent.
+- **`FE_INTEREST_EXPENSE: null` counts as zero only when gross debt is
+  provably zero.** Interest `null` with debt outstanding is `unknown` —
+  zero interest with debt is a finding, not a default.
+- **The assumption is audited.** The derive step records, per field,
+  how many rows took the null-as-zero path, and the report carries
+  that count next to the coverage statistic.

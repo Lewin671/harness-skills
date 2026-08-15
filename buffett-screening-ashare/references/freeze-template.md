@@ -25,7 +25,7 @@ freeze violation under the doctrine contract. Where the template says
 
 | Item | Value | Provenance |
 |---|---|---|
-| Bulk stage | population + org-info + dividends, ≈ 150 requests, no manual work | Author's policy |
+| Bulk stage | population + org-info + dividends, 112 requests measured 2026-08-15 (60 业绩报表 pages + 50 概况 pages + 2 风险警示板 samples), no manual work | Author's policy |
 | Statement stage | full statements for candidates that pass the cheap gates, up to the request cap | Author's policy |
 | cninfo stage | annual-report PDFs + announcement record for survivors only | Author's policy |
 | Valuation | low/base/high for up to 20 candidates in `lo` order | Author's policy |

@@ -90,9 +90,12 @@ is not a population count: the bulk table mixes NEEQ and B-share rows
 into the same pages, and one company can appear in several market
 buckets across its life — deduplicate on code, keep the latest period.
 
-**Derive, never accept.** Build the structured tables from the stored
-raw bodies with the field mappings in cas-conventions.md. Three
-A-share-specific traps, all observed in the verification pass:
+**Derive, never accept.** `derive.mjs` computes the frozen metrics from
+the stored raw bodies — adjusted EBIT, RONTOA, ROE, the owner-earnings
+proxy, gross debt and coverage — and reports per-field coverage and
+null-as-zero counts beside the output, so the frozen null semantics in
+cas-conventions.md stay auditable. Three A-share-specific traps, all
+observed in the verification pass:
 
 - The summary statements (`RPT_DMSK_FN_*`) lack goodwill, parent
   equity, long-term borrowings and the cash-flow add-back detail — the
