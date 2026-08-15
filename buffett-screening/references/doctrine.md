@@ -88,11 +88,13 @@ around them is a fair reading.
 ## What Must Not Be Copied From The Acquisition Criteria
 
 The same published list carries clauses that exist because Berkshire
-buys and operates entire companies: "Large purchases (at least 75
-million USD of pre-tax earnings unless the business will fit into one
-of our existing units)", a stated deal-size range of 5 to 20 billion
-USD, "Management in place (we can't supply it)", "An offering price",
-a preference for cash and friendly transactions, and no auctions.
+buys and operates entire companies. Criterion 1 sets a pre-tax earnings
+floor of 75 million — stated with a currency symbol in the original,
+which this repository cannot reproduce, so the clause is paraphrased
+rather than quoted — waived only where the business fits an existing
+unit. The others name a deal-size range of 5 to 20 billion,
+"Management in place (we can’t supply it)", "An offering price", a
+preference for cash and friendly transactions, and no auctions.
 
 The document rules itself out of this application in one sentence:
 *"We are not interested, however, in receiving suggestions about
@@ -174,7 +176,7 @@ analyst's own circle, which is why the competence boundary belongs to
 the user and is declared during the freeze. The 2007 letter states the
 industry-level version precisely, and it is about change rather than
 technology: the *enduring* criterion rules out "industries prone to
-rapid and continuous change", because "a moat that must be
+rapid and continuous change", because "A moat that must be
 continuously rebuilt will eventually be no moat at all". Encode that
 test. A permanent industry blacklist is a different rule, and
 Berkshire's own later holdings contradict it.

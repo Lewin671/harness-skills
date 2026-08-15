@@ -30,8 +30,8 @@ Buffett criterion runs:
 
 ```
 ordinary_nonfinancial | bank_or_deposit_taker | insurer_or_reinsurer
-regulated_utility | other_specialized_financial | mixed_specialized
-unknown
+regulated_utility | project_finance_or_nonrecourse
+other_specialized_financial | mixed_specialized | unknown
 ```
 
 Derive it from audited filings and regulatory status — **not** from an
@@ -48,6 +48,16 @@ any of these holds:
 - Its statements otherwise run on a model where financing liabilities
   are operating inputs — a material lending book, a broker-dealer, a
   captive finance arm of scale.
+- It carries material **ring-fenced, non-recourse project debt**. The
+  survivability gate in [criteria.md](criteria.md) says outright that
+  its leverage measures do not capture project-finance risk, so letting
+  such a company through as `ordinary_nonfinancial` hands it a verdict
+  from metrics this skill has already declared invalid for it.
+  Consolidated gross debt over an owner-earnings proxy is meaningless
+  when the lenders can reach only one asset and the parent can walk
+  away, and equally meaningless in reverse where the parent has
+  guaranteed the structure. Use the same 10% materiality test on
+  non-recourse debt as a share of consolidated gross debt.
 - The evidence needed to classify it is unavailable. Record `unknown`;
   it blocks. Defaulting an unclassifiable candidate to
   `ordinary_nonfinancial` is the silent-admission failure wearing a
@@ -85,7 +95,8 @@ company this skill was never able to assess.
 
 State: the original population; the eligible ordinary-company
 population; excluded counts split by bank, insurer, regulated utility,
-other specialised financial, mixed, and classification-unknown; and the
+project-finance, other specialised financial, mixed, and
+classification-unknown; and the
 classification rule version, materiality threshold, evidence source and
 as-of date.
 

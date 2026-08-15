@@ -48,8 +48,10 @@ seeing results is answer-fitting.
 - **Average** opening and closing balance-sheet capital, not
   period-end. Period-end capital in a denominator is wrong in a
   direction that varies by company.
-- Separate models for ordinary non-financials, banks, insurers, and
-  regulated utilities. No shared leverage or capital rule across them.
+- The accounting-model classification, per
+  [applicability.md](applicability.md). Only the ordinary non-financial
+  model is implemented here; banks, insurers, regulated utilities and
+  non-recourse project structures are classified out, not approximated.
 - A missing component of a sum yields `unknown`, never zero. Treating
   it as zero understates the total, which in a denominator inflates the
   ratio and can manufacture a `fail`.
@@ -112,14 +114,21 @@ and disclosed:
   cash and committed facilities to cover it, so the test does not rest
   on refinancing that may not be available.
 
-**A company with no debt passes all three.** With no borrowings, cash
-interest is zero and the coverage ratio is undefined — feed that into
-"unmeasurable leaves the gate `unknown`" and the gate blocks precisely
-the debt-free companies the doctrine most favours, which is the guard
-refusing the case it was built to admit. Zero gross debt and zero cash
-interest is a `pass`, recorded as such. `unknown` is reserved for
-interest or debt data that is *missing*, which is a different fact and
-must not be inferred to be zero.
+**Zero debt passes — but per year, not retroactively.** With no
+borrowings, cash interest is zero and the coverage ratio is undefined.
+Feeding that into "unmeasurable leaves the gate `unknown`" blocks
+precisely the debt-free companies the doctrine most favours, which is a
+guard refusing the case it was built to admit. So a year with zero gross
+debt and zero cash interest satisfies that year's coverage requirement.
+
+Apply it year by year. A company that is debt-free *today* but was
+poorly covered in any of the preceding five years must still meet the
+threshold in those earlier years — today's clean balance sheet is not
+evidence about the leverage it used to carry, and letting the current
+state clear the whole window converts a five-year test into a
+one-day one. `unknown` remains reserved for interest or debt data that
+is *missing*, which is a different fact and must never be inferred to
+be zero.
 
 Any of the three genuinely unmeasurable leaves the gate `unknown`, which
 blocks. This is a floor, not the whole leverage view — "little or no
@@ -127,8 +136,9 @@ debt" beyond survival is a scored criterion, because Buffett's
 preference for it is a matter of degree.
 
 **6. Management: integrity reviewed, and no disqualifying capability
-record.** Buffett asks for businesses "operated by honest **and
-competent** people" (1977), so a gate covering only honesty leaves half
+record.** Buffett asks for businesses "operated by honest and competent
+people" (1977) — *competent* is the half usually dropped — so a gate
+covering only honesty leaves half
 the criterion unenforced and admits demonstrably poor operators on a
 clean compliance record. Both halves must clear:
 
@@ -206,7 +216,7 @@ capital expenditure and minus the additional working capital required
 to maintain competitive position and unit volume. This is Buffett's
 definition and it is **not computable from structured data**:
 maintenance capex is not a disclosed field. He says so himself in the
-same appendix — the maintenance-capex term "must be a guess — and one
+same appendix — the maintenance-capex term "must be a guess - and one
 sometimes very difficult to make" — and still calls the result the
 relevant figure for valuation, preferring to be "vaguely right" over
 "precisely wrong". A screen that reports a precise owner-earnings
