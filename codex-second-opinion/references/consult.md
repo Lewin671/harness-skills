@@ -11,8 +11,9 @@ gets a reasoned position here.
 Write the question to stand alone: name the files or documents Codex
 should read, state the decision criteria, and say what a useful answer
 looks like (a ranked choice, a risk list, a counter-proposal). Codex
-starts with zero conversation context — everything it needs must be in
-the question or in the repo. A repository is not required: `--repo` may
+starts with zero prior context — no conversation history, and the
+wrapper disables its cross-session memories — so everything it needs
+must be in the question or in the repo. A repository is not required: `--repo` may
 point at any directory when the question stands entirely on its own
 (outside a git work tree the wrapper passes codex's
 `--skip-git-repo-check`; the read-only sandbox still applies).

@@ -260,6 +260,12 @@ export function safetyArgs(mode, policy, out) {
   return [
     '-c', 'sandbox_mode="read-only"',
     '--disable', 'hooks', '--disable', 'apps', '--disable', 'plugins',
+    // Cross-session memories would feed an earlier session's context into a
+    // nominally blind first pass, and let a second-opinion run write into
+    // the user's memory store; the feature gate switches off both
+    // directions. On a codex without the feature, --strict-config fails the
+    // run (exit 4) rather than silently weakening independence.
+    '--disable', 'memories',
     '-c', 'notify=[]',
     // Turns a renamed or unrecognized config key into a hard failure instead
     // of a silently ignored safety setting.
@@ -297,6 +303,16 @@ function readLogFile(log) {
   try { return readFileSync(log, 'utf8') } catch { return '' }
 }
 
+// A retired or entitlement-blocked model fails with a message naming the
+// model plus a denial phrase; require both so an unrelated failure is not
+// misdiagnosed as a model problem. Wording drift just loses the hint — the
+// generic failure message and log tail still stand.
+const MODEL_DENIAL = /not supported when using Codex|does not exist or you do not have access|not available (?:for|to) (?:this|your) account|model_not_found|unsupported_model/i
+
+function modelUnavailable(logText, model) {
+  return Boolean(model) && logText.includes(model) && MODEL_DENIAL.test(logText)
+}
+
 export function lastThreadId(events) {
   let id = ''
   for (const line of events.split(/\r?\n/)) {
@@ -312,7 +328,7 @@ export function lastThreadId(events) {
 // success; dies with 4 (failed), 5 (timed out) or 129/130/143 (signalled)
 // otherwise, discarding the result file but keeping the event log.
 export async function runCodex(env, invocation, options) {
-  const { out, log, timeout, runNoun, resultNoun } = options
+  const { out, log, timeout, runNoun, resultNoun, model, modelSource, resumed } = options
   process.stderr.write(`${flat(invocation.diagnostic)}\n`)
 
   const discard = () => rmSync(out, { force: true })
@@ -426,8 +442,21 @@ export async function runCodex(env, invocation, options) {
       process.stderr.write(`error: could not start ${flat(env.codexBin)}: ${flat(result.spawnError)}\n`)
     }
     process.stderr.write(`error: codex ${runNoun} failed; raw output at ${log}\n`)
-    if (readLogFile(log).includes('unknown configuration field')) {
+    const logText = readLogFile(log)
+    if (logText.includes('unknown configuration field')) {
       process.stderr.write('hint: codex rejected a configuration key this script sets (--strict-config is deliberate); the installed codex CLI may have drifted from the keys in lib/runtime.mjs.\n')
+    } else if (modelUnavailable(logText, model)) {
+      process.stderr.write(`hint: the selected model '${flat(model)}' is unavailable to this codex login (retired, renamed, or not entitled); no fallback was attempted.\n`)
+      if (modelSource === 'flag') {
+        process.stderr.write('hint: rerun with a supported --model M --effort L pair.\n')
+      } else if (modelSource === 'env') {
+        process.stderr.write('hint: update CODEX_SECOND_OPINION_MODEL and CODEX_SECOND_OPINION_EFFORT together to a supported model.\n')
+      } else {
+        process.stderr.write('hint: the pinned default in this script may have been retired; pass --model M --effort L for one run, or set CODEX_SECOND_OPINION_MODEL and CODEX_SECOND_OPINION_EFFORT together.\n')
+      }
+      if (resumed) {
+        process.stderr.write('hint: do not resume this session under a different model; start a fresh consultation and restate the context.\n')
+      }
     }
     tail()
     discard()

@@ -70,6 +70,7 @@ function createPolicy() {
     // Checked in validatePolicy, after parsing, so `--help` still prints.
     envMismatch: Boolean(envModel) !== Boolean(envEffort),
     model: envModel || 'gpt-5.6-sol',
+    modelFromEnv: Boolean(envModel),
     effort: envEffort || 'high',
     modelSet: false,
     effortSet: false,
@@ -95,6 +96,13 @@ function validatePolicy(policy) {
   if (!/^[A-Za-z0-9._-]+$/.test(policy.effort)) {
     die(3, `error: the effort may contain only letters, digits, '.', '_' and '-', got '${flat(policy.effort)}'`)
   }
+}
+
+// Where the effective model came from, for the model-unavailable hint.
+function modelSource(policy) {
+  if (policy.modelSet) return 'flag'
+  if (policy.modelFromEnv) return 'env'
+  return 'default'
 }
 
 // Options shared by both modes. Returns the next index, or null when the
@@ -278,6 +286,7 @@ async function runReview(args) {
     const invocation = buildReviewCommand(review, reviewEnv, safetyArgs('review', policy, artifacts.out))
     run = await runCodex(reviewEnv, invocation, {
       ...artifacts, timeout: policy.timeout, runNoun: 'review', resultNoun: 'report',
+      model: policy.model, modelSource: modelSource(policy),
     })
     if (snapshot) {
       run.output = run.output.replaceAll(snapshot.env.repoRoot, env.repoRoot)
@@ -390,6 +399,7 @@ async function runConsult(args) {
   cmdArgs.push('--', question)
   const run = await runCodex(env, { args: cmdArgs, diagnostic }, {
     ...artifacts, timeout: policy.timeout, runNoun: 'consultation', resultNoun: 'answer',
+    model: policy.model, modelSource: modelSource(policy), resumed: Boolean(policy.sessionId),
   })
   await emitResume(policy, env, run, artifacts)
 }

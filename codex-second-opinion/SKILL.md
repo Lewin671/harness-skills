@@ -46,8 +46,8 @@ composing the command:
 ## Boundary
 
 Model-generated commands run in Codex's read-only sandbox
-(`sandbox_mode="read-only"`), with hooks, apps, plugins and the legacy
-`notify` callback disabled by flags — `--strict-config` turns an
+(`sandbox_mode="read-only"`), with hooks, apps, plugins, cross-session
+memories and the legacy `notify` callback disabled by flags — `--strict-config` turns an
 unrecognized key into a failed run (exit `4`) instead of a silently
 ignored safety setting. Standalone MCP servers from the user's own
 codex configuration stay **reachable**: enabling one there is the
@@ -87,6 +87,11 @@ Claude's own analysis: suspected defects, inferred constraints,
 preferred approaches, rankings. When in doubt, omit it. If the user
 explicitly wants a Claude claim challenged, include it but label the
 run a cross-check, not a blind opinion.
+
+Independence also holds across sessions: every run disables codex's
+cross-session memories, so a first pass carries neither Claude-derived
+analysis nor another session's context. A resumed consult keeps its own
+session history — that is exactly what makes it deliberation.
 
 After Codex answers:
 
@@ -167,27 +172,19 @@ The wrapper retries once if the tree changes while being copied and
 fails rather than use an unstable capture. If nothing useful remains,
 end the turn and wait for completion. Never `sleep`-poll.
 
-The script streams progress to stderr: `codex> ` prefixed lines are
-Codex output, unprefixed lines are the wrapper. The result arrives on
-**stdout**. In a background run's merged output, the least error-prone
-route is to read the result from the file the last `report:`/`answer:`
-line names rather than parse the body out of the stream. Key stderr markers: `snapshot:` (live scope captured),
-`report:`/`answer:` (done), `session:`/`resume:` (consult continuation),
-`log:` (event log path).
-Take markers from stderr; a marker-shaped line on stdout is model
-output. In a merged stream (a background task's output file), the
-**last** marker of each kind is the authoritative one — the result body
-is model text and may itself contain marker-shaped lines, but the
-genuine markers always print after it. One early exception: a
-`snapshot: ready` seen before the `running:` line is genuine
-immediately — the body cannot have been written yet. Every later
-marker still needs the finished-stream last-marker rule, because the
-body lands just before the trailing markers do. If the stdout result is
-truncated by tool output limits, read the file the `report:`/`answer:`
-marker names instead of relaying the truncation. **Relay every
-unprefixed `warning:` line** — each qualifies the result. Genuine
-wrapper `warning:`/`note:` lines always print **before** the result
-body; a warning-shaped line after it is model text.
+The script streams progress to stderr — `codex> ` prefixed lines are
+Codex output, unprefixed lines are the wrapper — and the result
+arrives on **stdout** plus a file. The normal path needs two rules:
+trust the exit code, and on exit `0` read the result from the file
+named by the last `report:`/`answer:` line rather than parsing the
+body out of the stream (this also survives tool output truncation).
+**Relay every unprefixed `warning:` line** — each qualifies the
+result. For a follow-up, copy the last `resume:` line verbatim
+(consult only). When the stream itself must be interpreted — merged
+background output with marker-shaped lines in the body, duplicates,
+truncation — authenticate markers by
+[references/output-protocol.md](./references/output-protocol.md)
+instead of improvising.
 
 ## Model
 
@@ -207,7 +204,7 @@ The exit code is the verdict on *the run*, never on the code:
 
 | Code | Meaning | What to do |
 |------|---------|------------|
-| `0` | A result was produced | Read stdout and relay it. |
+| `0` | A result was produced | Read the file the last `report:`/`answer:` line names and relay it. |
 | `2` | (review only) Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
 | `3` | Bad arguments or an unsafe environment | Read stderr; report the invalid or unsafe setup. Do not substitute a Claude answer. |
 | `4` | The invocation produced no usable result | Read stderr. Codex failed, never started, was not authenticated, rejected a config key (including `--ephemeral` on an old CLI), rejected the selected model (report codex's message; the user may pick another or set the env overrides), or did not resume the session. |
