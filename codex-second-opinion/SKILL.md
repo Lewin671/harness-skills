@@ -232,9 +232,10 @@ so never gate on it directly. That is why this script exists.
 
 ## Boundaries
 
-- Not a replacement for `adversarial-code-review` (deep multi-agent
-  Claude review); review mode here is a single strong reviewer from a
-  different model family. Running both on a high-stakes change is
+- Not a replacement for `adversarial-code-review` (a main review plus
+  one Claude subagent's adversarial cross-check); review mode here is a
+  single strong reviewer from a different model family.
+  Running both on a high-stakes change is
   reasonable.
 - Never invoke `codex apply`, and never pass any
   `--dangerously-bypass-*` flag. Both routes can write.
