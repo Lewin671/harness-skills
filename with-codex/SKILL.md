@@ -1,166 +1,211 @@
 ---
 name: with-codex
 description: >-
-  Claude Code ONLY — requires the codex-second-opinion skill and an
-  authenticated `codex` CLI. Complete a whole task jointly with Codex
-  through two consensus gates: Claude pre-registers its own position,
-  Codex gives a blind opinion at the design gate, Claude implements
-  alone, Codex reviews at the code gate; unresolved splits go to the
-  user. Trigger only on an explicit user request to do a task together
-  with Codex ("和 codex 一起完成这个任务", "build this with codex",
-  "run this task with-codex"). The user decides invocation — never
-  self-select a task in or out by size or importance, and once invoked
-  both gates always run. Invoking this skill authorizes the workflow's
-  codex-second-opinion runs, the implementation, and in-scope fixes;
-  gate splits still stop for user adjudication. For a standalone
-  review or question, use codex-second-opinion directly instead.
+  Claude Code ONLY — requires codex-second-opinion and an authenticated
+  codex CLI. Complete a task with an independent Codex design opinion
+  and whole-task code review. Claude implements; disagreements receive
+  evidence-backed dispositions and fixes receive impact-scoped verification.
+  Trigger only when the user explicitly asks to work with Codex
+  ("和 codex 一起完成这个任务", "build this with codex",
+  "run this task with-codex"). Both checkpoints always run once invoked.
+  For a standalone review or question, use codex-second-opinion directly.
 harnesses: [claude-code]
 ---
 
 # With Codex
 
-Complete one task with Codex as an independent counterpart at two
-gates. Claude does all the thinking first and all the writing always;
-Codex contributes blind second opinions. The shape is gated rather
-than collaborative on purpose: a Codex that co-authors the design
-cannot independently review the result, and independent review is the
-value model diversity buys.
+Complete one task through two checkpoints: an independent design
+opinion, then an independent review of the whole task change. Claude
+writes all code. Completion requires evidence-backed dispositions and
+verification of the final change; identical model preferences are not
+required. Independent analysis can expose different blind spots, but
+agreement alone does not establish correctness.
 
-All mechanics — commands, scopes, markers, session handling, exit
-codes — live in [codex-second-opinion](../codex-second-opinion/SKILL.md)
-and its references; read the mode's reference before composing each
-command. This skill only says when to enter a gate, what may cross it,
-and what must come back.
+Invocation authorizes the bounded Codex calls below, implementation,
+in-scope fixes and verification. It does not expand the user's scope or
+external-action permissions. Preserve any stricter review scope or
+approval requirement the user explicitly sets.
 
-## Workflow
+Read [codex-second-opinion](../codex-second-opinion/SKILL.md) and the
+relevant mode reference before composing commands. Its execution,
+model, sandbox, marker and exit-code rules apply unchanged. Within
+this workflow, the bounded follow-ups, targeted fix verification and
+compact reporting below specialize its standalone interaction rules;
+no extra approval is needed for those already-authorized steps.
 
-### 1. Pre-register (design)
+## 1. Record the task and initial position
 
-Form a complete position before Codex enters and state it in the
-conversation *before* launching any codex run: the chosen approach,
-plus any materially plausible alternative and why it lost ("none" is a
-valid answer). A position formed after seeing Codex's answer measures
-nothing.
+Before the first Codex call, briefly state Claude's approach, key reason
+and main uncertainty in the conversation. Include an alternative only
+when it is materially plausible; do not manufacture a trade-off.
 
-### 2. Design gate
+Keep a compact task record in a durable task-owned location outside the
+reviewed repository, and give its path in the conversation. Update it
+after each decision, invocation and fix:
 
-Always runs — the user chose the workflow by invoking it. When the
-task holds a genuine open question, that is the question; when it does
-not, ask Codex to assess the approach the user prescribed — or, if the
-user prescribed none, to independently propose one and identify its
-assumptions and risks. Never manufacture an artificial trade-off.
+- Original requirements, task scope, design decision and unresolved objections.
+- Each call's mode, scope, model, independence label, result/log paths,
+  code identity, outcome, and exact consult `resume:` command when available.
+- Stable finding IDs, priority, location, evidence, disposition, fix identity
+  and verification status.
+- Review attempts used/limit (default five), design follow-up attempts
+  used/limit (two), and remaining blockers.
 
-The consult prompt is blind: the user's own words, user-decided
-constraints, repository file references, and mechanical facts (paths,
-branch names, hashes). None of Claude's phase-1 position, summaries,
-or inferences.
+Preserve full successful answers/reports beside the record before their
+original temporary files disappear. Keep the record and design discussion
+out of independent review prompts. Use commit IDs for committed code;
+for working changes retain a base ID and content fingerprint covering
+all task files, including untracked ones. Scope names alone do not
+identify reviewed bytes.
 
-When the answer arrives: relay it faithfully first (question, model,
-Codex's position and load-bearing arguments), then give Claude's
-comparison against the pre-registered position. Then:
+On recovery, read the record and compare current task code with the last
+verified identity. Retain spent attempts and invalidate verification for
+new changes; do not silently restart the budget or repeat completed calls.
 
-- **Consensus** — same choice and no unresolved material objection to
-  behaviour, safety, or scope → implement.
-- **Split** — deliberate in the same session, at most two resumptions,
-  every resumed answer labelled **deliberation**.
-- **Still split** — stop; present both positions with their arguments.
-  User adjudication is an explicit non-consensus exit, never averaged
-  into a compromise neither model argued for.
+## 2. Design checkpoint
 
-### 3. Implement
+Always obtain a blind consult: send the user's original requirements,
+user-decided constraints, repository references and mechanical facts.
+Exclude Claude's position, inferred constraints and summaries. If the
+user prescribed the approach, ask Codex to assess it against the
+requirements rather than reopen the user's decision.
 
-Claude alone: write the code, run the tests, verify the change works.
-No Claude analysis from this phase enters the review prompt — only the
-review scope and the permitted context below; the code gate needs a
-fresh, unseeded review invocation.
+Briefly relay Codex's position and load-bearing arguments before giving
+Claude's comparison. Check factual claims before presenting them as
+established. Classify any disagreement:
 
-### 4. Pre-register (code)
+| Type | Disposition |
+|---|---|
+| Checkable fact: feasibility, API behaviour, compliance with a requirement | Inspect sources or run a minimal relevant experiment. Record the evidence and resolve the objection. |
+| Engineering preference among approaches satisfying the requirements | Claude chooses and explains the trade-off; retain Codex's alternative and reason. Agreement is unnecessary. |
+| Undecided user preference, scope or authorization | Prepare concrete options and consequences, then ask the user. Continue only independent authorized work while waiting. |
 
-Before launching the review, record Claude's own self-review in the
-conversation: expected risk areas and any doubts about the change.
-This is the code-gate anchor, and it stays out of the review prompt.
+An unresolved material objection about safety, data integrity, core
+behaviour or a required constraint blocks implementation of the affected
+approach. Never relabel it a preference. Investigate within scope; if it
+cannot be resolved, present the evidence and options to the user.
 
-### 5. Code gate
+Use at most two consult follow-up attempts, including failures and
+recovery calls. Each must add evidence, a clarified requirement or a
+revised proposal addressing an objection; repeating positions does not
+justify another call. Resume the same session and label the answer
+**deliberation**. Two is a ceiling, not a target. When discussion ends,
+apply the disposition rules above, not a vote count. If the approach
+materially changes, assess the new risks; if another Codex discussion is
+needed but the budget is exhausted, report that and request more budget.
 
-Review the whole task change via review mode — pick the scope per the
-review reference, isolating or committing the task change if unrelated
-WIP would pollute it. The review prompt may carry original
-requirements, user adjudications, and mechanical scope facts; never
-Claude's design rationale, self-review, suspected defects, or the
-design-gate transcript.
+Pass this checkpoint when the chosen approach meets requirements and
+has no unresolved material objection. Record any remaining preference
+split without claiming consensus.
 
-When the report arrives: relay Codex's overall verdict — including an
-affirmative zero-finding verdict — and every finding with its
-priority, plus scope and model, before any disposition or fix. Give
-each finding a Claude-side trust line, then disposition it — findings
-are claims, not verdicts:
+## 3. Implement and pre-register the code review
 
-- **Confirmed** (reproduced, or evident on reading) → fix it.
-- **Refuted** (evidence says otherwise) → do not fix; record finding,
-  refutation, and evidence. Codex need not retract for consensus.
-- **Uncertain** → investigate in proportion to priority. An unresolved
-  P0/P1 blocks completion; an unresolved P2/P3 is reported as open.
+Claude implements and performs checks appropriate to the change.
+If implementation exposes a material design change or objection, revisit
+the design disposition rules before proceeding, retaining spent attempts.
+Before calling Codex, briefly record expected risk areas and doubts in
+Claude's self-review. This stays out of the review prompt.
 
-Each round of fixes triggers a re-review of the same whole-task
-scope, now containing the fixes. The loop ends on the first round that
-confirms nothing new — refuted findings and open P2/P3s do not drive
-another round — or at the backstop of five review rounds total,
-whichever comes first. The user may set a different backstop at
-invocation — any positive finite number; more rounds can always be
-approved at a stop. Every code-gate review invocation, including a
-failed or unparseable attempt, consumes one backstop round; retries
-and reruns happen only while rounds remain, so the loop is bounded by
-construction. A convergent exit is fully Codex-reviewed. At the
-backstop, fixes from the last round end the gate Codex-unreviewed —
-disclose them as such — and a confirmed-or-unresolved P0/P1 stops the
-workflow and goes to the user: report the state and ask whether to
-spend further rounds, accept it, or rethink, rather than claiming full
-code consensus. Code consensus is reached when every finding has an
-evidence-backed disposition and no confirmed-or-unresolved P0/P1
-remains un-fixed.
+Use a fresh review invocation for the entire task change, including all
+its commits and working changes. Follow the parent's scope reference;
+isolate the task when unrelated work would pollute the review. Never
+stash, commit or revert another task's changes to simplify scope.
 
-### 6. Report
+The prompt may contain original requirements, user decisions and
+mechanical scope facts. Exclude Claude's rationale, self-review,
+suspected defects, task record and design transcript. A new session does
+not make a seeded prompt independent.
 
-One final account: gate outcomes (summarize convergence; keep full
-arguments only for splits and adjudications), every finding with its
-priority and disposition — P2/P3 included — which answers were
-**independent** and which **deliberation**, and scope and model per
-codex-second-opinion's reporting rules.
+## 4. Disposition findings and verify fixes
+
+Relay the overall verdict (including an affirmative zero-finding result),
+scope, model and compact finding list before fixing. Account for every
+finding with its ID, priority and location. Then record:
+
+- **Confirmed**: reproduced or evident from code → fix within scope.
+- **Refuted**: contrary evidence → retain the finding and refutation;
+  Codex need not retract it.
+- **Uncertain**: investigate proportionally; unresolved P0/P1 blocks
+  completion, while unresolved P2/P3 may remain explicitly open.
+
+A wording change cannot downgrade a material blocker. A fix requiring
+new scope or authorization goes to the user with concrete consequences.
+
+After each batch of fixes, choose Codex verification scope by impact:
+
+| Fix impact | Required review |
+|---|---|
+| Local and demonstrably bounded | Fix delta, original finding, related callers and relevant tests. Explain why this scope is sufficient. |
+| Interfaces, shared state, permissions, architecture, cross-module effects, or uncertain impact | Review the whole task change again. |
+
+Use review mode for both. For targeted verification, `--custom` carries
+the exact before/after comparison, paths, finding and expected behaviour;
+require an explicit disposition of each targeted finding plus prioritized
+new defects or an affirmative zero-new-finding statement. This invocation
+is authorized by the workflow. It has no empty-scope precheck and reads
+the live tree: check that the delta exists and hold edits during the call.
+Any code drift invalidates verification of the affected changes.
+
+Label targeted calls **fix verification (deliberation)**, never blind
+review. A whole-task re-review carrying prior findings is also
+**deliberation**; only a fresh, unseeded review is **independent**.
+Investigate new findings under the same rules. Refuted findings and open
+P2/P3s alone do not require another round.
+
+### Completion and budget
+
+Every code-review invocation consumes one of five attempts by default,
+including the initial review, targeted checks, failures and unparseable
+results. Increment before launching. The user may specify another
+positive finite limit; never reset it when narrowing scope or recovering.
+
+The code checkpoint passes only when:
+
+- The initial whole-task review succeeded.
+- Every finding has an evidence-backed disposition; confirmed findings
+  are fixed and no unresolved P0/P1 remains.
+- Every subsequent task-code change has received successful Codex
+  verification at the required impact scope, and relevant local checks
+  have passed. Local checks cannot replace missing Codex verification.
+- The final task-code identity matches that coverage. Say whether coverage
+  combines an initial review with targeted checks or a final whole-task review.
+
+If attempts run out after a fix, mark it **Codex-unverified** and stop
+with the checkpoint incomplete. Report blockers and offer more review
+budget, acceptance of the disclosed incomplete result, or a revised
+approach. User acceptance does not retroactively make it verified.
 
 ## Failure exits
 
-The parent skill's exit-code table governs each run; at the workflow
-level:
+The parent's exit-code and marker authentication rules govern each call.
+Relay every wrapper warning; exit `0` means a usable result, not approval.
 
-- Review exit `2` is an empty scope, not approval — fix the scope or
-  report that the code gate found nothing in scope.
-- A gate run — initial or re-review — exiting `3`–`5`: at most one
-  retry, and only when the parent's exit-code table itself justifies
-  it (e.g. a larger timeout after a genuinely progressing stall);
-  otherwise, or if the retry also fails, stop and report — never
-  substitute a Claude answer for the missing gate. In the code gate,
-  the failed attempt and any retry each consume one backstop round.
-- A failed follow-up (this takes precedence over the rule above): the
-  session is contaminated — allow one fresh consult restating context,
-  labelled **deliberation** and consuming one of the two follow-up
-  slots; if that recovery fails, stop.
-- A review with no `[P<n>]` bullets and no affirmative zero-finding
-  statement is unparseable — relay it verbatim; it is not a clean
-  review. One rerun, consuming one backstop round and only while
-  rounds remain; still unparseable, or no round left → stop: code
-  consensus was not reached.
-- A task that produces no reviewable repository change cannot satisfy
-  the code gate — say so rather than claiming consensus.
+- Review exit `2`: empty scope, not a pass. Correct the scope within the
+  remaining budget or report an incomplete checkpoint.
+- Exit `3`–`5`: at most one retry when the parent's rules justify it,
+  within the remaining budget; otherwise stop and report. Never replace
+  a missing Codex checkpoint with Claude's own answer.
+- Failed consult follow-up (overrides the general retry rule): do not resume the possibly contaminated
+  session. One fresh recovery consult may restate context, labelled
+  **deliberation**, only if a follow-up slot remains. Failed recovery stops.
+- No priority findings and no affirmative zero-finding statement:
+  unparseable. Relay verbatim; allow one rerun within the remaining review
+  budget, otherwise stop incomplete. A targeted answer that omits a
+  requested finding's disposition leaves that fix unverified.
+- A task producing no reviewable repository change cannot pass the code
+  checkpoint. State that limitation rather than claiming completion.
 
-## Principles
+## Final report and boundaries
 
-1. **Independence first.** Nothing Claude-derived enters a first-pass
-   prompt; once contaminated, every later answer is deliberation.
-2. **Findings are claims, not verdicts.** Every finding gets an
-   evidence-backed disposition; refuting one is as valid as fixing it.
-3. **Single write path.** Claude writes all code and files; Codex
-   output only informs decisions and reviews, and never `codex apply`.
-   One inherited caveat: per the parent skill's boundary, MCP servers
-   from the user's codex config stay reachable and can mutate the
-   external systems they front — mention it whenever Codex's output
-   shows one was used.
+Summarize checkpoint outcomes, scope and final code identity, model and
+independence labels, attempts used, substantive disagreements, and every
+finding's priority, location and disposition, including open P2/P3s.
+Link the task record and preserved raw reports. Keep summaries faithful;
+full repeated transcripts are unnecessary unless requested. Disclose
+failed checks, unverified fixes and coverage limitations explicitly.
+
+Claude remains the only writer. Never use `codex apply` or bypass flags.
+The parent's local read-only sandbox does not restrict standalone MCP
+servers' external effects; retain its boundary disclosures and mention
+MCP use when the output shows it. This workflow grants no additional
+external mutation authority.
