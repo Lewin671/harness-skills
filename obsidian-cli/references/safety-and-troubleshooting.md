@@ -68,7 +68,7 @@ obsidian help <command>
 
 If a command fails, check in this order:
 
-1. Is the CLI installed and on PATH?
+1. Is the CLI installed and on PATH, and is the app running with the vault open? `Vault not found.` on every command means no vault window is open — see `setup-and-discovery.md`.
 
 ```bash
 obsidian version
@@ -109,8 +109,8 @@ Start from a known-good minimal canvas and add complexity incrementally.
 
 ## Platform notes from the official docs
 
-- macOS registration updates `~/.zprofile` for the standard app binary path.
-- Linux registration usually creates a symlink for `obsidian`; AppImage, Snap, and Flatpak installs may need extra PATH or symlink checks.
+- macOS registration creates the symlink `/usr/local/bin/obsidian` to the CLI binary inside `Obsidian.app` (needs admin rights).
+- Linux registration copies the binary to `~/.local/bin/obsidian`; make sure that directory is on PATH. AppImage, Snap, and Flatpak installs may need extra checks.
 - Windows uses an installer-provided terminal redirector so the GUI app can communicate with stdin/stdout correctly.
 
 When platform registration appears broken, consult the official CLI help page first:

@@ -26,8 +26,8 @@ According to the official docs, Obsidian CLI is part of the desktop installer an
 
 Operational implications:
 
-- Obsidian must be available locally.
-- If Obsidian is not already open, the first CLI command may launch it.
+- The Obsidian app must already be running; the CLI does not launch it. Otherwise it reports that it is unable to find Obsidian.
+- The app also needs an open window for the target vault. When none is open and no vault is resolved from the working directory or `vault=`, every command — even `help` and `version` — prints `Vault not found.` Pass `vault=<name>` (which opens that vault's window) or open the vault in the app. The first command sent to a freshly opened window can fail once with `Command "..." not found.`; retry it.
 - If the command is not found after registration, the shell PATH usually needs a refresh or manual fix.
 
 ## Command discovery rules
@@ -55,7 +55,7 @@ Use live help when:
 Vault targeting follows these rules from the official docs and current local help:
 
 - If the current working directory is a vault folder, that vault is used by default.
-- Otherwise, the active vault is used by default.
+- Otherwise, the most recently focused open vault window is used.
 - `vault=<name>` must be the first argument before the command when you want to force the target vault. Anywhere else it is silently ignored and the default vault is used.
 
 Examples:
@@ -65,7 +65,7 @@ obsidian vault="Work Vault" search query="roadmap"
 obsidian vault=Notes daily
 ```
 
-If newer docs or builds mention `vault=<id>`, verify locally how those IDs are surfaced before relying on them in automation.
+`vault=` also accepts a vault ID — the keys of `vaults` in Obsidian's `obsidian.json` (`vaults verbose` does not show them). Names match the vault folder name case-insensitively.
 
 ## File targeting
 
@@ -87,15 +87,14 @@ Common CLI syntax rules:
 - Parameters use `name=value`.
 - Boolean flags are passed without a value, for example `open`, `overwrite`, `inline`.
 - Quote values with spaces: `name="Project Plan"`.
-- Use `\n` for multiline content and `\t` for tabs.
-- The online docs mention `--copy` for copying output to the clipboard, but treat it as version-sensitive and verify locally before relying on it.
+- Use `\n` for multiline content and `\t` for tabs. The conversion is unconditional, so literal backslashes cannot survive `content=` — see `safety-and-troubleshooting.md`.
+- `--copy` copies the command output to the clipboard. It is in the official docs, not in `obsidian help`; verified on 1.13.7.
 
 Examples:
 
 ```bash
 obsidian create name="Meeting Note" content="# Agenda\n\n- topic 1" open
-obsidian help
-# Only use --copy if local behavior confirms support for it.
+obsidian daily:path --copy
 ```
 
 ## Good first read-only probes
