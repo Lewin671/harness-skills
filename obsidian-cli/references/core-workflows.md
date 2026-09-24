@@ -44,6 +44,8 @@ obsidian delete path="Scratch/Old.md"
 Notes:
 
 - **To overwrite an existing file**, use `create path=... overwrite content=...`. There is no standalone `update` or `write` command — `create overwrite` is the correct pattern.
+- Without `overwrite`, `create` on an existing path silently writes `Name 1.md`; check the printed path.
+- `content=` converts `\n`/`\t` to newline/tab; content with literal backslashes (LaTeX, code) needs another write path — see `safety-and-troubleshooting.md`.
 - `create` can combine `template`, `open`, and `newtab`.
 - `move` and `rename` are preferable to raw file-system moves when you want Obsidian-aware behavior.
 - `delete` uses trash by default unless `permanent` is passed.
@@ -138,7 +140,7 @@ Canvas files are JSON Canvas documents. Treat them as structured data:
 - Use exact `path="Board.canvas"` targeting.
 - Write the whole file content as valid JSON.
 - Keep the first pass simple: start with `text` nodes, `group` nodes, and basic `edges`.
-- Prefer single-line node text unless you are certain escaping is correct.
+- Keep node text single-line when writing through `content=`: the CLI turns every `\n` into a real newline, which breaks JSON strings (see `safety-and-troubleshooting.md`).
 
 Minimal pattern:
 

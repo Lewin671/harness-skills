@@ -21,10 +21,16 @@ Important command behaviors:
 - `task`, `daily:append`, `append`, and `prepend` are mutating commands even if they look lightweight.
 - `.canvas` files are not Markdown. They must remain valid JSON Canvas documents after every write.
 
+Silent behaviors that change what gets written:
+
+- `content=` always turns a literal `\n` into a newline and `\t` into a tab (`create`, `append`, `prepend`, `daily:append`, `daily:prepend`). LaTeX such as `\theta` or `\nabla`, code samples containing `\n`, and JSON-escaped canvas strings are corrupted. When content must keep literal backslashes, write it with `obsidian eval`, which does no conversion: call `app.vault.modify(app.vault.getFileByPath("path.md"), text)` with `text` as a `String.raw` template literal (a plain JS string literal would reinterpret `\t` itself), or edit the file directly.
+- `create` without `overwrite` never fails on an existing file: it creates `Name 1.md` instead and prints that path. Check the printed path.
+- `vault=` anywhere but first is ignored and the default vault is used. Unknown or misspelled parameters (e.g. `overwirte`) are also ignored without an error.
+
 For `.canvas` writes, use these guardrails:
 
 - Prefer exact `path=` and overwrite the whole file deliberately rather than attempting partial text surgery through append/prepend.
-- Keep node text simple on the first pass; multiline strings and shell escaping are easy to get wrong.
+- Keep node text single-line: an escaped `\n` inside a JSON string becomes a raw newline through `content=` and invalidates the file. For multiline node text, write through `eval` instead.
 - Validate the serialized file before declaring success.
 - Reopen the canvas in Obsidian after writing.
 

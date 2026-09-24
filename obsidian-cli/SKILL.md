@@ -44,7 +44,8 @@ There is no standalone `write` or `update` command. `create overwrite` is the co
 - Treat `.canvas` files as structured JSON Canvas data, not ordinary note text. When creating or editing a canvas, use exact `path=`, preserve valid JSON escaping, and verify the result after writing.
 - Treat Excalidraw as plugin-owned content, not generic Markdown. Prefer the Excalidraw plugin API through `obsidian eval` when the user wants a drawing created or updated.
 - Avoid relying on the active file in scripts unless that is explicitly intended.
-- When the current working directory is not the vault root, pass `vault=<name>` as the first argument.
+- When the current working directory is not the vault root, pass `vault=<name>` as the first argument; elsewhere it is silently ignored.
+- Before writing, read the silent write behaviors in [`references/safety-and-troubleshooting.md`](references/safety-and-troubleshooting.md): `content=` converts `\n`/`\t`, `create` without `overwrite` writes `Name 1.md` on collision, and unknown parameters are ignored.
 
 ## Which reference to read
 

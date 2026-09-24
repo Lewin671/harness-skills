@@ -44,6 +44,7 @@ Apply these defaults unless the user gives a conflicting vault convention.
 - Use wikilinks deliberately. Link to concepts, projects, people, and source notes that are likely to matter again.
 - Keep lists concise and scannable. Convert dense raw material into sections, bullets, tables, or short paragraphs as needed.
 - Preserve atomicity where possible: one note should usually have one clear purpose.
+- LaTeX and code with backslashes (`\theta`, `\nabla`, `\n`) are corrupted by `obsidian-cli`'s `content=`; use the write path its safety reference gives.
 
 Property rule:
 

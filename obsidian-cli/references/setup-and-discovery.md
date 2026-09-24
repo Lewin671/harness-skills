@@ -56,7 +56,7 @@ Vault targeting follows these rules from the official docs and current local hel
 
 - If the current working directory is a vault folder, that vault is used by default.
 - Otherwise, the active vault is used by default.
-- `vault=<name>` must be the first argument before the command when you want to force the target vault.
+- `vault=<name>` must be the first argument before the command when you want to force the target vault. Anywhere else it is silently ignored and the default vault is used.
 
 Examples:
 
