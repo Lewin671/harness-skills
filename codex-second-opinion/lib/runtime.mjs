@@ -448,7 +448,7 @@ export async function runCodex(env, invocation, options) {
     if (logText.includes('unknown configuration field') || logText.includes('Unknown feature flag')) {
       process.stderr.write('hint: codex rejected a configuration key or feature flag this script sets (--strict-config is deliberate); the installed codex CLI may have drifted from the keys in lib/runtime.mjs.\n')
     } else if (modelUnavailable(logText, model)) {
-      process.stderr.write(`hint: the selected model '${flat(model)}' is unavailable to this codex login (retired, renamed, or not entitled); no fallback was attempted.\n`)
+      process.stderr.write(`hint: the selected model '${flat(model)}' is unavailable to this codex login (retired, renamed, not entitled, or newer than the installed codex CLI — try upgrading it); no fallback was attempted.\n`)
       if (modelSource === 'flag') {
         process.stderr.write('hint: rerun with a supported --model M --effort L pair.\n')
       } else if (modelSource === 'env') {

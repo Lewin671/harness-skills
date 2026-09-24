@@ -209,7 +209,7 @@ test('review of a change succeeds with safety args, markers and prefixes', () =>
       'sandbox_mode="read-only"', '--disable hooks', '--disable apps',
       '--disable plugins', '--disable memories', 'notify=[]',
       '--strict-config', '--ephemeral',
-      '--json', '-m gpt-5.6-sol', 'model_reasoning_effort="high"',
+      '--json', '-m gpt-6-sol', 'model_reasoning_effort="high"',
     ]) {
       assert.ok(exec.includes(fragment), `missing ${fragment} in: ${exec}`)
     }
@@ -535,10 +535,10 @@ test('a feature flag the installed codex does not know gets the config-drift hin
 test('a rejected pinned default gets a model-unavailable hint, no fallback', () => {
   const result = run(['review', '--commit', 'HEAD'], {
     FAKE_EXIT: '1',
-    FAKE_STDERR_TEXT: "ERROR: The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+    FAKE_STDERR_TEXT: "ERROR: The 'gpt-6-sol' model is not supported when using Codex with a ChatGPT account.",
   })
   assert.equal(result.status, 4, result.stderr)
-  assert.match(result.stderr, /model 'gpt-5\.6-sol' is unavailable to this codex login/)
+  assert.match(result.stderr, /model 'gpt-6-sol' is unavailable to this codex login/)
   assert.match(result.stderr, /pinned default in this script/)
   assert.equal(result.argv.filter((line) => line.startsWith('exec')).length, 1,
     'exactly one codex invocation — no automatic fallback')
@@ -558,7 +558,7 @@ test('a rejected --model override points at the flag, not the pinned default', (
 test('an unrelated codex failure gets no model-unavailable hint', () => {
   const result = run(['review', '--commit', 'HEAD'], {
     FAKE_EXIT: '1',
-    FAKE_STDERR_TEXT: 'HTTP 400: malformed request body for model gpt-5.6-sol',
+    FAKE_STDERR_TEXT: 'HTTP 400: malformed request body for model gpt-6-sol',
   })
   assert.equal(result.status, 4, result.stderr)
   assert.ok(!/unavailable to this codex login/.test(result.stderr),
@@ -569,7 +569,7 @@ test('a model-rejected resumed consult warns against reusing the session', () =>
   const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
   const result = run(['consult', '--continue', id, '--', 'follow-up'], {
     FAKE_EXIT: '1',
-    FAKE_STDERR_TEXT: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+    FAKE_STDERR_TEXT: "The 'gpt-6-sol' model is not supported when using Codex with a ChatGPT account.",
   })
   assert.equal(result.status, 4, result.stderr)
   assert.match(result.stderr, /do not resume this session under a different model/)
@@ -588,7 +588,7 @@ test('consult prints a resume line that is a complete runnable command', () => {
   // inside a work tree, codex's own git check stays active
   const exec = result.argv.find((line) => line.startsWith('exec'))
   assert.ok(!exec.includes('--skip-git-repo-check'), exec)
-  assert.ok(resume.includes('--model gpt-5.6-sol --effort high'), resume)
+  assert.ok(resume.includes('--model gpt-6-sol --effort high'), resume)
   assert.ok(resume.includes('--repo '), resume)
 
   // the printed line, plus the question, must run as-is

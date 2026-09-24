@@ -69,7 +69,7 @@ function createPolicy() {
   return {
     // Checked in validatePolicy, after parsing, so `--help` still prints.
     envMismatch: Boolean(envModel) !== Boolean(envEffort),
-    model: envModel || 'gpt-5.6-sol',
+    model: envModel || 'gpt-6-sol',
     modelFromEnv: Boolean(envModel),
     effort: envEffort || 'high',
     modelSet: false,
