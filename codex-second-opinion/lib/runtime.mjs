@@ -263,8 +263,10 @@ export function safetyArgs(mode, policy, out) {
     // Cross-session memories would feed an earlier session's context into a
     // nominally blind first pass, and let a second-opinion run write into
     // the user's memory store; the feature gate switches off both
-    // directions. On a codex without the feature, --strict-config fails the
-    // run (exit 4) rather than silently weakening independence.
+    // directions. A codex that does not know the feature fails the run
+    // with "Unknown feature flag" (exit 4) regardless of --strict-config.
+    // Once codex marks the feature "removed", --disable is accepted
+    // silently, so re-check `codex features list` when upgrading.
     '--disable', 'memories',
     '-c', 'notify=[]',
     // Turns a renamed or unrecognized config key into a hard failure instead
@@ -443,8 +445,8 @@ export async function runCodex(env, invocation, options) {
     }
     process.stderr.write(`error: codex ${runNoun} failed; raw output at ${log}\n`)
     const logText = readLogFile(log)
-    if (logText.includes('unknown configuration field')) {
-      process.stderr.write('hint: codex rejected a configuration key this script sets (--strict-config is deliberate); the installed codex CLI may have drifted from the keys in lib/runtime.mjs.\n')
+    if (logText.includes('unknown configuration field') || logText.includes('Unknown feature flag')) {
+      process.stderr.write('hint: codex rejected a configuration key or feature flag this script sets (--strict-config is deliberate); the installed codex CLI may have drifted from the keys in lib/runtime.mjs.\n')
     } else if (modelUnavailable(logText, model)) {
       process.stderr.write(`hint: the selected model '${flat(model)}' is unavailable to this codex login (retired, renamed, or not entitled); no fallback was attempted.\n`)
       if (modelSource === 'flag') {

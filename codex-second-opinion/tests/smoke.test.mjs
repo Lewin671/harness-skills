@@ -523,6 +523,15 @@ test('an empty result exits 4', () => {
   assert.match(result.stderr, /produced no report/)
 })
 
+test('a feature flag the installed codex does not know gets the config-drift hint', () => {
+  const result = run(['review', '--commit', 'HEAD'], {
+    FAKE_EXIT: '1',
+    FAKE_STDERR_TEXT: 'Error: Unknown feature flag: memories',
+  })
+  assert.equal(result.status, 4, result.stderr)
+  assert.match(result.stderr, /rejected a configuration key or feature flag/)
+})
+
 test('a rejected pinned default gets a model-unavailable hint, no fallback', () => {
   const result = run(['review', '--commit', 'HEAD'], {
     FAKE_EXIT: '1',
