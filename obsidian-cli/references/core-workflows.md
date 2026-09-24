@@ -138,6 +138,7 @@ Use this when the user wants an Obsidian Canvas (`.canvas`) rather than a Markdo
 Canvas files are JSON Canvas documents. Treat them as structured data:
 
 - Use exact `path="Board.canvas"` targeting.
+- Creating a new `.canvas` needs the Canvas core plugin enabled; otherwise the file is silently created as `.md`. Check the printed path.
 - Write the whole file content as valid JSON.
 - Keep the first pass simple: start with `text` nodes, `group` nodes, and basic `edges`.
 - Keep node text single-line when writing through `content=`: the CLI turns every `\n` into a real newline, which breaks JSON strings (see `safety-and-troubleshooting.md`).
@@ -157,19 +158,9 @@ obsidian create path="Architecture.canvas" overwrite content='{
 obsidian open path="Architecture.canvas"
 ```
 
-Validation pattern:
+Verify every write with the canvas guardrails and verification flow in `safety-and-troubleshooting.md`.
 
-```bash
-obsidian read path="Architecture.canvas" | jq -e .
-obsidian open path="Architecture.canvas"
-obsidian dev:errors
-```
-
-Guidance:
-
-- `obsidian read` is useful for checking the exact serialized canvas contents after writing.
-- If `jq` is unavailable, use another JSON validator before assuming the canvas is valid.
-- If the user only needs a quick diagram, Mermaid in Markdown is lower risk than Canvas.
+If the user only needs a quick diagram, Mermaid in Markdown is lower risk than Canvas.
 
 ## 8. Developer workflows
 

@@ -13,7 +13,6 @@ This skill defines what to create and how it should be structured.
 
 - Use it for Markdown note structure, frontmatter expectations, link strategy, section design, and Canvas layout choices.
 - Use `obsidian-cli` for vault targeting, command discovery, safe writes, and Obsidian-aware file operations.
-- Keep this skill additive. As vault-specific conventions become clearer, extend the rule set instead of replacing the core workflow wholesale.
 
 ## Default workflow
 
@@ -22,15 +21,6 @@ This skill defines what to create and how it should be structured.
 3. Organize content so that headings, links, metadata, and visual grouping are easy to scan.
 4. Keep the first pass structured and complete rather than stylistically ornate.
 5. When writing into a vault, pair this skill with `obsidian-cli`.
-
-## Maintenance rule
-
-This skill is expected to grow over time.
-
-- Preserve stable global defaults in `SKILL.md`.
-- Add vault-specific conventions in clearly named sections so later rules can be appended without disturbing existing behavior.
-- When a new rule applies only to Markdown or only to Canvas, keep it in that format-specific section rather than mixing concerns.
-- If the rule set becomes long, split examples, note-type templates, or layout patterns into reference files and keep `SKILL.md` focused on selection and workflow.
 
 ## Markdown rules
 
@@ -66,9 +56,9 @@ Use these defaults when creating or refining Obsidian Canvas content.
 
 ## Excalidraw rules
 
-Use these defaults when the target artifact is an Excalidraw diagram rather than a generic Canvas board.
+Use these defaults when the target artifact is an Excalidraw diagram rather than a generic Canvas board. For the plugin API and write mechanics, see `obsidian-cli`'s [`references/excalidraw.md`](../obsidian-cli/references/excalidraw.md).
 
-- Default to a small, opinionated diagram. Do not mirror every sentence from the source note onto the canvas.
+- Default to a small, opinionated diagram. Do not mirror every sentence from the source note into the drawing.
 - Pick one organizing principle before drawing: flow, hierarchy, comparison, or hub-and-spoke. If unclear, prefer a single main line of reasoning.
 - Keep node text short and paraphrased. Excalidraw should expose the structure of the thought, not duplicate the prose.
 - Use a separate `.excalidraw.md` file for the diagram and embed it back into the note instead of mixing long drawing data into the note body.

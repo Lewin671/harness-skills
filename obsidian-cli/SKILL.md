@@ -59,5 +59,4 @@ There is no standalone `write` or `update` command. `create overwrite` is the co
 
 - Use the CLI for Obsidian-aware operations before falling back to direct file edits.
 - Keep commands explicit and composable so the user can rerun them outside the agent if needed.
-- For `.canvas` writes, prefer a minimal valid JSON Canvas structure first, then reopen and inspect before declaring success.
 - For volatile command areas such as developer commands, plugin management, or newer workspace/base features, re-check `obsidian help` immediately before use.

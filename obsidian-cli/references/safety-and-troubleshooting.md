@@ -16,6 +16,7 @@ Use these defaults unless the user explicitly wants something else:
 Important command behaviors:
 
 - `delete` sends notes to trash by default. `permanent` skips trash.
+- To undo a bad `create overwrite` or append, list local File Recovery versions with `history path=...`, compare with `diff path=... from=<n> to=<n>`, and restore with `history:restore path=... version=<n>`.
 - `move` and `rename` can update internal links, but that depends on the vault setting for automatic internal link updates.
 - `property:set` is safer than handwritten frontmatter edits when the user wants typed properties.
 - `task`, `daily:append`, `append`, and `prepend` are mutating commands even if they look lightweight.
@@ -97,15 +98,7 @@ obsidian help <command>
 obsidian reload
 ```
 
-6. If the target is a `.canvas`, is the file still valid JSON?
-
-```bash
-obsidian read path="Board.canvas" | jq -e .
-```
-
-7. If the canvas opens as blank or fails, can you reproduce with a minimal two-node canvas?
-
-Start from a known-good minimal canvas and add complexity incrementally.
+6. If the target is a `.canvas`, rerun the canvas verification flow above. If it opens blank or fails, reproduce with a minimal two-node canvas and add complexity incrementally.
 
 ## Platform notes from the official docs
 
