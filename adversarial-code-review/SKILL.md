@@ -52,7 +52,12 @@ issues and their evidence without sharing your analysis with the subagent.
 
 ### 2. Launch one independent reviewer
 
-Use Claude Code's Agent tool with the isolation and model settings above.
+Use Claude Code's Agent tool with `subagent_type: "general-purpose"`. Never
+use `fork`, which inherits the whole conversation, or `Explore`, which reads
+excerpts and does not review. Pass `model` explicitly for the main agent's
+model, or a configured default subagent model may replace it. Effort comes
+from the agent definition and cannot be set per call; report it as
+inherited or unknown.
 Invocation authorizes this one subagent, not further delegation. Launch it even
 if your own review found nothing. Supply neutral task context and adapt this
 prompt to the change:
