@@ -197,10 +197,13 @@ one exception**: copy the `resume:` line verbatim, model flags
 included — there they pin the discussion to the model that actually
 answered, rather than select a new one. A selection Codex rejects fails
 without silently changing models. The exact "Selected model is at capacity.
-Please try a different model." error automatically retries the same invocation
-up to three times after 15, 30 and 60 seconds, within the original `--timeout`.
-Retries happen only before any model/tool item or result appears; partial runs
-are not replayed. Relay retry progress and let the wrapper finish, then continue
+Please try a different model." error automatically retries up to three times
+after 15, 30 and 60 seconds, within the original `--timeout`, keeping the model.
+Consult resumes a recoverable session with `Continue`, preserving its task and
+progress; every continuation must confirm the same session id. Without a session
+(including ephemeral review), repeat the original invocation only before any
+model/tool item or result appears. Never replay partial work without a session.
+Relay retry progress and let the wrapper finish, then continue
 the task on success. Exhausted capacity retries exit `4`; insufficient time or
 timeout exits `5`. Other errors keep the normal failure rules.
 

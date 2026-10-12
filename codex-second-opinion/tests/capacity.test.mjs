@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process'
 import { runCodex } from '../lib/runtime.mjs'
 
 const capacity = 'Selected model is at capacity. Please try a different model.'
+const sessionId = '11111111-2222-3333-4444-555555555555'
 const runtimeUrl = new URL('../lib/runtime.mjs', import.meta.url).href
 
 function fixture(mode, timeout = 5, delays = [1, 2, 3]) {
@@ -22,13 +23,18 @@ function fixture(mode, timeout = 5, delays = [1, 2, 3]) {
     const [out, count, mode] = process.argv.slice(2);
     appendFileSync(count, JSON.stringify(process.argv.slice(2)) + '\\n');
     const n = readFileSync(count, 'utf8').trim().split('\\n').length;
-    console.log(JSON.stringify({type:'thread.started', thread_id: n === 1 ? 'old' : 'new'}));
-    if (mode === 'recover' && n > 2 || mode === 'quoted') {
+    const resumeAt = process.argv.indexOf('resume');
+    const session = resumeAt >= 0 ? process.argv[resumeAt + 1] : ${JSON.stringify(sessionId)};
+    const resumable = ['session', 'partialsession', 'mismatch', 'missingconfirmation', 'ephemeral', 'known'].includes(mode);
+    if ((mode !== 'missingconfirmation' || n === 1) && (mode !== 'known' || n > 1)) {
+      console.log(JSON.stringify({type:'thread.started', thread_id: mode === 'mismatch' && n > 1 ? 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' : resumable ? session : n === 1 ? 'old' : 'new'}));
+    }
+    if (mode === 'known' && n > 1 || (mode === 'session' || mode === 'partialsession') && n > 2 || mode === 'missingconfirmation' && n > 1 || mode === 'recover' && n > 2 || mode === 'quoted') {
       console.log(JSON.stringify({type:'item.completed', item:{type:'agent_message', text:${JSON.stringify(capacity)}}}));
       writeFileSync(out, 'success');
       process.exit(0);
     }
-    if (mode === 'partial') {
+    if (mode === 'partial' || mode === 'partialsession' || mode === 'ephemeral') {
       console.log(JSON.stringify({type:'item.started', item:{type:'command_execution'}}));
     }
     if (mode === 'result') writeFileSync(out, 'partial answer');
@@ -120,5 +126,75 @@ test('capacity attempts share one deadline rather than resetting it', async () =
   try {
     await assert.rejects(runCodex(f.env, f.invocation, f.options), e => e.code === 5)
     assert.ok(f.calls().length >= 1 && f.calls().length < 4)
+  } finally { f.cleanup() }
+})
+
+
+for (const mode of ['session', 'partialsession']) {
+  test(`${mode}: continue the same session, preserving flags and replacing only the prompt`, async () => {
+    const f = fixture(mode)
+    const flags = ['-m', 'same-model', '-c', 'sandbox_mode="read-only"', '--json']
+    const prefix = f.invocation.args
+    f.invocation.args = [...prefix, 'exec', ...flags, '--', 'original question']
+    f.options.resumeInvocation = id => ({
+      args: [...prefix, 'exec', 'resume', id, ...flags, '--', 'Continue'],
+      diagnostic: 'running: fake resume Continue',
+    })
+    try {
+      const result = await runCodex(f.env, f.invocation, f.options)
+      assert.equal(result.output, 'success')
+      const calls = f.calls()
+      assert.equal(calls.length, 3)
+      assert.equal(calls[0].at(-1), 'original question')
+      for (const call of calls.slice(1)) {
+        assert.deepEqual(call.slice(3), ['exec', 'resume', sessionId, ...flags, '--', 'Continue'])
+      }
+    } finally { f.cleanup() }
+  })
+}
+
+for (const mode of ['mismatch', 'missingconfirmation']) {
+  test(`${mode}: reject an unconfirmed continuation rather than adopting a different session`, async () => {
+    const f = fixture(mode)
+    const prefix = f.invocation.args
+    f.options.resumeInvocation = id => ({ args: [...prefix, 'exec', 'resume', id, '--', 'Continue'], diagnostic: 'running: fake resume' })
+    try {
+      await assert.rejects(runCodex(f.env, f.invocation, f.options), e => e.code === 4 && /resume/.test(e.message))
+      assert.equal(f.calls().length, 2)
+      assert.equal(existsSync(f.out), false)
+    } finally { f.cleanup() }
+  })
+}
+
+test('ephemeral review does not resume a thread id or replay partial work', async () => {
+  const f = fixture('ephemeral')
+  try {
+    await assert.rejects(runCodex(f.env, f.invocation, f.options), e => e.code === 4 && /no recoverable session/.test(e.message))
+    assert.equal(f.calls().length, 1)
+  } finally { f.cleanup() }
+})
+
+
+test('known resumed session continues even when capacity failure reports no thread id', async () => {
+  const f = fixture('known')
+  const prefix = f.invocation.args
+  f.invocation.args = [...prefix, 'exec', 'resume', sessionId, '--', 'original follow-up']
+  f.options.expectedSessionId = sessionId
+  f.options.resumed = true
+  f.options.resumeInvocation = id => ({ args: [...prefix, 'exec', 'resume', id, '--', 'Continue'], diagnostic: 'running: known resume' })
+  try {
+    const result = await runCodex(f.env, f.invocation, f.options)
+    assert.equal(result.output, 'success')
+    assert.equal(f.calls().length, 2)
+    assert.deepEqual(f.calls()[1].slice(3), ['exec', 'resume', sessionId, '--', 'Continue'])
+  } finally { f.cleanup() }
+})
+
+test('no valid session repeats the original question instead of sending Continue', async () => {
+  const f = fixture('recover')
+  f.options.resumeInvocation = () => { throw new Error('must not resume an invalid session') }
+  try {
+    assert.equal((await runCodex(f.env, f.invocation, f.options)).output, 'success')
+    for (const call of f.calls()) assert.deepEqual(call, f.invocation.args.slice(1))
   } finally { f.cleanup() }
 })

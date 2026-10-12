@@ -329,6 +329,7 @@ export function lastThreadId(events) {
 // Runs codex to completion. Returns { output, events, discard, tail } on
 // success; dies with 4 (failed), 5 (timed out) or 129/130/143 (signalled)
 // otherwise, discarding the result file but keeping the event log.
+const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CAPACITY_ERROR = /Selected model is at capacity\. Please try a different model\./i
 
 // Waits remain interruptible even when there is no active child process.
@@ -353,13 +354,23 @@ export async function runCodex(env, invocation, options) {
   // One total deadline for attempts and backoff, not a fresh timeout per retry.
   const deadline = Date.now() + options.timeout * 1000
   const delays = options.capacityRetryDelays ?? [15000, 30000, 60000]
+  let currentInvocation = invocation
+  let currentOptions = options
   for (let attempt = 0; ; attempt += 1) {
     const remaining = deadline - Date.now()
     if (remaining <= 0) die(5, 'error: capacity retries exhausted the run timeout')
     try {
-      return await runCodexAttempt(env, invocation, { ...options, timeout: remaining / 1000 })
+      return await runCodexAttempt(env, currentInvocation, { ...currentOptions, timeout: remaining / 1000 })
     } catch (error) {
       if (!(error instanceof ExitError) || !error.capacity) throw error
+      let action = 'repeat the original invocation'
+      if (options.resumeInvocation && SESSION_UUID.test(error.sessionId)) {
+        currentInvocation = options.resumeInvocation(error.sessionId)
+        currentOptions = { ...options, resumed: true, expectedSessionId: error.sessionId }
+        action = `resume session ${error.sessionId} with Continue`
+      } else if (error.workStarted) {
+        die(4, 'error: capacity failure after work began, but no recoverable session is available; refusing to replay the task')
+      }
       if (attempt >= delays.length) {
         die(4, `error: model capacity remains unavailable after ${attempt + 1} attempts; no model change was attempted`)
       }
@@ -368,14 +379,14 @@ export async function runCodex(env, invocation, options) {
         die(5, 'error: insufficient run timeout remaining for the next capacity retry')
       }
       await waitForCapacity(delay, () => {
-        process.stderr.write(`note: model at capacity; retry ${attempt + 1}/${delays.length} in ${delay / 1000}s with the same model and arguments\n`)
+        process.stderr.write(`note: model at capacity; retry ${attempt + 1}/${delays.length} in ${delay / 1000}s with the same model; ${action}\n`)
       })
     }
   }
 }
 
 async function runCodexAttempt(env, invocation, options) {
-  const { out, log, timeout, runNoun, resultNoun, model, modelSource, resumed } = options
+  const { out, log, timeout, runNoun, resultNoun, model, modelSource, resumed, expectedSessionId } = options
   process.stderr.write(`${flat(invocation.diagnostic)}\n`)
 
   const discard = () => rmSync(out, { force: true })
@@ -498,13 +509,22 @@ async function runCodexAttempt(env, invocation, options) {
     discard()
     die(5)
   }
-  // Only replay capacity failures before any model/tool work or result.
-  // In particular, never replay a partially executed resumed consultation.
-  if (capacity && !workStarted && !readLogFile(out).trim()) {
+  const sessionId = lastThreadId(stdoutEvents).toLowerCase()
+  // Verify capacity-failed resumed attempts before another continuation.
+  // Other failures retain their existing diagnostics and never retry.
+  if (capacity && expectedSessionId && sessionId && sessionId !== expectedSessionId.toLowerCase()) {
+    tail()
+    discard()
+    die(4, `error: codex did not resume session ${expectedSessionId}; reported ${flat(sessionId)}`)
+  }
+  const hasResult = Boolean(readLogFile(out).trim())
+  if (capacity && (result.status !== 0 || !hasResult)) {
     tail()
     discard()
     const error = new ExitError(4)
     error.capacity = true
+    error.sessionId = sessionId || expectedSessionId || ''
+    error.workStarted = workStarted || hasResult
     throw error
   }
   if (result.status !== 0) {
@@ -531,6 +551,11 @@ async function runCodexAttempt(env, invocation, options) {
     tail()
     discard()
     die(4)
+  }
+  if (expectedSessionId && sessionId !== expectedSessionId.toLowerCase()) {
+    tail()
+    discard()
+    die(4, `error: codex did not resume session ${expectedSessionId} (stream reported ${flat(sessionId) || "no thread id"})`)
   }
   let output = ''
   try {

@@ -79,9 +79,11 @@ Three rules keep the loop honest:
   there is just nothing to continue. The two lines then read
   `session: unavailable — ...` and `resume: unavailable — ...`; they
   are printed either way so a model-written line cannot pose as them.
-- Capacity errors before any model/tool item or result are retried by the
-  wrapper under SKILL.md's bounded policy, including follow-ups with the
-  same resume arguments. Other model rejections are not retried automatically.
+- Capacity errors are retried under SKILL.md's bounded policy. The wrapper
+  resumes a recoverable session with `Continue`, retaining the original model
+  and checking the returned session id. If no session is available, it repeats
+  the original invocation only before any work or result. Other model
+  rejections are not retried automatically.
   If a follow-up still fails, treat its session as contaminated and start a
   fresh consultation; do not manually resume it after the wrapper fails.
 

@@ -400,6 +400,14 @@ async function runConsult(args) {
   const run = await runCodex(env, { args: cmdArgs, diagnostic }, {
     ...artifacts, timeout: policy.timeout, runNoun: 'consultation', resultNoun: 'answer',
     model: policy.model, modelSource: modelSource(policy), resumed: Boolean(policy.sessionId),
+    expectedSessionId: policy.sessionId || undefined,
+    resumeInvocation: (session) => {
+      const args = ['exec', 'resume', session, ...safetyArgs('consult', policy, artifacts.out)]
+      if (!env.repoRoot) args.push('--skip-git-repo-check')
+      const diagnostic = `running: ${env.codexBin} ${args.join(' ')} -- Continue`
+      args.push('--', 'Continue')
+      return { args, diagnostic }
+    },
   })
   await emitResume(policy, env, run, artifacts)
 }

@@ -182,7 +182,8 @@ Relay every wrapper warning; exit `0` means a usable result, not approval.
 
 - Review exit `2`: empty scope, not a pass. Correct the scope within the
   remaining budget or report an incomplete checkpoint.
-- Capacity errors before any work are retried inside the parent wrapper
+- Capacity errors are retried inside the parent wrapper: resume a recoverable
+  consult session with `Continue`; otherwise repeat only before any work
   (up to three retries with the same model, within its timeout). Wait for its
   final exit and continue the checkpoint on success. These internal retries
   belong to one invocation and consume one review attempt. If capacity retries
