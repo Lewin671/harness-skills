@@ -182,7 +182,12 @@ Relay every wrapper warning; exit `0` means a usable result, not approval.
 
 - Review exit `2`: empty scope, not a pass. Correct the scope within the
   remaining budget or report an incomplete checkpoint.
-- Exit `3`–`5`: at most one retry when the parent's rules justify it,
+- Capacity errors before any work are retried inside the parent wrapper
+  (up to three retries with the same model, within its timeout). Wait for its
+  final exit and continue the checkpoint on success. These internal retries
+  belong to one invocation and consume one review attempt. If capacity retries
+  exhaust or cannot fit the timeout, stop and report; do not start another retry cycle.
+- Other exit `3`–`5`: at most one retry when the parent's rules justify it,
   within the remaining budget; otherwise stop and report. Never replace
   a missing Codex checkpoint with Claude's own answer.
 - Failed consult follow-up (overrides the general retry rule): do not resume the possibly contaminated

@@ -329,7 +329,52 @@ export function lastThreadId(events) {
 // Runs codex to completion. Returns { output, events, discard, tail } on
 // success; dies with 4 (failed), 5 (timed out) or 129/130/143 (signalled)
 // otherwise, discarding the result file but keeping the event log.
+const CAPACITY_ERROR = /Selected model is at capacity\. Please try a different model\./i
+
+// Waits remain interruptible even when there is no active child process.
+async function waitForCapacity(delayMs, onReady) {
+  await new Promise((resolvePromise, reject) => {
+    const handlers = new Map()
+    const cleanup = () => {
+      clearTimeout(timer)
+      for (const [signal, handler] of handlers) process.removeListener(signal, handler)
+    }
+    const timer = setTimeout(() => { cleanup(); resolvePromise() }, delayMs)
+    for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+      const handler = () => { cleanup(); reject(new ExitError(code)) }
+      handlers.set(signal, handler)
+      process.once(signal, handler)
+    }
+    onReady()
+  })
+}
+
 export async function runCodex(env, invocation, options) {
+  // One total deadline for attempts and backoff, not a fresh timeout per retry.
+  const deadline = Date.now() + options.timeout * 1000
+  const delays = options.capacityRetryDelays ?? [15000, 30000, 60000]
+  for (let attempt = 0; ; attempt += 1) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) die(5, 'error: capacity retries exhausted the run timeout')
+    try {
+      return await runCodexAttempt(env, invocation, { ...options, timeout: remaining / 1000 })
+    } catch (error) {
+      if (!(error instanceof ExitError) || !error.capacity) throw error
+      if (attempt >= delays.length) {
+        die(4, `error: model capacity remains unavailable after ${attempt + 1} attempts; no model change was attempted`)
+      }
+      const delay = delays[attempt]
+      if (Date.now() + delay >= deadline) {
+        die(5, 'error: insufficient run timeout remaining for the next capacity retry')
+      }
+      await waitForCapacity(delay, () => {
+        process.stderr.write(`note: model at capacity; retry ${attempt + 1}/${delays.length} in ${delay / 1000}s with the same model and arguments\n`)
+      })
+    }
+  }
+}
+
+async function runCodexAttempt(env, invocation, options) {
   const { out, log, timeout, runNoun, resultNoun, model, modelSource, resumed } = options
   process.stderr.write(`${flat(invocation.diagnostic)}\n`)
 
@@ -342,9 +387,23 @@ export async function runCodex(env, invocation, options) {
 
   let logBroken = false
   let stdoutEvents = ''
+  let capacity = false
+  let workStarted = false
   const emitLine = (stream, line) => {
     process.stderr.write(`${CHILD_LINE_PREFIX}${line.length > 180 ? `${line.slice(0, 180)}...` : line}\n`)
-    if (stream === 'stdout') stdoutEvents += `${line}\n`
+    if (stream === 'stdout') {
+      stdoutEvents += `${line}\n`
+      try {
+        const event = JSON.parse(line)
+        if (event?.type?.startsWith('item.')) workStarted = true
+        if (event?.type === 'error' || event?.type === 'turn.failed') {
+          const message = event.message ?? event.error?.message
+          if (typeof message === 'string' && CAPACITY_ERROR.test(message)) capacity = true
+        }
+      } catch {}
+    } else if (CAPACITY_ERROR.test(line)) {
+      capacity = true
+    }
     if (logBroken) return
     try {
       appendFileSync(log, `${line}\n`)
@@ -438,6 +497,15 @@ export async function runCodex(env, invocation, options) {
     tail()
     discard()
     die(5)
+  }
+  // Only replay capacity failures before any model/tool work or result.
+  // In particular, never replay a partially executed resumed consultation.
+  if (capacity && !workStarted && !readLogFile(out).trim()) {
+    tail()
+    discard()
+    const error = new ExitError(4)
+    error.capacity = true
+    throw error
   }
   if (result.status !== 0) {
     if (result.spawnError) {

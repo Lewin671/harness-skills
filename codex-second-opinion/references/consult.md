@@ -79,10 +79,11 @@ Three rules keep the loop honest:
   there is just nothing to continue. The two lines then read
   `session: unavailable — ...` and `resume: unavailable — ...`; they
   are printed either way so a model-written line cannot pose as them.
-- A rejected model is never retried automatically. On a follow-up,
-  whether the failed attempt reached the session cannot be verified
-  from outside, so treat the session as contaminated and start a fresh
-  consultation.
+- Capacity errors before any model/tool item or result are retried by the
+  wrapper under SKILL.md's bounded policy, including follow-ups with the
+  same resume arguments. Other model rejections are not retried automatically.
+  If a follow-up still fails, treat its session as contaminated and start a
+  fresh consultation; do not manually resume it after the wrapper fails.
 
 Follow-ups belong in the same session — a fresh run rereads the repo
 from scratch and forgets every position already staked out. Only start

@@ -123,7 +123,7 @@ holds stays readable to Codex.
 | `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means a startup snapshot of `--uncommitted`. |
 | `--context TEXT` | Review only. Cannot combine with `--custom`. |
 | `--model M --effort L` | Always a pair, or omit both for the pinned defaults. Exception: keep them in a copied `resume:` tail (see Model). |
-| `--timeout N` | 1–86400 seconds; default 3000. Covers the codex run only — snapshot and preflight git steps have a separate fixed 120 s budget; if a huge repository's snapshot clone hits it, use `--commit`, which skips the clone. |
+| `--timeout N` | 1–86400 seconds; default 3000. Covers the codex run including capacity retries and waits only — snapshot and preflight git steps have a separate fixed 120 s budget; if a huge repository's snapshot clone hits it, use `--commit`, which skips the clone. |
 | `--continue ID` | Consult only. Do not rebuild the command from the id alone — the previous run's `resume:` line is the whole follow-up command; append `-- QUESTION` and run it (see consult.md). |
 
 ## Usage
@@ -196,7 +196,13 @@ explicit `--model M --effort L` pair. A **`--continue` follow-up is the
 one exception**: copy the `resume:` line verbatim, model flags
 included — there they pin the discussion to the model that actually
 answered, rather than select a new one. A selection Codex rejects fails
-the run once instead of silently changing models.
+without silently changing models. The exact "Selected model is at capacity.
+Please try a different model." error automatically retries the same invocation
+up to three times after 15, 30 and 60 seconds, within the original `--timeout`.
+Retries happen only before any model/tool item or result appears; partial runs
+are not replayed. Relay retry progress and let the wrapper finish, then continue
+the task on success. Exhausted capacity retries exit `4`; insufficient time or
+timeout exits `5`. Other errors keep the normal failure rules.
 
 ## Exit Codes
 
@@ -208,7 +214,7 @@ The exit code is the verdict on *the run*, never on the code:
 | `2` | (review only) Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
 | `3` | Bad arguments or an unsafe environment | Read stderr; report the invalid or unsafe setup. Do not substitute a Claude answer. |
 | `4` | The invocation produced no usable result | Read stderr. Codex failed, never started, was not authenticated, rejected a config key, feature flag or command-line flag (e.g. `--ephemeral` on an old CLI), rejected the selected model (report codex's message; the user may pick another or set the env overrides), or did not resume the session. |
-| `5` | Hung and was killed | Report where it stalled from the log tail; rerun with a larger `--timeout` only if it was genuinely progressing. |
+| `5` | Timed out or insufficient time for a capacity retry | Report the timeout and log tail. After capacity retries cannot fit, stop; otherwise rerun with a larger `--timeout` only if it was genuinely progressing. |
 | `129`/`130`/`143` | The wrapper was signalled (`HUP`/`INT`/`TERM`) | Something outside the run interrupted it. |
 
 Codex's own exit code is `0` for both a P1 finding and a clean review,
