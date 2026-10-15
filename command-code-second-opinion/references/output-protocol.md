@@ -46,8 +46,10 @@ warning: it is the wrapper saying the reviewed bytes changed during the run.
 
 `session:`/`resume:` print on every **successful** run in every mode — as real
 values or as `unavailable — ...` sentinels — so on exit `0` a model-written line
-cannot pose as them. A failed run (nonzero exit) prints neither: there is nothing
-to resume, and any session-shaped line in that output is not the wrapper's. Copy
+cannot pose as them. A timeout (`124`) prints them too, after the `cmd> `-prefixed
+log tail, because the killed session can still be resumed. Any other failed run
+prints neither: there is nothing to resume, and any session-shaped line in that
+output is not the wrapper's. Copy
 a `resume:` line and append the question (see consult.md); never rebuild the
 follow-up command from the session id alone.
 

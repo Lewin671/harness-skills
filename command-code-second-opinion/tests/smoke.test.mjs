@@ -43,6 +43,13 @@ if (process.env.FAKE_SLEEP) {
 }
 const sessionId = process.env.FAKE_SESSION_ID || '11111111-2222-3333-4444-555555555555'
 const model = process.env.FAKE_MODEL || 'fake/model-1'
+if (process.env.FAKE_HANG_AFTER_START) {
+  // A run that names its session and then stalls mid-work. writeSync, because
+  // the sleep below blocks the event loop an async pipe write would need.
+  fs.writeSync(1, JSON.stringify({ type: 'event', event: { type: 'run_start', sessionId } }) + '\\n'
+    + JSON.stringify({ type: 'event', event: { type: 'model_request_start', model } }) + '\\n')
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000)
+}
 const lines = []
 if (!process.env.FAKE_NO_SESSION) {
   lines.push(JSON.stringify({ type: 'event', event: { type: 'run_start', sessionId } }))
@@ -572,6 +579,8 @@ test('a timeout exits 124 and kills the whole detached process group', async () 
     })
     assert.equal(result.status, 124, result.stderr)
     assert.match(result.stderr, /exceeded 1s and was terminated/)
+    // It died before naming a session, so there is nothing to resume.
+    assert.match(result.stderr, /^resume: unavailable — no session id/m)
     const grandchild = Number(readFileSync(pidFile, 'utf8').trim())
     assert.ok(grandchild > 0)
     for (let i = 0; i < 50; i += 1) {
@@ -587,6 +596,48 @@ test('a timeout exits 124 and kills the whole detached process group', async () 
   } finally {
     clean()
   }
+})
+
+test('a timed-out task still prints its session and a working resume line', () => {
+  const result = run(['task', '--timeout', '1', '--', 'do a long thing'], {
+    FAKE_HANG_AFTER_START: '1', FAKE_SESSION_ID: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+  })
+  assert.equal(result.status, 124, result.stderr)
+  assert.match(result.stderr, /exceeded 1s and was terminated/)
+  assert.match(result.stderr, /^session: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee$/m)
+  const resume = result.stderr.split('\n').filter((line) => line.startsWith('resume: ')).at(-1)
+  assert.match(resume, / task --resume aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --model fake\/model-1 --timeout 1 --repo /)
+  assert.match(result.stderr, /^hint: the session survives the timeout/m)
+  // The resume marker is the last thing printed, after the log tail.
+  assert.ok(result.stderr.trimEnd().split('\n').at(-1).startsWith('hint: '), result.stderr)
+})
+
+test('a timed-out review resumes as a consult', () => {
+  dirty()
+  try {
+    const result = run(['review', '--uncommitted', '--timeout', '1'], { FAKE_HANG_AFTER_START: '1' })
+    assert.equal(result.status, 124, result.stderr)
+    assert.match(result.stderr, /^resume: .* consult --resume 11111111-2222-3333-4444-555555555555 /m)
+  } finally {
+    clean()
+  }
+})
+
+test('a timed-out worktree task cannot name its worktree, and says so', () => {
+  const result = run(['task', '--worktree', '--timeout', '1', '--', 'do a long thing'], { FAKE_HANG_AFTER_START: '1' })
+  assert.equal(result.status, 124, result.stderr)
+  assert.match(result.stderr, /^session: 11111111-2222-3333-4444-555555555555$/m)
+  assert.match(result.stderr, /^resume: unavailable — the session lives in the unreported worktree/m)
+})
+
+test('the default timeout is per mode and only a non-default one travels in resume', () => {
+  const task = run(['task', '--', 'x'])
+  assert.equal(task.status, 0, task.stderr)
+  assert.doesNotMatch(task.stderr, /^resume: .*--timeout/m)
+  const shortTask = run(['task', '--timeout', '3000', '--', 'x'])
+  assert.match(shortTask.stderr, /^resume: .* --timeout 3000 /m)
+  const consult = run(['consult', '--timeout', '3000', '--', 'x'])
+  assert.doesNotMatch(consult.stderr, /^resume: .*--timeout/m)
 })
 
 test('trailing markers print after a large body in a merged pipe stream', () => {

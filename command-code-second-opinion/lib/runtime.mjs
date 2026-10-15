@@ -348,7 +348,7 @@ function readLogFile(log) {
 }
 
 export async function runCmd(env, invocation, options) {
-  const { out, log, timeout, runNoun, resultNoun } = options
+  const { out, log, timeout, runNoun, resultNoun, onTimeout } = options
   // An empty prompt is a wrapper bug, and it would surface as the CLI's bare
   // "No query provided" on exit 1 — a message that points nowhere near here.
   if (!invocation.prompt.trim()) {
@@ -477,6 +477,10 @@ export async function runCmd(env, invocation, options) {
     process.stderr.write(`hint: raise --timeout, or check the log for where it stalled: ${log}\n`)
     tail()
     discard()
+    // The session survives the kill (verified on cmd 1.82.3: a resume keeps
+    // the history), and a long task's work is still on disk, so the caller
+    // gets the same session and resume markers a finished run would print.
+    if (onTimeout) onTimeout({ sessionId: state.sessionId, model: state.model, workdir: state.workdir })
     die(124)
   }
 

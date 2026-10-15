@@ -78,11 +78,14 @@ Options:
   --effort <LEVEL>     reasoning effort (levels vary by model)
   --max-turns <N>      cap the conversation turns for this run
   --repo <DIR>         working directory (default: current directory)
-  --timeout <SECONDS>  abort a hung run (default: 3000; 1-86400)`
+  --timeout <SECONDS>  abort a hung run (default: 7200; 1-86400)`
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CONTEXT_FENCE = 'CALLER-BACKGROUND'
 const DEFAULT_TIMEOUT = 3000
+// Delegated tasks run longer than reviews: measured 2026-10-15, real
+// multi-platform tasks took 33-47 minutes on their first run.
+const TASK_DEFAULT_TIMEOUT = 7200
 
 // The report shape the wrapper asks for, and the only thing that makes a
 // headless answer parseable: Command Code has no `review` subcommand with a
@@ -108,12 +111,12 @@ This is a read-only second opinion, run headlessly. You may run commands to inve
 // Model and effort are independent and both optional: without them the run
 // uses the CLI's configured model at that model's own effort. The CLI rejects
 // an unknown model or effort itself, and the wrapper relays its reason.
-function createPolicy() {
+function createPolicy(mode) {
   return {
     model: '',
     effort: '',
     repo: '.',
-    timeout: DEFAULT_TIMEOUT,
+    timeout: mode === 'task' ? TASK_DEFAULT_TIMEOUT : DEFAULT_TIMEOUT,
     maxTurns: 0,
     sessionId: '',
     worktree: false,
@@ -289,7 +292,7 @@ function identityMarkers(env, scope, before, after, run) {
 }
 
 async function runReview(args) {
-  const policy = createPolicy()
+  const policy = createPolicy('review')
   const review = parseReviewArgs(policy, args)
   validatePolicy(policy)
   const env = createEnvironment(policy.repo)
@@ -299,6 +302,7 @@ async function runReview(args) {
   const prompt = buildReviewPrompt(review, scope, artifacts.scratch)
   const run = await runCmd(env, invocationFor(policy, 'review', env, prompt), {
     ...artifacts, timeout: policy.timeout, runNoun: 'review', resultNoun: 'report',
+    onTimeout: resumeOnTimeout(policy, env, 'review'),
   })
   const after = fingerprintScope(env, scope)
   identityMarkers(env, scope, before, after, run)
@@ -391,8 +395,9 @@ function verifyContinuation(policy, run) {
     'hint: the session may have expired; start a fresh run and restate the context.')
 }
 
-// Printed on every successful run, as a real value or as an unavailable
-// sentinel, so a model-written line cannot pose as one of these markers.
+// Printed on every successful or timed-out run, as a real value or as an
+// unavailable sentinel, so a model-written line cannot pose as one of these
+// markers.
 function emitResume(policy, dir, run, mode) {
   const session = run.sessionId
   if (!session) {
@@ -405,7 +410,8 @@ function emitResume(policy, dir, run, mode) {
     process.stderr.write('resume: unavailable — the session lives in the unreported worktree; run the resume from inside it\n')
     return
   }
-  const timeout = policy.timeout !== DEFAULT_TIMEOUT ? ` --timeout ${policy.timeout}` : ''
+  const modeDefault = mode === 'task' ? TASK_DEFAULT_TIMEOUT : DEFAULT_TIMEOUT
+  const timeout = policy.timeout !== modeDefault ? ` --timeout ${policy.timeout}` : ''
   const maxTurns = policy.maxTurns ? ` --max-turns ${policy.maxTurns}` : ''
   // A session does not remember its model — measured on cmd 1.82.3, a resume
   // without --model answers on the configured default — so the model that
@@ -419,8 +425,21 @@ function emitResume(policy, dir, run, mode) {
   process.stderr.write(`resume: ${script} ${mode} --resume ${session}${modelFlag}${maxTurns}${timeout} --repo ${shellQuote(dir)}\n`)
 }
 
+// A timed-out run still names its session, so it ends with the same session
+// and resume markers as a finished one. A worktree task has not reported its
+// worktree yet (that arrives with run_end), so its resume says so instead.
+function resumeOnTimeout(policy, env, mode) {
+  return (run) => {
+    const dir = mode === 'task' ? (run.workdir || (policy.worktree ? '' : env.cwd)) : env.cwd
+    emitResume(policy, dir, run, mode === 'review' ? 'consult' : mode)
+    if (run.sessionId) {
+      process.stderr.write('hint: the session survives the timeout; resume it, but have it check the current state first — it cannot tell how far the interrupted step got.\n')
+    }
+  }
+}
+
 async function runConsult(args) {
-  const policy = createPolicy()
+  const policy = createPolicy('consult')
   const question = parseQuestionArgs(policy, args, 'consult')
   validatePolicy(policy)
   const env = createEnvironment(policy.repo, { requireWorkTree: false })
@@ -433,6 +452,7 @@ async function runConsult(args) {
   const prompt = `${question}\n\n${readOnlyNote(artifacts.scratch)}\n`
   const run = await runCmd(env, invocationFor(policy, 'consult', env, prompt), {
     ...artifacts, timeout: policy.timeout, runNoun: 'consultation', resultNoun: 'answer',
+    onTimeout: resumeOnTimeout(policy, env, 'consult'),
   })
   verifyContinuation(policy, run)
   const after = scope ? fingerprintScope(env, scope) : ''
@@ -445,13 +465,14 @@ async function runConsult(args) {
 // A task is meant to change things, so there is no fingerprint and no drift
 // warning: the caller inspects the result (git diff, tests) itself.
 async function runTask(args) {
-  const policy = createPolicy()
+  const policy = createPolicy('task')
   const task = parseQuestionArgs(policy, args, 'task')
   validatePolicy(policy)
   const env = createEnvironment(policy.repo, { requireWorkTree: false })
   const artifacts = createArtifacts(env, 'task')
   const run = await runCmd(env, invocationFor(policy, 'task', env, task), {
     ...artifacts, timeout: policy.timeout, runNoun: 'task', resultNoun: 'result',
+    onTimeout: resumeOnTimeout(policy, env, 'task'),
   })
   verifyContinuation(policy, run)
   runWarnings(run)
