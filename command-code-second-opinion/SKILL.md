@@ -178,7 +178,10 @@ Nothing is pinned: the run uses whatever model the CLI is configured to use, and
 the wrapper reports which model actually answered on the `model:` line. Pass
 `--model M --effort L` as a **pair** only when the user explicitly asks to move
 — that is also how you deliberately buy model diversity. A selection the CLI
-rejects fails the run rather than silently falling back.
+rejects fails the run rather than silently falling back. Effort levels are
+per-model and are not listed by `--list-models`; many models offer only
+`low`, `high` and `max` — no `medium` — so `high` is the safe choice when the
+user names a model but no effort.
 `COMMAND_CODE_SECOND_OPINION_MODEL` and `COMMAND_CODE_SECOND_OPINION_EFFORT`
 override both together (set both or neither). A `--resume` follow-up carries the
 pair only when one was in force.
