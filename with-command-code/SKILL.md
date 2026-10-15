@@ -59,7 +59,7 @@ run-command-code-second-opinion.mjs task [--repo DIR] --resume ID [OPTIONS] [--]
    resumed the same way: the work so far is on disk and the session keeps its
    history, but the run cannot tell how far the interrupted step got, so ask it
    to check the current state before it continues. For a task likely to need
-   more than 100 turns or two hours, raise `--max-turns` or `--timeout` up
+   more than 200 turns or two hours, raise `--max-turns` or `--timeout` up
    front. Repeat steps 3–5 until the result passes the check. If it is not
    converging after a few rounds, stop and tell the user what is left, rather
    than looping.

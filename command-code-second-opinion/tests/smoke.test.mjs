@@ -640,6 +640,16 @@ test('the default timeout is per mode and only a non-default one travels in resu
   assert.doesNotMatch(consult.stderr, /^resume: .*--timeout/m)
 })
 
+test('every run caps turns at 200 by default; only an explicit cap travels in resume', () => {
+  const plain = run(['consult', '--', 'x'])
+  assert.equal(plain.status, 0, plain.stderr)
+  assert.match(plain.argv[0], / --max-turns 200( |$)/)
+  assert.doesNotMatch(plain.stderr, /^resume: .*--max-turns/m)
+  const capped = run(['task', '--max-turns', '50', '--', 'x'])
+  assert.match(capped.argv[0], / --max-turns 50( |$)/)
+  assert.match(capped.stderr, /^resume: .* --max-turns 50 /m)
+})
+
 test('trailing markers print after a large body in a merged pipe stream', () => {
   dirty()
   try {

@@ -47,7 +47,7 @@ Options:
   --context <TEXT>     neutral background for the reviewer
   --model <MODEL>      run on a specific model
   --effort <LEVEL>     reasoning effort (levels vary by model)
-  --max-turns <N>      cap the conversation turns for this run
+  --max-turns <N>      cap the conversation turns for this run (default: 200)
   --repo <DIR>         repository to review (default: current directory)
   --timeout <SECONDS>  abort a hung run (default: 3000; 1-86400)`
 
@@ -62,7 +62,7 @@ Options:
   --resume <SESSION>   resume a session id with a follow-up QUESTION
   --model <MODEL>      run on a specific model
   --effort <LEVEL>     reasoning effort (levels vary by model)
-  --max-turns <N>      cap the conversation turns for this run
+  --max-turns <N>      cap the conversation turns for this run (default: 200)
   --repo <DIR>         repository for context (default: current directory)
   --timeout <SECONDS>  abort a hung run (default: 3000; 1-86400)`
 
@@ -76,7 +76,7 @@ Options:
   --resume <SESSION>   resume a session id with follow-up instructions
   --model <MODEL>      run on a specific model
   --effort <LEVEL>     reasoning effort (levels vary by model)
-  --max-turns <N>      cap the conversation turns for this run
+  --max-turns <N>      cap the conversation turns for this run (default: 200)
   --repo <DIR>         working directory (default: current directory)
   --timeout <SECONDS>  abort a hung run (default: 7200; 1-86400)`
 
@@ -86,6 +86,10 @@ const DEFAULT_TIMEOUT = 3000
 // Delegated tasks run longer than reviews: measured 2026-10-15, real
 // multi-platform tasks took 33-47 minutes on their first run.
 const TASK_DEFAULT_TIMEOUT = 7200
+// Twice the CLI's own default of 100 (cmd 1.82.3), which a real delegated
+// task hit mid-work on 2026-10-15; always passed, so a CLI default change
+// cannot move it.
+const DEFAULT_MAX_TURNS = 200
 
 // The report shape the wrapper asks for, and the only thing that makes a
 // headless answer parseable: Command Code has no `review` subcommand with a
@@ -117,7 +121,7 @@ function createPolicy(mode) {
     effort: '',
     repo: '.',
     timeout: mode === 'task' ? TASK_DEFAULT_TIMEOUT : DEFAULT_TIMEOUT,
-    maxTurns: 0,
+    maxTurns: DEFAULT_MAX_TURNS,
     sessionId: '',
     worktree: false,
   }
@@ -412,7 +416,7 @@ function emitResume(policy, dir, run, mode) {
   }
   const modeDefault = mode === 'task' ? TASK_DEFAULT_TIMEOUT : DEFAULT_TIMEOUT
   const timeout = policy.timeout !== modeDefault ? ` --timeout ${policy.timeout}` : ''
-  const maxTurns = policy.maxTurns ? ` --max-turns ${policy.maxTurns}` : ''
+  const maxTurns = policy.maxTurns !== DEFAULT_MAX_TURNS ? ` --max-turns ${policy.maxTurns}` : ''
   // A session does not remember its model — measured on cmd 1.82.3, a resume
   // without --model answers on the configured default — so the model that
   // actually answered always travels. Effort does not need to: the CLI already

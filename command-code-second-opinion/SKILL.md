@@ -77,7 +77,7 @@ run-command-code-second-opinion.mjs consult [--repo DIR] --resume ID [OPTIONS] [
 | `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means `--uncommitted`. |
 | `--context TEXT` | Review only. Neutral background; cannot combine with `--custom`. |
 | `--model M`, `--effort L` | Each optional, independently — see Model. |
-| `--max-turns N` | Cap the conversation turns for one run. Unset, the CLI's own default applies: 100 on cmd 1.82.3. |
+| `--max-turns N` | Cap the conversation turns for one run; default 200. |
 | `--timeout N` | 1–86400 seconds; default 3000, or 7200 for a task. |
 | `--resume ID` | Continue a session — copy the previous run's `resume:` line instead of building it. |
 
