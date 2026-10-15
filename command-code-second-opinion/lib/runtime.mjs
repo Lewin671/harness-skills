@@ -345,7 +345,15 @@ export async function runCmd(env, invocation, options) {
 
   let logBroken = false
   const state = { result: null, sessionId: '', model: '', blocked: 0 }
+  // The CLI's last plain-text lines, i.e. everything that is not an NDJSON
+  // frame: a rejected invocation (unknown model or effort, a bad flag) exits
+  // before any result frame, and this is the only place its reason appears.
+  const cliErrors = []
   const emitLine = (line) => {
+    if (line.trim() && !line.trimStart().startsWith('{')) {
+      cliErrors.push(line.trim())
+      if (cliErrors.length > 3) cliErrors.shift()
+    }
     // Extract from the whole line, display a bounded slice: one NDJSON frame
     // can carry a whole conversation, and the terminal only needs the gist.
     extractFrame(line, state)
@@ -464,6 +472,12 @@ export async function runCmd(env, invocation, options) {
       }
       if (typeof frame?.error === 'string' && frame.error.trim()) {
         process.stderr.write(`error: ${flat(frame.error.trim())}\n`)
+      } else if (!frame) {
+        // Relayed verbatim rather than matched: the CLI already names the
+        // problem and the remedy, and its wording is not ours to track.
+        for (const line of cliErrors) {
+          process.stderr.write(`error: cmd: ${flat(line.length > 300 ? `${line.slice(0, 300)}...` : line)}\n`)
+        }
       }
       process.stderr.write(`error: ${runNoun} failed (exit ${result.status}); raw output at ${log}\n`)
       hintsFor(result.status, frame, log)

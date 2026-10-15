@@ -195,6 +195,7 @@ inventing a parallel vocabulary. Only `2`, `11`, `124` and `127` are its own;
 | Code | Meaning | What to do |
 |------|---------|------------|
 | `0` | A result was produced | Read the file the last `report:`/`answer:` line names and relay it. |
+| `1` | The CLI rejected the invocation — unknown model or effort, bad flag | Read the `error: cmd:` lines, fix the arguments; do not rerun unchanged. |
 | `2` | (review only) Nothing in scope | Tell the user the scope was empty. This is **not** a clean bill of health. |
 | `3` | Not authenticated | The user needs to run `cmd login`. |
 | `4` | A tool was refused by the permission engine | Report it; a partially refused run explains a thin answer. |

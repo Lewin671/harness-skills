@@ -402,6 +402,22 @@ test('failure hints name the documented remedy', () => {
   }
 })
 
+test('a rejected invocation relays the CLI reason as a wrapper error line', () => {
+  dirty()
+  try {
+    const reason = 'Unknown effort "medium". Supported: low, high, max.'
+    const rejected = run(['review', '--uncommitted'], { FAKE_EXIT: '1', FAKE_NO_RESULT: '1', FAKE_STDERR_TEXT: reason })
+    assert.equal(rejected.status, 1, rejected.stderr)
+    assert.ok(rejected.stderr.split('\n').includes(`error: cmd: ${reason}`), rejected.stderr)
+    // The same stderr chatter on a successful run is not an error.
+    const ok = run(['review', '--uncommitted'], { FAKE_STDERR_TEXT: 'Reasoning effort set to high for Fake.' })
+    assert.equal(ok.status, 0, ok.stderr)
+    assert.equal(/^error: cmd: /m.test(ok.stderr), false, ok.stderr)
+  } finally {
+    clean()
+  }
+})
+
 test('an empty result the CLI still calls success exits 11, not 0', () => {
   dirty()
   try {
