@@ -401,6 +401,10 @@ function emitResume(policy, dir, run, mode) {
     return
   }
   process.stderr.write(`session: ${session}\n`)
+  if (!dir) {
+    process.stderr.write('resume: unavailable — the session lives in the unreported worktree; run the resume from inside it\n')
+    return
+  }
   const timeout = policy.timeout !== DEFAULT_TIMEOUT ? ` --timeout ${policy.timeout}` : ''
   const maxTurns = policy.maxTurns ? ` --max-turns ${policy.maxTurns}` : ''
   // A session does not remember its model — measured on cmd 1.82.3, a resume
@@ -461,12 +465,7 @@ async function runTask(args) {
     process.stderr.write('warning: the worktree path was not reported; find it with `git worktree list` and resume from inside it.\n')
   }
   await emitResult(run, artifacts, 'result')
-  if (!workdir) {
-    process.stderr.write('workdir: unavailable — the CLI did not report the worktree it created\n')
-    process.stderr.write('resume: unavailable — the session lives in the unreported worktree\n')
-    return
-  }
-  process.stderr.write(`workdir: ${flat(workdir)}\n`)
+  process.stderr.write(workdir ? `workdir: ${flat(workdir)}\n` : 'workdir: unavailable — the CLI did not report the worktree it created\n')
   emitResume(policy, workdir, run, 'task')
 }
 

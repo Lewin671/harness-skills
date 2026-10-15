@@ -299,6 +299,8 @@ test('a task reports its workdir and resumes from the worktree it ran in', () =>
   // Never a guessed location: the session lives in the worktree, not the repo.
   assert.match(unreported.stderr, /^workdir: unavailable/m)
   assert.match(unreported.stderr, /^resume: unavailable/m)
+  // The session id is still surfaced, so the resume can be run from the worktree.
+  assert.match(unreported.stderr, new RegExp(`^session: ${id}$`, 'm'))
   assert.ok(!unreported.stderr.includes(`--repo ${repo}`), unreported.stderr)
 })
 
