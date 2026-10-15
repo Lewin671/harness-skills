@@ -3,12 +3,12 @@
 // There is no snapshot clone here on purpose. The reviewer reads the live
 // repository, so the wrapper's job is not to freeze bytes but to (a) enumerate
 // exactly which paths a scope covers, (b) hand the model an authoritative diff
-// so it never has to shell out for one, and (c) fingerprint those paths before
-// and after so a result can be tied to the bytes it actually saw.
+// so the scope is fixed by the wrapper rather than by whatever the model runs,
+// and (c) fingerprint those paths before and after so a result can be tied to
+// the bytes it actually saw.
 //
-// The guard is a detector, not a lock: see the KNOWN, DISCLOSED GAP note in
-// lib/runtime.mjs — a headless run can still modify the tree through a
-// sub-agent, so drift is reported after the fact rather than prevented.
+// The guard is a detector, not a lock: the run has a shell (see buildArgs in
+// lib/runtime.mjs), so drift is reported after the fact rather than prevented.
 
 import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync, readlinkSync } from 'node:fs'

@@ -8,6 +8,7 @@ import {
   appendFileSync,
   closeSync,
   constants,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -234,46 +235,47 @@ export function createArtifacts(env, mode) {
     const dir = mkdtempSync(join(env.scratch, `cmd-${mode}-`))
     const out = join(dir, 'result.md')
     const log = join(dir, 'events.jsonl')
+    // Where a read-only run may put reproduction scripts and other scratch
+    // files, so it has no reason to write into the repository.
+    const scratch = join(dir, 'scratch')
     closeSync(openSync(out, 'wx', 0o600))
     closeSync(openSync(log, 'wx', 0o600))
+    mkdirSync(scratch)
     process.stderr.write(`log: ${log}\n`)
-    return { out, log }
+    return { out, log, scratch }
   } catch {
     die(11, `error: cannot create scratch files under ${flat(env.scratch)}`)
   }
 }
 
-// The invocation carries no permission flag on purpose: the run inherits
-// whatever permission mode the user has configured, and Command Code's print
-// mode blocks mutating tools for the main loop on its own.
-//
-// KNOWN, DISCLOSED GAP — do not "fix" this by adding --yolo, --accept-edits or
-// a permission-mode flag. Verified on cmd 1.82.1 (2026-10-14): that print-mode
-// guard binds the MAIN LOOP only. The `agent` tool is an unconditional
-// exception to the deny/ask/allow lists, and a sub-agent "auto-allows where the
-// main loop would draw an interactive prompt", so a model that wants shell or a
-// file write can delegate and get it — a headless run created a file this way.
-// The run is therefore NOT a sandbox, and SKILL.md must not claim it is; the
-// fingerprint guard in lib/identity.mjs is what makes the reviewed bytes
-// identifiable afterwards, and drift is reported rather than prevented.
+// Every mode runs with --yolo: print mode otherwise refuses shell to the main
+// loop, and a reviewer that cannot run a test or `git log` cannot investigate.
+// Adjudicated by the user on 2026-10-14 — do not re-raise it in reviews.
+// Before that, the run passed no permission flag, which was never a boundary:
+// the `agent` tool is exempt from the permission lists, so a sub-agent got an
+// unrestricted shell anyway (re-measured on cmd 1.82.3). Review and consult
+// are asked to stay read-only by a prompt note, not by any mechanism, and the
+// fingerprint in lib/identity.mjs reports drift after the fact.
 export function buildArgs(policy, mode) {
   const args = ['-p']
   if (policy.sessionId) args.push('--resume', policy.sessionId)
   args.push(
+    '--yolo',
     '--output-format', 'json',
-    // Interactive-only surfaces have no meaning in a one-shot run, and skipping
-    // onboarding keeps an automated run from waiting on a first-run prompt.
+    // Skipping onboarding keeps an automated run from waiting on a first-run
+    // prompt.
     '--skip-onboarding',
-    // Skill discovery is off so the reviewed repository's own skills cannot
-    // steer a nominally blind pass.
-    '--no-skills',
   )
-  // A review never resumes and must not leave a resumable session behind, the
-  // same reason the codex wrapper passes --ephemeral for reviews.
-  if (mode === 'review') args.push('--no-session')
+  // Skill discovery is off for the read-only modes so the reviewed
+  // repository's own skills cannot steer a nominally blind pass; a delegated
+  // task may well want the project's skills.
+  if (mode !== 'task') args.push('--no-skills')
+  if (mode === 'task' && policy.worktree) args.push('--worktree')
   if (policy.maxTurns) args.push('--max-turns', String(policy.maxTurns))
-  // Only an explicit pair moves the run off the configured default model.
-  if (policy.model && policy.effort) args.push('--model', policy.model, '--effort', policy.effort)
+  if (policy.model) args.push('--model', policy.model)
+  // The CLI stores an explicit effort as that model's default in the user's
+  // config, so it is passed only when a caller asked for one.
+  if (policy.effort) args.push('--effort', policy.effort)
   return args
 }
 
@@ -301,6 +303,10 @@ function extractFrame(line, state) {
       state.model = event.model
     }
     if (event.type === 'tool_hook_blocked') state.blocked += 1
+    // run_end reports the workspace the run actually used — the only place a
+    // --worktree run names the worktree the CLI created.
+    const cwd = event.type === 'run_end' ? event.result?.nextState?.modState?.workspace?.cwd : undefined
+    if (typeof cwd === 'string' && cwd) state.workdir = cwd
     return
   }
   if (frame?.type === 'result') {
@@ -344,7 +350,7 @@ export async function runCmd(env, invocation, options) {
   }
 
   let logBroken = false
-  const state = { result: null, sessionId: '', model: '', blocked: 0 }
+  const state = { result: null, sessionId: '', model: '', blocked: 0, workdir: '' }
   // The CLI's last plain-text lines, i.e. everything that is not an NDJSON
   // frame: a rejected invocation (unknown model or effort, a bad flag) exits
   // before any result frame, and this is the only place its reason appears.
@@ -501,6 +507,7 @@ export async function runCmd(env, invocation, options) {
     exitStatus: result.status,
     sessionId: state.sessionId,
     model: state.model,
+    workdir: state.workdir,
     usage: frame.usage,
     durationMs: frame.durationMs,
     blocked: state.blocked,

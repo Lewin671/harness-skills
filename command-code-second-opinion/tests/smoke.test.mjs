@@ -14,10 +14,10 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const SCRIPT = join(here, '..', 'run-command-code-second-opinion.mjs')
 
-// Flags that would widen the run's authority. The wrapper must never emit one,
-// whatever a caller passes: the run inherits the user's configured permission
-// mode and nothing else.
-const AUTHORITY_FLAGS = ['--yolo', '--dangerously-skip-permissions', '--accept-edits', '--permission-mode', '--plan', '--tools-all']
+// Every run carries --yolo (user decision, 2026-10-14); none of these other
+// permission or tool-widening flags is ever emitted.
+const OTHER_PERMISSION_FLAGS = ['--dangerously-skip-permissions', '--accept-edits', '--permission-mode', '--plan', '--tools-all']
+const READ_ONLY_NOTE = /This is a read-only second opinion, run headlessly\..*write scratch files only under (\S+)\. Do not modify files in the repository/
 
 const FAKE_CMD = `#!/usr/bin/env node
 // Fake cmd CLI for smoke tests.
@@ -48,6 +48,9 @@ if (!process.env.FAKE_NO_SESSION) {
   lines.push(JSON.stringify({ type: 'event', event: { type: 'run_start', sessionId } }))
 }
 lines.push(JSON.stringify({ type: 'event', event: { type: 'model_request_start', model } }))
+if (process.env.FAKE_WORKDIR) {
+  lines.push(JSON.stringify({ type: 'event', event: { type: 'run_end', result: { nextState: { modState: { workspace: { cwd: process.env.FAKE_WORKDIR } } } } } }))
+}
 if (process.env.FAKE_BLOCKED) {
   lines.push(JSON.stringify({ type: 'event', event: { type: 'tool_hook_blocked', toolName: 'shell_command', hookOutput: 'Error: requires permissions.' } }))
 }
@@ -143,8 +146,6 @@ test('argument and mode errors exit 11 before the CLI runs', () => {
   for (const args of [
     [],
     ['frobnicate'],
-    ['review', '--model', 'fake-model'], // --model without --effort
-    ['review', '--effort', 'high'], // --effort without --model
     ['review', '--timeout', '0'],
     ['review', '--timeout', 'soon'],
     ['review', '--max-turns', 'x'],
@@ -156,6 +157,9 @@ test('argument and mode errors exit 11 before the CLI runs', () => {
     ['consult', '--resume', 'not-a-uuid', 'question'],
     ['consult', 'question one', 'question two'],
     ['consult', '--not-a-flag'], // a dash-leading question needs the -- separator
+    ['consult', '--worktree', 'q'], // --worktree is task-only
+    ['task'], // no task
+    ['task', '--worktree', '--resume', '11111111-2222-3333-4444-555555555555', 'more'],
   ]) {
     const result = run(args)
     assert.equal(result.status, 11, `expected 11 for ${JSON.stringify(args)}: ${result.stderr}`)
@@ -166,25 +170,15 @@ test('argument and mode errors exit 11 before the CLI runs', () => {
 test('a dash-leading question is accepted after the -- separator', () => {
   const result = run(['consult', '--', '--not-a-flag, but a question'])
   assert.equal(result.status, 0, result.stderr)
-  assert.equal(result.prompt, '--not-a-flag, but a question')
+  assert.ok(result.prompt.startsWith('--not-a-flag, but a question\n'), result.prompt)
 })
 
 test('--help exits 0 without running the CLI', () => {
-  for (const args of [['--help'], ['review', '--help'], ['consult', '--help']]) {
+  for (const args of [['--help'], ['review', '--help'], ['consult', '--help'], ['task', '--help']]) {
     const result = run(args)
     assert.equal(result.status, 0, result.stderr)
     assert.equal(result.argv.length, 0)
   }
-})
-
-test('a half-set env pair still allows --help but fails a real run', () => {
-  const extraEnv = { COMMAND_CODE_SECOND_OPINION_MODEL: 'fake/model-1' }
-  const help = run(['review', '--help'], extraEnv)
-  assert.equal(help.status, 0, help.stderr)
-  const real = run(['review', '--commit', 'HEAD'], extraEnv)
-  assert.equal(real.status, 11, real.stderr)
-  assert.match(real.stderr, /must be set together/)
-  assert.equal(real.argv.length, 0)
 })
 
 test('review of a clean tree exits 2 before any CLI invocation', () => {
@@ -227,27 +221,80 @@ test('review outside a git work tree exits 11 while consult proceeds', () => {
   assert.match(consult.stdout, /the fake report body/)
 })
 
-test('a review never widens authority and never passes a permission flag', () => {
+test('every mode runs with --yolo and no other permission flag', () => {
   dirty()
   try {
-    const result = run(['review', '--uncommitted'])
-    assert.equal(result.status, 0, result.stderr)
-    assert.ok(result.argv.length >= 1)
-    for (const line of result.argv) {
-      for (const flag of AUTHORITY_FLAGS) {
+    for (const args of [['review', '--uncommitted'], ['consult', 'q'], ['task', 'do it']]) {
+      const result = run(args)
+      assert.equal(result.status, 0, result.stderr)
+      assert.equal(result.argv.length, 1)
+      const line = result.argv[0]
+      for (const flag of OTHER_PERMISSION_FLAGS) {
         assert.ok(!line.includes(flag), `${flag} must never appear in: ${line}`)
       }
-      assert.ok(line.startsWith('-p '), `every invocation starts with -p: ${line}`)
-      for (const required of ['--output-format json', '--skip-onboarding', '--no-skills', '--no-session']) {
-        assert.ok(line.includes(required), `missing ${required} in: ${line}`)
-      }
-      // No model is pinned by default: the run uses whatever the CLI is
-      // configured to use, and an explicit pair is the only thing that moves it.
-      assert.ok(!line.includes('--model'), `an unpinned review must not select a model: ${line}`)
+      assert.ok(line.startsWith('-p --yolo '), `every invocation starts with -p --yolo: ${line}`)
+      assert.ok(line.includes('--output-format json --skip-onboarding'), line)
+      // Read-only modes keep the repository's skills out; a task may use them.
+      assert.equal(line.includes('--no-skills'), args[0] !== 'task', line)
+      // Reviews leave a session behind now, so they can be followed up.
+      assert.ok(!line.includes('--no-session'), line)
+      // No model or effort unless asked for: the CLI's configured model runs.
+      assert.ok(!line.includes('--model') && !line.includes('--effort'), line)
     }
   } finally {
     clean()
   }
+})
+
+test('model and effort are independent, and only the model travels with a resume', () => {
+  const modelOnly = run(['consult', '--model', 'fake/model-9', 'q'], { FAKE_MODEL: 'fake/model-9' })
+  assert.equal(modelOnly.status, 0, modelOnly.stderr)
+  assert.ok(modelOnly.argv[0].endsWith('--model fake/model-9'), modelOnly.argv[0])
+  const effortOnly = run(['consult', '--effort', 'high', 'q'])
+  assert.equal(effortOnly.status, 0, effortOnly.stderr)
+  assert.ok(effortOnly.argv[0].endsWith('--effort high') && !effortOnly.argv[0].includes('--model'), effortOnly.argv[0])
+  // A session does not remember its model, so the one that answered is pinned
+  // on the follow-up even when the caller never named one.
+  const resume = /^resume: (.*)$/m.exec(effortOnly.stderr)[1]
+  assert.ok(resume.includes(' --model fake/model-1 '), resume)
+  assert.ok(!resume.includes('--effort'), resume)
+})
+
+test('review and consult prompts carry the read-only note; a task prompt does not', () => {
+  dirty()
+  try {
+    for (const args of [['review', '--uncommitted'], ['consult', 'q']]) {
+      const result = run(args)
+      const note = READ_ONLY_NOTE.exec(result.prompt)
+      assert.ok(note, `missing read-only note for ${args[0]}: ${result.prompt}`)
+      assert.ok(existsSync(note[1]), `the scratch dir it names must exist: ${note[1]}`)
+      assert.ok(!note[1].startsWith(repo), 'the scratch dir must be outside the repository')
+    }
+    const task = run(['task', '--', 'implement the thing'])
+    assert.equal(task.prompt, 'implement the thing')
+  } finally {
+    clean()
+  }
+})
+
+test('a task reports its workdir and resumes from the worktree it ran in', () => {
+  const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const plain = run(['task', 'do it'], { FAKE_SESSION_ID: id })
+  assert.equal(plain.status, 0, plain.stderr)
+  assert.ok(!plain.argv[0].includes('--worktree'), plain.argv[0])
+  assert.match(plain.stderr, /^result: /m)
+  assert.ok(!/^identity: /m.test(plain.stderr), 'a task is meant to change the tree')
+  assert.match(plain.stderr, /^resume: .* task --resume aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee /m)
+
+  const wt = join(root, 'some-worktree')
+  const isolated = run(['task', '--worktree', 'do it'], { FAKE_SESSION_ID: id, FAKE_WORKDIR: wt })
+  assert.equal(isolated.status, 0, isolated.stderr)
+  assert.ok(isolated.argv[0].includes('--worktree'), isolated.argv[0])
+  assert.match(isolated.stderr, new RegExp(`^workdir: ${wt}$`, 'm'))
+  assert.match(/^resume: (.*)$/m.exec(isolated.stderr)[1], new RegExp(`--repo ${wt}$`))
+
+  const unreported = run(['task', '--worktree', 'do it'], { FAKE_SESSION_ID: id })
+  assert.match(unreported.stderr, /^warning: the worktree path was not reported/m)
 })
 
 test('the review prompt carries the wrapper-built diff and the report contract', () => {
@@ -258,7 +305,6 @@ test('the review prompt carries the wrapper-built diff and the report contract',
     assert.match(result.prompt, /-committed/)
     assert.match(result.prompt, /\+changed/)
     assert.match(result.prompt, /\[P0\]/)
-    assert.match(result.prompt, /Do not modify any files/)
     assert.match(result.prompt, /git status --porcelain/)
     // The reviewer is told to read untracked files rather than being handed them.
     writeFileSync(join(repo, 'fresh.txt'), 'new\n')
@@ -285,9 +331,9 @@ test('markers, prefixes and usage land where the output protocol says', () => {
     assert.match(result.stderr, /^log: /m)
     // CLI-controlled lines are prefixed; wrapper lines are not
     assert.match(result.stderr, /^cmd> \{"type":"event"/m)
-    // a review advertises no resumable session
-    assert.ok(!/^session: /m.test(result.stderr), 'a review must not offer a resume')
-    assert.ok(!/^resume: /m.test(result.stderr), 'a review must not offer a resume')
+    // a review is followed up as a consult in the same session
+    assert.match(result.stderr, /^session: /m)
+    assert.match(result.stderr, /^resume: .* consult --resume /m)
     // the identity marker reprints after the body so a merged stream keeps the
     // last marker of each kind the wrapper's
     assert.ok(result.stderr.lastIndexOf('identity: ') > result.stderr.indexOf('report: '))
@@ -307,13 +353,13 @@ test('a refused tool call during the run qualifies the result', () => {
   }
 })
 
-test('drift during the run is reported and voids identity, but still yields the report', () => {
+test('drift during the run is reported, but still yields the report', () => {
   dirty()
   try {
     const result = run(['review', '--uncommitted'], { FAKE_MUTATE_SOURCE: join(repo, 'stray.txt') })
     assert.equal(result.status, 0, result.stderr)
     assert.match(result.stderr, /^warning: the tree changed while this run was in progress/m)
-    assert.match(result.stderr, /not identity-verified/)
+    assert.match(result.stderr, /describes no single stable state/)
     assert.match(result.stdout, /the fake report body/)
     // The two identity lines differ, and the last one prints after the body.
     const identities = result.stderr.match(/^identity: [0-9a-f]{64}$/gm)
@@ -449,8 +495,6 @@ test('consult prints a resume line that is a complete runnable command', () => {
   assert.ok(resume.includes('run-command-code-second-opinion.mjs'), resume)
   assert.ok(resume.includes(` consult --resume ${id}`), resume)
   assert.ok(resume.includes('--repo '), resume)
-  // Nothing is pinned, so nothing travels with the follow-up either.
-  assert.ok(!resume.includes('--model'), resume)
 
   // The printed line, plus a question, must run as-is.
   const follow = sh(`${resume} -- "follow-up"`, { env: { ...process.env, PATH: process.env.PATH, HOME: join(root, 'home'), TMPDIR: root, COMMAND_CODE_BIN: cmdBin, FAKE_SESSION_ID: id } })
@@ -459,11 +503,11 @@ test('consult prints a resume line that is a complete runnable command', () => {
 
 test('an explicitly pinned model reaches the CLI and the resume line', () => {
   const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
-  const result = run(['consult', '--model', 'fake/model-9', '--effort', 'max', '--', 'q'], { FAKE_SESSION_ID: id })
+  const result = run(['consult', '--model', 'fake/model-9', '--effort', 'max', '--', 'q'], { FAKE_SESSION_ID: id, FAKE_MODEL: 'fake/model-9' })
   assert.equal(result.status, 0, result.stderr)
   assert.ok(result.argv.some((line) => line.includes('--model fake/model-9 --effort max')), result.argv.join('\n'))
   const resume = /^resume: (.*)$/m.exec(result.stderr)[1]
-  assert.ok(resume.includes('--model fake/model-9 --effort max'), resume)
+  assert.ok(resume.includes('--model fake/model-9 '), resume)
 })
 
 test('a consult resumed into a different session is discarded', () => {
@@ -496,8 +540,8 @@ test('consult carries no scope precheck but still fingerprints', () => {
   const result = run(['consult', '--', 'a question about nothing in particular'])
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stderr, /^identity: [0-9a-f]{64}$/m)
-  // The prompt is the question verbatim: no wrapper framing on a blind consult.
-  assert.equal(result.prompt, 'a question about nothing in particular')
+  // The question goes first and verbatim; only the fixed read-only note follows.
+  assert.ok(result.prompt.startsWith('a question about nothing in particular\n\n---\n'), result.prompt)
 })
 
 test('a timeout exits 124 and kills the whole detached process group', async () => {

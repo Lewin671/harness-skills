@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// Get a second opinion from the Command Code CLI in headless mode, with no
-// write authority of its own. Two modes:
-//   review  — a prioritised defect list over a code change, with scope checks
-//   consult — a reasoned position on one free-form question, resumable
-// The process/environment layer lives in lib/runtime.mjs; scope resolution and
-// the reviewed-bytes identity live in lib/identity.mjs.
+// Run the Command Code CLI headlessly from another harness. Three modes:
+//   review  — a read-only, prioritised defect list over a code change
+//   consult — a read-only, reasoned position on one free-form question
+//   task    — delegated work (code, research, anything), allowed to write
+// Every mode is resumable. The process/environment layer lives in
+// lib/runtime.mjs; scope resolution and the reviewed-bytes identity live in
+// lib/identity.mjs.
 
 import { fileURLToPath } from 'node:url'
 
@@ -25,10 +26,11 @@ import {
 } from './lib/runtime.mjs'
 import { consultScope, fingerprintScope, resolveScope } from './lib/identity.mjs'
 
-const TOP_USAGE = `Usage: run-command-code-second-opinion <review|consult> [ARGS]
+const TOP_USAGE = `Usage: run-command-code-second-opinion <review|consult|task> [ARGS]
 
   review   review the uncommitted changes, or a ref, commit or custom scope
   consult  ask one free-form question, answered with the repo as context
+  task     delegate a task; Command Code may edit files and run commands
 
 Run run-command-code-second-opinion <mode> --help for that mode's arguments.`
 
@@ -43,8 +45,8 @@ Scope (choose at most one, default --uncommitted):
 
 Options:
   --context <TEXT>     neutral background for the reviewer
-  --model <MODEL>      run on a specific model (requires --effort)
-  --effort <LEVEL>     reasoning effort (requires --model)
+  --model <MODEL>      run on a specific model
+  --effort <LEVEL>     reasoning effort (levels vary by model)
   --max-turns <N>      cap the conversation turns for this run
   --repo <DIR>         repository to review (default: current directory)
   --timeout <SECONDS>  abort a hung run (default: 3000; 1-86400)`
@@ -58,10 +60,24 @@ no conversation history.
 
 Options:
   --resume <SESSION>   resume a session id with a follow-up QUESTION
-  --model <MODEL>      run on a specific model (requires --effort)
-  --effort <LEVEL>     reasoning effort (requires --model)
+  --model <MODEL>      run on a specific model
+  --effort <LEVEL>     reasoning effort (levels vary by model)
   --max-turns <N>      cap the conversation turns for this run
   --repo <DIR>         repository for context (default: current directory)
+  --timeout <SECONDS>  abort a hung run (default: 3000; 1-86400)`
+
+const TASK_USAGE = `Usage: run-command-code-second-opinion task [OPTIONS] [--] TASK
+
+The TASK is one free-form argument; put it after -- when it starts with a dash.
+Command Code may edit files and run commands to complete it.
+
+Options:
+  --worktree           work in a fresh git worktree that Command Code creates
+  --resume <SESSION>   resume a session id with follow-up instructions
+  --model <MODEL>      run on a specific model
+  --effort <LEVEL>     reasoning effort (levels vary by model)
+  --max-turns <N>      cap the conversation turns for this run
+  --repo <DIR>         working directory (default: current directory)
   --timeout <SECONDS>  abort a hung run (default: 3000; 1-86400)`
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -78,46 +94,39 @@ const REPORT_CONTRACT = `Report your findings as Markdown, in exactly this shape
 - [P1] <title> — <path>:<line-range>
   <body>
 
-One bullet per finding, priority ordered: [P0] most severe, then [P1], [P2], [P3]. Anchor each finding to a path and a line range. If there is nothing to report, say so explicitly in the verdict and return no bullets — never invent a finding to fill the list. Do not modify any files.`
+One bullet per finding, priority ordered: [P0] most severe, then [P1], [P2], [P3]. Anchor each finding to a path and a line range. If there is nothing to report, say so explicitly in the verdict and return no bullets — never invent a finding to fill the list.`
 
+// Review and consult run with shell access (see buildArgs) so the model can
+// investigate, which leaves this note as the only thing asking it not to
+// write. Measured 2026-10-14: without it, 4/4 "fix it"-style consults tried to
+// edit the repository and some suggested rerunning with --yolo; with it, 0/4.
+function readOnlyNote(scratch) {
+  return `---
+This is a read-only second opinion, run headlessly. You may run commands to investigate — tests, git log/show/diff, small reproduction scripts — but write scratch files only under ${scratch}. Do not modify files in the repository, do not change git state (no commit, checkout, reset, stash or push), do not install anything, and do not offer to make changes.`
+}
+
+// Model and effort are independent and both optional: without them the run
+// uses the CLI's configured model at that model's own effort. The CLI rejects
+// an unknown model or effort itself, and the wrapper relays its reason.
 function createPolicy() {
-  const envModel = process.env.COMMAND_CODE_SECOND_OPINION_MODEL || ''
-  const envEffort = process.env.COMMAND_CODE_SECOND_OPINION_EFFORT || ''
   return {
-    // Checked in validatePolicy, after parsing, so `--help` still prints.
-    envMismatch: Boolean(envModel) !== Boolean(envEffort),
-    model: envModel,
-    effort: envEffort,
-    modelFlagSet: false,
-    effortFlagSet: false,
+    model: '',
+    effort: '',
     repo: '.',
     timeout: DEFAULT_TIMEOUT,
     maxTurns: 0,
     sessionId: '',
+    worktree: false,
   }
 }
 
 function validatePolicy(policy) {
-  if (policy.envMismatch) {
-    die(11,
-      'error: COMMAND_CODE_SECOND_OPINION_MODEL and COMMAND_CODE_SECOND_OPINION_EFFORT must be set together.',
-      "hint: set both, or unset both and pass '--model M --effort L' for a single run.")
-  }
-  if (policy.modelFlagSet !== policy.effortFlagSet) {
-    die(11, 'error: --model and --effort must be given together, as an explicit pair.')
-  }
   if (/[\r\n]/.test(policy.model)) die(11, 'error: the model must not contain line breaks')
   // The effort reaches the CLI as a plain token; anything else would be a
   // confusing downstream parse error instead of a failure here.
   if (policy.effort && !/^[A-Za-z0-9._-]+$/.test(policy.effort)) {
     die(11, `error: the effort may contain only letters, digits, '.', '_' and '-', got '${flat(policy.effort)}'`)
   }
-}
-
-// No model is pinned: the run uses whatever the CLI is configured to use, so
-// an explicit pair is only ever in force because a caller asked for it.
-function pinned(policy) {
-  return Boolean(policy.model && policy.effort)
 }
 
 function commonOption(policy, args, index) {
@@ -127,12 +136,10 @@ function commonOption(policy, args, index) {
     case '--model':
       if (!value) die(11, 'error: --model needs a non-empty value')
       policy.model = value
-      policy.modelFlagSet = true
       return index + 2
     case '--effort':
       if (!value) die(11, 'error: --effort needs a non-empty value')
       policy.effort = value
-      policy.effortFlagSet = true
       return index + 2
     case '--repo':
       if (value === undefined) die(11, 'error: --repo needs a value')
@@ -221,9 +228,9 @@ ${CONTEXT_FENCE}`
 
 // Every review prompt carries the same mechanical facts — status, untracked
 // list, authoritative diff — whichever scope named them. The wrapper produces
-// the diff itself so a review of live work does not depend on the model
-// reaching for a shell it may or may not have.
-function buildReviewPrompt(review, scope) {
+// the diff itself so the scope is fixed here, not by whatever git command the
+// model happens to run.
+function buildReviewPrompt(review, scope, scratch) {
   const parts = []
   parts.push(review.scopeFlag === '--custom' ? review.scopeValue : scopeSentence(scope))
   if (scope.status) {
@@ -240,6 +247,7 @@ function buildReviewPrompt(review, scope) {
   }
   if (review.context) parts.push(contextFence(review.context))
   parts.push(REPORT_CONTRACT)
+  parts.push(readOnlyNote(scratch))
   return `${parts.join('\n\n')}\n`
 }
 
@@ -268,7 +276,7 @@ function identityMarkers(env, scope, before, after, run) {
     process.stderr.write(`warning: the permission engine refused ${run.blocked} tool call(s) during this run; an incomplete exploration can explain a thin answer.\n`)
   }
   if (before && after && before !== after) {
-    process.stderr.write(`warning: the tree changed while this run was in progress (identity ${before} is not ${after}); the answer is not identity-verified — it describes no single stable state, and it must not be used to close a verification budget. Check ${flat(env.repoRoot || env.cwd)} for edits the run may have made.\n`)
+    process.stderr.write(`warning: the tree changed while this run was in progress (identity ${before} is not ${after}); the answer describes no single stable state. Check ${flat(env.repoRoot || env.cwd)} for edits the run may have made.\n`)
   }
   if (run.model) process.stderr.write(`model: ${flat(run.model)}\n`)
   process.stderr.write(usageNote(run))
@@ -282,23 +290,28 @@ async function runReview(args) {
   const scope = resolveScope(review, env)
   const before = fingerprintScope(env, scope)
   const artifacts = createArtifacts(env, 'review')
-  const prompt = buildReviewPrompt(review, scope)
+  const prompt = buildReviewPrompt(review, scope, artifacts.scratch)
   const run = await runCmd(env, invocationFor(policy, 'review', env, prompt), {
     ...artifacts, timeout: policy.timeout, runNoun: 'review', resultNoun: 'report',
   })
   const after = fingerprintScope(env, scope)
   identityMarkers(env, scope, before, after, run)
   await emitResult(run, artifacts, 'report')
+  // A review is followed up as a consult: same session, same read-only note,
+  // and no scope to re-resolve — the model can run git itself.
+  emitResume(policy, env.cwd, run, 'consult')
   // Reprinted after the body so the merged-stream rule holds for it too: the
   // last marker of each kind is the wrapper's, not model text.
   process.stderr.write(`identity: ${after}\n`)
 }
 
-function parseConsultArgs(policy, args) {
+function parseQuestionArgs(policy, args, mode) {
+  const usage = mode === 'task' ? TASK_USAGE : CONSULT_USAGE
+  const noun = mode === 'task' ? 'TASK' : 'QUESTION'
   let question = ''
   let questionSet = false
   const setQuestion = (value) => {
-    if (questionSet) die(11, 'error: expected exactly one QUESTION; quote the whole question as one argument')
+    if (questionSet) die(11, `error: expected exactly one ${noun}; quote it as one argument`)
     question = value
     questionSet = true
   }
@@ -316,12 +329,17 @@ function parseConsultArgs(policy, args) {
       i += 2
       continue
     }
+    if (option === '--worktree' && mode === 'task') {
+      policy.worktree = true
+      i += 1
+      continue
+    }
     if (option === '-h' || option === '--help') {
-      process.stderr.write(`${CONSULT_USAGE}\n`)
+      process.stderr.write(`${usage}\n`)
       die(0)
     }
     if (option === '--') {
-      if (args.length - i - 1 !== 1) die(11, 'error: expected exactly one QUESTION after --')
+      if (args.length - i - 1 !== 1) die(11, `error: expected exactly one ${noun} after --`)
       setQuestion(args[i + 1])
       break
     }
@@ -331,12 +349,15 @@ function parseConsultArgs(policy, args) {
       continue
     }
     if (option.startsWith('-')) {
-      die(11, `error: unknown argument: ${flat(option)}`, ...CONSULT_USAGE.split('\n'))
+      die(11, `error: unknown argument: ${flat(option)}`, ...usage.split('\n'))
     }
     setQuestion(option)
     i += 1
   }
-  if (!question) die(11, 'error: a non-empty QUESTION is required', ...CONSULT_USAGE.split('\n'))
+  if (!question) die(11, `error: a non-empty ${noun} is required`, ...usage.split('\n'))
+  // A resumed session already lives in its working directory; -w would make
+  // a second worktree the session was never in.
+  if (policy.worktree && policy.sessionId) die(11, 'error: --worktree starts a new session; drop it when resuming')
   return question
 }
 
@@ -353,7 +374,7 @@ function verifyContinuation(policy, run) {
     die(11,
       `error: the CLI reported no session id, so this answer could not be confirmed as a follow-up to session ${policy.sessionId}.`,
       'error: the answer was discarded rather than passed off as deliberation.',
-      'hint: start a fresh consultation and restate the context.')
+      'hint: start a fresh run and restate the context.')
   }
   if (run.sessionId.toLowerCase() === policy.sessionId) return
   run.tail()
@@ -361,36 +382,36 @@ function verifyContinuation(policy, run) {
   die(11,
     `error: the CLI did not resume session ${policy.sessionId} (it reported ${flat(run.sessionId)}).`,
     'error: the answer therefore lacked the prior discussion and was discarded.',
-    'hint: the session may have expired; start a fresh consultation and restate the context.')
+    'hint: the session may have expired; start a fresh run and restate the context.')
 }
 
-async function emitResume(policy, env, run, artifacts) {
+// Printed on every successful run, as a real value or as an unavailable
+// sentinel, so a model-written line cannot pose as one of these markers.
+function emitResume(policy, dir, run, mode) {
   const session = run.sessionId
-  await emitResult(run, artifacts, 'answer')
-  // Printed on every successful consult, as a real value or as an unavailable
-  // sentinel, so a model-written line cannot pose as one of these markers.
   if (!session) {
     process.stderr.write('session: unavailable — the stream carried no session id\n')
-    process.stderr.write('resume: unavailable — no session id in the stream; start a fresh consultation\n')
+    process.stderr.write('resume: unavailable — no session id in the stream; start a fresh run\n')
     return
   }
   process.stderr.write(`session: ${session}\n`)
   const timeout = policy.timeout !== DEFAULT_TIMEOUT ? ` --timeout ${policy.timeout}` : ''
   const maxTurns = policy.maxTurns ? ` --max-turns ${policy.maxTurns}` : ''
-  // A complete follow-up command except for the question, so a caller appends
-  // `-- "..."` and runs it instead of reassembling an argument tail. The model
-  // flags travel with it only when an explicit pair was in force: without a
-  // pinned default there is nothing else to keep the discussion on one model.
-  const modelFlags = pinned(policy)
-    ? ` --model ${shellQuote(policy.model)} --effort ${shellQuote(policy.effort)}`
-    : ''
+  // A session does not remember its model — measured on cmd 1.82.3, a resume
+  // without --model answers on the configured default — so the model that
+  // actually answered always travels. Effort does not need to: the CLI already
+  // stores an explicit effort as that model's default.
+  const model = run.model || policy.model
+  const modelFlag = model ? ` --model ${shellQuote(model)}` : ''
   const script = shellQuote(fileURLToPath(import.meta.url))
-  process.stderr.write(`resume: ${script} consult --resume ${session}${modelFlags}${maxTurns}${timeout} --repo ${shellQuote(env.cwd)}\n`)
+  // A complete follow-up command except for the question, so a caller appends
+  // `-- "..."` and runs it instead of reassembling an argument tail.
+  process.stderr.write(`resume: ${script} ${mode} --resume ${session}${modelFlag}${maxTurns}${timeout} --repo ${shellQuote(dir)}\n`)
 }
 
 async function runConsult(args) {
   const policy = createPolicy()
-  const question = parseConsultArgs(policy, args)
+  const question = parseQuestionArgs(policy, args, 'consult')
   validatePolicy(policy)
   const env = createEnvironment(policy.repo, { requireWorkTree: false })
   // Consult has no declared scope, so its identity is the changed set: weaker
@@ -399,14 +420,44 @@ async function runConsult(args) {
   const scope = env.repoRoot ? consultScope(env) : null
   const before = scope ? fingerprintScope(env, scope) : ''
   const artifacts = createArtifacts(env, 'consult')
-  const run = await runCmd(env, invocationFor(policy, 'consult', env, question), {
+  const prompt = `${question}\n\n${readOnlyNote(artifacts.scratch)}\n`
+  const run = await runCmd(env, invocationFor(policy, 'consult', env, prompt), {
     ...artifacts, timeout: policy.timeout, runNoun: 'consultation', resultNoun: 'answer',
   })
   verifyContinuation(policy, run)
   const after = scope ? fingerprintScope(env, scope) : ''
   identityMarkers(env, scope, before, after, run)
-  await emitResume(policy, env, run, artifacts)
+  await emitResult(run, artifacts, 'answer')
+  emitResume(policy, env.cwd, run, 'consult')
   if (after) process.stderr.write(`identity: ${after}\n`)
+}
+
+// A task is meant to change things, so there is no fingerprint and no drift
+// warning: the caller inspects the result (git diff, tests) itself.
+async function runTask(args) {
+  const policy = createPolicy()
+  const task = parseQuestionArgs(policy, args, 'task')
+  validatePolicy(policy)
+  const env = createEnvironment(policy.repo, { requireWorkTree: false })
+  const artifacts = createArtifacts(env, 'task')
+  const run = await runCmd(env, invocationFor(policy, 'task', env, task), {
+    ...artifacts, timeout: policy.timeout, runNoun: 'task', resultNoun: 'result',
+  })
+  verifyContinuation(policy, run)
+  if (run.blocked) {
+    process.stderr.write(`warning: the permission engine refused ${run.blocked} tool call(s) during this run; part of the task may not have been done.\n`)
+  }
+  if (run.model) process.stderr.write(`model: ${flat(run.model)}\n`)
+  process.stderr.write(usageNote(run))
+  // The directory the CLI actually worked in: a --worktree run lands in a
+  // worktree it created, and a follow-up must resume from there.
+  const workdir = run.workdir || env.cwd
+  if (policy.worktree && !run.workdir) {
+    process.stderr.write('warning: the worktree path was not reported; find it with `git worktree list`.\n')
+  }
+  await emitResult(run, artifacts, 'result')
+  process.stderr.write(`workdir: ${flat(workdir)}\n`)
+  emitResume(policy, workdir, run, 'task')
 }
 
 async function main(argv) {
@@ -423,11 +474,12 @@ async function main(argv) {
     process.stderr.write(`${TOP_USAGE}\n`)
     return
   }
-  if (mode !== 'review' && mode !== 'consult') {
+  if (mode !== 'review' && mode !== 'consult' && mode !== 'task') {
     die(11, mode ? `error: unknown mode: ${flat(mode)}` : 'error: a mode is required', ...TOP_USAGE.split('\n'))
   }
   if (mode === 'review') await runReview(args)
-  else await runConsult(args)
+  else if (mode === 'consult') await runConsult(args)
+  else await runTask(args)
 }
 
 // Anything thrown outside the awaited path (a stream callback, a timer) would
