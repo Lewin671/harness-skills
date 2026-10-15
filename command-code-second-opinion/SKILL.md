@@ -99,8 +99,11 @@ macOS or Linux, and an authenticated `cmd` CLI.
   -- "Evaluate the migration plan in docs/plan.md: risks, missing edge cases"
 ```
 
-Prefer `run_in_background: true`; a run takes from about fifteen seconds to
-several minutes and roughly 30k input tokens. The run reads the live tree, so
+Prefer `run_in_background: true`. Because the run can investigate, its cost
+follows the repository: a toy change takes about fifteen seconds and 30k input
+tokens, while reviewing a real commit has taken four to five minutes, a dozen to
+twenty tool calls and 0.5–1.7M input tokens, mostly cache reads. `--max-turns`
+caps it. The run reads the live tree, so
 hold edits to the reviewed paths until it finishes. Never `sleep`-poll.
 
 Reading the output:
@@ -136,6 +139,7 @@ not remember it.
 | `1` | The CLI rejected the invocation: unknown model or effort, missing resume session | Read the `error: cmd:` lines; fix the arguments rather than rerunning unchanged. |
 | `2` | (review) Nothing in scope | Say the scope was empty — **not** a clean review. |
 | `3` | Not authenticated | The user runs `cmd login`. |
+| `4` | A tool was refused by the permission engine | Report it; the answer may be thin. |
 | `5` / `10` | Rate limited / out of credits | Wait, or use a model the account can run. |
 | `6` / `7` | Network / API server failure | Rerunning unchanged is reasonable. |
 | `9` | No response from the model | Report it. |

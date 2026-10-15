@@ -296,6 +296,18 @@ test('a task reports its workdir and resumes from the worktree it ran in', () =>
 
   const unreported = run(['task', '--worktree', 'do it'], { FAKE_SESSION_ID: id })
   assert.match(unreported.stderr, /^warning: the worktree path was not reported/m)
+  // Never a guessed location: the session lives in the worktree, not the repo.
+  assert.match(unreported.stderr, /^workdir: unavailable/m)
+  assert.match(unreported.stderr, /^resume: unavailable/m)
+  assert.ok(!unreported.stderr.includes(`--repo ${repo}`), unreported.stderr)
+})
+
+test('a turn-capped or partly refused task is flagged, not passed off as done', () => {
+  const capped = run(['task', 'do it'], { FAKE_SUBTYPE: 'max_turns', FAKE_EXIT: '8' })
+  assert.equal(capped.status, 0, capped.stderr)
+  assert.match(capped.stderr, /^warning: the run hit its turn cap/m)
+  const refused = run(['task', 'do it'], { FAKE_BLOCKED: '1' })
+  assert.match(refused.stderr, /^warning: the permission engine refused 1 tool call/m)
 })
 
 test('the review prompt carries the wrapper-built diff and the report contract', () => {

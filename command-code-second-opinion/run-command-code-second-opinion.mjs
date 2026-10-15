@@ -260,21 +260,27 @@ function invocationFor(policy, mode, env, prompt) {
   }
 }
 
+// The warnings every mode owes its caller, a task most of all: a partial
+// delegated result that reads as finished is the costliest silent failure.
+function runWarnings(run) {
+  // Keyed on either signal: the turn cap is the reason, and the exit code is
+  // what the CLI documents, so a pairing that reports one without the other is
+  // still flagged rather than passed off as complete.
+  if (run.exitStatus === 8 || run.subtype === 'max_turns') {
+    process.stderr.write('warning: the run hit its turn cap, so this result is truncated; treat it as partial.\n')
+  }
+  if (run.blocked) {
+    process.stderr.write(`warning: the permission engine refused ${run.blocked} tool call(s) during this run; part of the work was not done.\n`)
+  }
+}
+
 function identityMarkers(env, scope, before, after, run) {
   if (before) {
     process.stderr.write(`identity: ${before}\n`)
   } else if (scope === null) {
     process.stderr.write('identity: unavailable — not a git work tree, so the reviewed bytes cannot be fingerprinted\n')
   }
-  // Keyed on either signal: the turn cap is the reason, and the exit code is
-  // what the CLI documents, so a pairing that reports one without the other is
-  // still flagged rather than passed off as a complete answer.
-  if (run.exitStatus === 8 || run.subtype === 'max_turns') {
-    process.stderr.write('warning: the run hit its turn cap, so this answer is truncated; it is usable as information but cannot close a verification budget.\n')
-  }
-  if (run.blocked) {
-    process.stderr.write(`warning: the permission engine refused ${run.blocked} tool call(s) during this run; an incomplete exploration can explain a thin answer.\n`)
-  }
+  runWarnings(run)
   if (before && after && before !== after) {
     process.stderr.write(`warning: the tree changed while this run was in progress (identity ${before} is not ${after}); the answer describes no single stable state. Check ${flat(env.repoRoot || env.cwd)} for edits the run may have made.\n`)
   }
@@ -444,18 +450,22 @@ async function runTask(args) {
     ...artifacts, timeout: policy.timeout, runNoun: 'task', resultNoun: 'result',
   })
   verifyContinuation(policy, run)
-  if (run.blocked) {
-    process.stderr.write(`warning: the permission engine refused ${run.blocked} tool call(s) during this run; part of the task may not have been done.\n`)
-  }
+  runWarnings(run)
   if (run.model) process.stderr.write(`model: ${flat(run.model)}\n`)
   process.stderr.write(usageNote(run))
   // The directory the CLI actually worked in: a --worktree run lands in a
-  // worktree it created, and a follow-up must resume from there.
-  const workdir = run.workdir || env.cwd
-  if (policy.worktree && !run.workdir) {
-    process.stderr.write('warning: the worktree path was not reported; find it with `git worktree list`.\n')
+  // worktree it created, and a follow-up must resume from there — the session
+  // is stored under that path. Without it there is no honest workdir or resume.
+  const workdir = run.workdir || (policy.worktree ? '' : env.cwd)
+  if (!workdir) {
+    process.stderr.write('warning: the worktree path was not reported; find it with `git worktree list` and resume from inside it.\n')
   }
   await emitResult(run, artifacts, 'result')
+  if (!workdir) {
+    process.stderr.write('workdir: unavailable — the CLI did not report the worktree it created\n')
+    process.stderr.write('resume: unavailable — the session lives in the unreported worktree\n')
+    return
+  }
   process.stderr.write(`workdir: ${flat(workdir)}\n`)
   emitResume(policy, workdir, run, 'task')
 }

@@ -71,7 +71,9 @@ feedback; say so in the report.
 ## Permissions
 
 Every run passes `--yolo`: Command Code can edit files and run any command with
-the user's own permissions, not only inside `workdir`. Delegate only in
+the user's own permissions, not only inside `workdir`. Unlike the read-only
+modes, a task also loads the repository's own skills, alongside its `AGENTS.md`
+and the user's MCP servers — all of them can steer what it runs. Delegate only in
 repositories the user trusts, and keep actions with effects outside the machine
 — pushing, publishing, deploying, messaging — out of the brief unless the user
 asked for them. Two tasks running at once in the same directory will collide;

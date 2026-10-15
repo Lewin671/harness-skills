@@ -542,7 +542,7 @@ function hintsFor(code, frame, log) {
   if (code === 3) {
     process.stderr.write('hint: not authenticated — run `cmd login`, then retry.\n')
   } else if (code === 4) {
-    process.stderr.write('hint: a tool was refused by the permission engine; the run inherited your configured permission mode.\n')
+    process.stderr.write('hint: a tool was refused by the permission engine despite --yolo; check ~/.commandcode/settings.json for a deny rule.\n')
   } else if (code === 5) {
     process.stderr.write('hint: rate limited; wait and rerun, or move to a less loaded model.\n')
   } else if (code === 10) {
