@@ -50,7 +50,9 @@ run-command-code-second-opinion.mjs task [--repo DIR] --resume ID [OPTIONS] [--]
    that is the new worktree.
 4. **Check.** For code, read the diff in `workdir` and run the relevant tests or
    checks yourself. For research or investigation, verify the claims that carry
-   the conclusion. Relay every unprefixed `warning:` line.
+   the conclusion. A report that it ran something is not proof: the `log:` file
+   holds what each command actually returned. Relay every unprefixed `warning:`
+   line.
 5. **Feed back** in the same session: copy the last `resume:` line and append
    `-- "concrete feedback"`. Name what is wrong and what to do, not just "try
    again". Repeat steps 3–5 until the result passes the check. If it is not
@@ -58,7 +60,10 @@ run-command-code-second-opinion.mjs task [--repo DIR] --resume ID [OPTIONS] [--]
    than looping.
 6. **Report.** Say what was done, where (`workdir` and, for a worktree, its
    branch), what you checked and how, and anything still open. Leave merging a
-   worktree branch to the user unless they asked for it.
+   worktree branch to the user unless they asked for it. Nothing removes a
+   worktree automatically: once its branch is merged or abandoned, remove it
+   with `git worktree remove <workdir>` and delete the branch, or tell the user
+   it is still there.
 
 The host may fix small things itself rather than round-tripping through
 feedback; say so in the report.

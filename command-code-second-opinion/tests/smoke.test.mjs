@@ -51,6 +51,7 @@ lines.push(JSON.stringify({ type: 'event', event: { type: 'model_request_start',
 if (process.env.FAKE_WORKDIR) {
   lines.push(JSON.stringify({ type: 'event', event: { type: 'run_end', result: { nextState: { modState: { workspace: { cwd: process.env.FAKE_WORKDIR } } } } } }))
 }
+lines.push(JSON.stringify({ type: 'event', event: { type: 'tool_queued', toolName: 'shell_command', input: { command: 'git log --oneline -1' } } }))
 if (process.env.FAKE_BLOCKED) {
   lines.push(JSON.stringify({ type: 'event', event: { type: 'tool_hook_blocked', toolName: 'shell_command', hookOutput: 'Error: requires permissions.' } }))
 }
@@ -330,7 +331,9 @@ test('markers, prefixes and usage land where the output protocol says', () => {
     assert.match(result.stderr, /^report: /m)
     assert.match(result.stderr, /^log: /m)
     // CLI-controlled lines are prefixed; wrapper lines are not
-    assert.match(result.stderr, /^cmd> \{"type":"event"/m)
+    // Event frames are summarised, never echoed raw
+    assert.match(result.stderr, /^cmd> tool: shell_command git log --oneline -1$/m)
+    assert.ok(!/^cmd> \{/m.test(result.stderr), 'raw NDJSON must not be echoed')
     // a review is followed up as a consult in the same session
     assert.match(result.stderr, /^session: /m)
     assert.match(result.stderr, /^resume: .* consult --resume /m)

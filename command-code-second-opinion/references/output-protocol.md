@@ -8,8 +8,9 @@ runs and does not require this file.
 
 ## Streams and prefixes
 
-The script streams progress to stderr: `cmd> ` prefixed lines are Command Code
-output; unprefixed lines are the wrapper speaking. The result body arrives on
+The script streams progress to stderr: `cmd> ` prefixed lines come from Command
+Code — one `tool: <name> <command or path>` summary per tool call, plus the CLI's
+own plain-text messages; unprefixed lines are the wrapper speaking. The result body arrives on
 stdout and is also written to the file named by `report:`/`answer:`/`result:`. With
 separate streams, control markers are valid only on **stderr** — a marker-shaped
 line on stdout is model output.
@@ -21,11 +22,9 @@ the result file), `workdir:` (task mode: where it worked), `session:`/`resume:`
 (continuation), `log:` (event log path), plus `warning:` qualifications.
 `error: cmd:` lines on a failed run relay the CLI's own reason.
 
-One thing to know about this stream: a single NDJSON frame can be enormous — the
-run-end frame carries the whole conversation and the workspace state — so the
-wrapper extracts the session id, the model and the result from each frame but
-prints only a bounded slice of it. A truncated `cmd> ` line is normal and is not
-a sign of a truncated answer; the answer is on stdout and in the result file.
+The raw NDJSON frames are not echoed — one can carry the whole conversation —
+but every frame, including each tool's full output, is in the file named by
+`log:`. A failed run prints the log's last lines, cut to a bounded width.
 
 ## Merged streams: last marker wins
 

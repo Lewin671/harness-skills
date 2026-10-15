@@ -297,6 +297,9 @@ function extractFrame(line, state) {
   if (frame?.type === 'event') {
     const event = frame.event
     if (!event || typeof event !== 'object') return
+    if (event.type === 'tool_queued' && typeof event.toolName === 'string') {
+      state.toolLine = toolSummary(event)
+    }
     // run_start names the session before any model work happens.
     if (typeof event.sessionId === 'string' && !state.sessionId) state.sessionId = event.sessionId
     if (typeof event.model === 'string' && (event.type === 'model_request_start' || event.type === 'model_request_end')) {
@@ -313,6 +316,17 @@ function extractFrame(line, state) {
     state.result = frame
     if (typeof frame.sessionId === 'string') state.sessionId = frame.sessionId
   }
+}
+
+// One line per tool call — what the model actually ran or read — is all of
+// the event stream worth showing live; the full frames go to the log.
+function toolSummary(event) {
+  const input = event.input && typeof event.input === 'object' ? event.input : {}
+  const detail = [input.command, input.file_path, input.path, input.pattern, input.query]
+    .find((value) => typeof value === 'string' && value)
+    ?? JSON.stringify(input)
+  const text = `tool: ${event.toolName} ${detail}`.replace(/\s+/g, ' ').trim()
+  return text.length > 200 ? `${text.slice(0, 200)}...` : text
 }
 
 // The CLI child currently running, at module scope so the entry point's
@@ -350,7 +364,7 @@ export async function runCmd(env, invocation, options) {
   }
 
   let logBroken = false
-  const state = { result: null, sessionId: '', model: '', blocked: 0, workdir: '' }
+  const state = { result: null, sessionId: '', model: '', blocked: 0, workdir: '', toolLine: '' }
   // The CLI's last plain-text lines, i.e. everything that is not an NDJSON
   // frame: a rejected invocation (unknown model or effort, a bad flag) exits
   // before any result frame, and this is the only place its reason appears.
@@ -360,10 +374,12 @@ export async function runCmd(env, invocation, options) {
       cliErrors.push(line.trim())
       if (cliErrors.length > 3) cliErrors.shift()
     }
-    // Extract from the whole line, display a bounded slice: one NDJSON frame
-    // can carry a whole conversation, and the terminal only needs the gist.
+    // NDJSON frames are not echoed — one can carry a whole conversation — only
+    // a summary of each tool call; the CLI's plain-text lines are shown as is.
+    state.toolLine = ''
     extractFrame(line, state)
-    process.stderr.write(`${CHILD_LINE_PREFIX}${line.length > 180 ? `${line.slice(0, 180)}...` : line}\n`)
+    const shown = line.trimStart().startsWith('{') ? state.toolLine : line
+    if (shown) process.stderr.write(`${CHILD_LINE_PREFIX}${shown.length > 200 ? `${shown.slice(0, 200)}...` : shown}\n`)
     if (logBroken) return
     try {
       appendFileSync(log, `${line}\n`)

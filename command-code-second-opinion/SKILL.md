@@ -107,8 +107,9 @@ Reading the output:
 
 - Trust the exit code. On `0`, read the file named by the last
   `report:`/`answer:` line.
-- `cmd> ` lines are CLI output; unprefixed lines are the wrapper. **Relay every
-  unprefixed `warning:` line** — each one qualifies the result.
+- `cmd> ` lines are CLI output, including a `tool:` line for each command it
+  ran; unprefixed lines are the wrapper. **Relay every unprefixed `warning:`
+  line** — each one qualifies the result.
 - `model:` names the model that actually answered.
 - To follow up, copy the last `resume:` line and append `-- "question"`. A review
   is followed up the same way; its `resume:` line continues the session in
@@ -150,6 +151,9 @@ A turn-capped run (`8`) still exits `0` with a truncation `warning:`.
    priority, or the consult position with its load-bearing arguments.
 2. Add the host's stance on each point — agree, disagree with reason, or
    needs-checking — and verify checkable claims before presenting them as fact.
+   "I ran it and it returned X" is a claim too: Flash-class models have reported
+   wrong results as verified. Check the actual output in the `log:` file, or
+   rerun the command.
 3. Flag disagreements between the two models explicitly instead of averaging
    them away; a genuine split is the most useful thing this skill produces.
 4. State the scope or question, the model, and the `identity:` value.
