@@ -11,7 +11,6 @@ description: >-
   — that is with-peer, where the host implements and the peer reviews. For a
   review or a second opinion, use peer-second-opinion. Never delegate to the
   CLI you are running inside.
-harnesses: [claude-code, codex, kiro]
 ---
 
 # Delegate to Peer
@@ -51,9 +50,11 @@ provider's CLI cannot be found (exit `3`), report that to the user and stop.
    create one yourself (`git worktree add -b <branch> <path>`) and pass it as
    `--repo`, or, with Command Code, pass `--worktree` and let the CLI create it.
    Follow the user's preference when they state one.
-3. **Run** it in the background where the harness can, and wait for the
-   completion notice. On exit `0`, read the file named by the last `result:`
-   line; `workdir:` says where the work happened.
+3. **Run** it as peer-second-opinion § Running it from your harness
+   describes — in the background where the host has background tasks,
+   otherwise in the foreground until it exits, outside any host sandbox. On
+   exit `0`, read the file named by the last `result:` line; `workdir:` says
+   where the work happened.
 4. **Check.** For code, read the diff in `workdir` and run the relevant tests or
    checks yourself. For research, investigation or measurements, verify the
    claims that carry the conclusion. A report that it ran something is not

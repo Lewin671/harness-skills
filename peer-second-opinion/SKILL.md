@@ -14,7 +14,6 @@ description: >-
   should answer itself, or on a disagreement the user has not asked the peer to
   settle. Never use it to apply fixes; to hand the peer the work itself, use
   delegate-to-peer.
-harnesses: [claude-code, codex, kiro]
 ---
 
 # Peer Second Opinion
@@ -112,8 +111,9 @@ Review requires a git work tree; consult runs in any directory.
 ## Usage
 
 `peer.mjs` sits next to this SKILL.md. Each harness links the skill elsewhere
-(usually `~/.claude/skills/`, `~/.codex/skills/` or `~/.kiro/skills/`), so
-resolve the path from the directory this file was loaded from. It needs
+(`~/.claude/skills/`, `~/.codex/skills/`, `~/.agents/skills/` for Command Code,
+`~/.kiro/skills/`), so resolve the path from the directory this file was loaded
+from. It needs
 Node.js 18+, macOS or Linux, and the provider's CLI, authenticated.
 
 ```bash
@@ -123,10 +123,26 @@ Node.js 18+, macOS or Linux, and the provider's CLI, authenticated.
   -- "Evaluate the migration plan in docs/plan.md: risks, missing edge cases"
 ```
 
-A run takes minutes. Run it in the background where the harness can, and wait
-for its completion notice; never `sleep`-poll. Hold edits to the reviewed paths
-until the run ends — or, for a Codex `--uncommitted`/`--base` review, until
-`snapshot: ready`.
+Hold edits to the reviewed paths until the run ends — or, for a Codex
+`--uncommitted`/`--base` review, until `snapshot: ready`.
+
+### Running it from your harness
+
+A run takes minutes and starts a second CLI that needs network access and
+writes its own config and session files (`~/.codex`, `~/.commandcode`) as well
+as TMPDIR.
+
+- **Claude Code, Command Code:** start it as a background shell task and wait
+  for it to exit — the completion notice resumes you (Command Code: read the
+  task with a wait for exit). Never `sleep`-poll.
+- **Codex, or any host without background tasks:** run it in the foreground
+  with the shell tool's longest timeout, and keep waiting until the process
+  exits. A model can be silent for minutes; never kill a run because it looks
+  idle.
+- **A sandboxed host shell** (Codex in `read-only` or `workspace-write`): run
+  the command with escalated permissions, outside the sandbox. Inside it, the
+  peer fails with exit `4` and a network or `EPERM` error in the log tail —
+  the host's sandbox, not the peer.
 
 Reading the output:
 

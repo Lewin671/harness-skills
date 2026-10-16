@@ -10,7 +10,6 @@ description: >-
   this task with-peer"). Both checkpoints always run once invoked. For a
   standalone review or question, use peer-second-opinion directly; to hand the
   peer the work itself, use delegate-to-peer.
-harnesses: [claude-code, codex, kiro]
 ---
 
 # With Peer
@@ -22,8 +21,8 @@ verification of the final change, not identical model preferences;
 agreement alone does not establish correctness.
 
 The peer is Codex unless the user names another provider. Never use the
-CLI you are running inside: from Codex, the user must name another one —
-do not substitute it silently. The checkpoints are only as good as the
+CLI you are running inside: from Codex, use the provider the user names,
+or ask which — do not substitute one silently. The checkpoints are only as good as the
 reviewer, so the chosen model must be capable enough to act as a gate.
 
 Invocation authorizes the bounded peer calls below, implementation,
