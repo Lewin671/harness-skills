@@ -248,3 +248,22 @@ test('exhausted retries report the CLI status as provider-exit', async () => {
     assert.match(stderr, /^provider-exit: 1$/m)
   } finally { f.cleanup() }
 })
+
+test('a transient failure after work began still reports provider-exit', async () => {
+  const f = fixture('ephemeral', 10, [1])
+  f.mode = 'review'
+  try {
+    const driver = `import {runAgent} from ${JSON.stringify(runUrl)}; import codex from ${JSON.stringify(codexUrl)};
+      try {await runAgent({provider: codex, env: ${JSON.stringify(f.env)}, mode: 'review', policy: ${JSON.stringify(f.policy)},
+        artifacts: ${JSON.stringify(f.artifacts)}, retryDelays: ${JSON.stringify(f.retryDelays)},
+        build: () => ({ args: ${JSON.stringify(f.args)}, prompt: null })});}
+      catch(e) {for (const l of e.lines || []) process.stderr.write(l + '\\n'); process.exitCode=e.code;}`
+    const child = spawn(process.execPath, ['--input-type=module', '-e', driver], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stderr = ''
+    child.stderr.on('data', chunk => { stderr += chunk })
+    const code = await new Promise(resolve => child.once('close', resolve))
+    assert.equal(code, 4, stderr)
+    assert.match(stderr, /no recoverable session/)
+    assert.match(stderr, /^provider-exit: 1$/m)
+  } finally { f.cleanup() }
+})

@@ -78,7 +78,10 @@ export async function runAgent(ctx) {
         { ...decoder.state, sessionId: expected && session !== expected ? '' : session })
     }
 
-    const outcome = { ...decoder.finish(proc), providerExit: proc.status }
+    // The one place the CLI's own status is reported: every exit path below
+    // — failure, retry, rejected continuation, partial success — follows it.
+    if (proc.status !== 0) process.stderr.write(`provider-exit: ${proc.status}\n`)
+    const outcome = decoder.finish(proc)
     const failed = !outcome.usable && !outcome.transient
     // A plain failure reports its own reason below; a session check on it
     // would bury that reason under a resume error.
@@ -104,7 +107,6 @@ export async function runAgent(ctx) {
         die(EXIT.failed, 'error: transient failure after work began, but no recoverable session is available; refusing to replay the run')
       }
       if (attempt >= delays.length) {
-        process.stderr.write(`provider-exit: ${proc.status}\n`)
         die(EXIT.failed, `error: ${outcome.transient} persisted after ${attempt + 1} attempts; no model change was attempted`)
       }
       const delay = delays[attempt]
@@ -122,7 +124,6 @@ export async function runAgent(ctx) {
       for (const line of outcome.errors) process.stderr.write(`error: ${flat(line)}\n`)
       if (proc.status !== 0) {
         process.stderr.write(`error: the ${mode} failed; raw output at ${artifacts.log}\n`)
-        process.stderr.write(`provider-exit: ${proc.status}\n`)
       } else {
         process.stderr.write(`error: ${provider.name} produced no result; raw output at ${artifacts.log}\n`)
       }

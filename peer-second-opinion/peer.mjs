@@ -292,8 +292,6 @@ async function main(argv) {
   if (mode === 'task' && !workdir) {
     process.stderr.write('warning: the worktree path was not reported; find it with `git worktree list` and resume from inside it.\n')
   }
-  // A usable result can still come with a non-zero CLI status (a turn cap).
-  if (outcome.providerExit) process.stderr.write(`provider-exit: ${outcome.providerExit}\n`)
   if (outcome.model) process.stderr.write(`model: ${flat(outcome.model)}\n`)
   if (outcome.usageLine) process.stderr.write(`usage: ${outcome.usageLine}\n`)
 
