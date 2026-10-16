@@ -34,7 +34,8 @@ them as input to weigh, never as a verdict.
 | `command-code` | `cmd` | a prompt note only (`--yolo`) | Turn-capped; drift is detected, not prevented. [providers/command-code.md](./references/providers/command-code.md) |
 
 Use the provider the user named. **Never pick the CLI you are running inside**
-(Codex has its own `/review`; Command Code would be reviewing itself). If the
+(Codex has its own `/review`; Command Code would be reviewing itself); if the
+user names it, say so and ask which peer to use. If the
 named provider fails, report that — never quietly switch to another one. Read
 the provider's reference before its first run.
 
@@ -70,7 +71,7 @@ What enters a first-pass prompt must come from the user's own words, the
 repository, or mechanical scope facts (paths, branch names, hashes) — never from
 the host's own analysis: suspected defects, inferred constraints, preferred
 approaches, rankings. When in doubt, omit it. If the user explicitly wants a
-host claim challenged, include it and label the run a **cross-check**.
+host claim challenged, include it and label the run **deliberation**.
 
 After the peer answers:
 
@@ -82,12 +83,12 @@ After the peer answers:
    "I ran it and it returned X" is a claim too: check the `log:` file.
 3. Flag splits between the two models explicitly rather than averaging them
    away; a genuine split is the most useful thing this skill produces.
-4. Label a first-pass answer **independent** only when its prompt held no
-   host-derived analysis; every resumed answer is **deliberation**.
-5. Continue a session only if the user asked for a discussion or approves one
-   after step 1. Stop there: applying fixes is a separate decision for the
-   user, made by the host. If the peer returns nothing usable twice, say so
-   rather than paraphrasing a weak result into confidence.
+4. Label an answer **independent** only when its prompt held no host-derived
+   analysis. Once the host's position has entered the session — or a fresh
+   session that restates it — every answer is **deliberation**.
+5. Then stop. Continue the session only if the user asked for a discussion or
+   approves one. Applying fixes is the user's call; the host applies them,
+   never the peer.
 
 ## Command Synopsis
 
@@ -101,9 +102,9 @@ peer.mjs <provider> consult [--repo DIR] --resume ID [OPTIONS] [--] QUESTION
 |-------|------|
 | `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means `--uncommitted`. |
 | `--context TEXT` | Review only. Neutral background; cannot combine with `--custom`. |
-| `--model M`, `--effort L` | Provider rules: Codex takes them as a pair, Command Code each alone. Pass them only when the user asked for a model. |
+| `--model M`, `--effort L` | Codex needs both together; Command Code takes either. Pass them only when the user asked for a model. |
 | `--timeout N` | 1–86400 seconds; default 3000 (7200 for a task). |
-| `--resume ID` | Continue a session — copy the previous run's `resume:` line, never rebuild it. |
+| `--resume ID` | Consult or task only. Continue a session (see § Reading the output). |
 | `--max-turns N` | Command Code only; default 200. |
 
 Review requires a git work tree; consult runs in any directory.
@@ -135,8 +136,7 @@ writes its own config and session files (`~/.codex`, `~/.commandcode`) as well
 as TMPDIR.
 
 - **Claude Code, Command Code:** start it as a background shell task and wait
-  for it to exit — the completion notice resumes you (Command Code: read the
-  task with a wait for exit). Never `sleep`-poll.
+  for it to exit — the completion notice resumes you. Never `sleep`-poll.
 - **Codex, or any host without background tasks:** run it in the foreground
   with the shell tool's longest timeout. If the tool returns before the
   process exits, keep waiting on that same process (its session or task id) —
@@ -150,15 +150,20 @@ as TMPDIR.
   report that the peer cannot run here and stop; do not retry or work around
   it.
 
-Reading the output:
+### Reading the output
 
 - Trust the exit code. On `0`, read the file named by the last `result:` line.
 - `codex> ` / `cmd> ` lines are the CLI; unprefixed lines are the wrapper.
-  **Relay every unprefixed `warning:` line** — each one qualifies the result.
-- `model:` names the model that answered; `identity:` fingerprints the
-  scoped paths and git state of a live-tree run, so a before/after mismatch
-  means the tree drifted — a match is not proof that nothing it read changed.
-- To follow up, copy the last `resume:` line and append `-- "question"`.
+  **Relay every unprefixed `warning:` line before the first `body: begin`** —
+  each qualifies the result; after it, interleaved model text can look alike.
+- `model:` names the model that answered. On a live-tree run the wrapper
+  compares its before/after `identity:` fingerprints itself and prints a drift
+  `warning:` if they differ — relay it. A match means the scoped change did not
+  shift, not that nothing was touched: rewrites of existing ignored files and
+  writes under `.git/` go unseen.
+- To follow up, copy the last `resume:` line, minus the `resume: ` prefix,
+  and append `-- "question"`; never rebuild it from the session id — it
+  carries the model that answered.
 
 When a merged or truncated stream must be interpreted directly, see
 [references/output-protocol.md](./references/output-protocol.md).
@@ -171,7 +176,20 @@ The exit code is the verdict on *the run*, never on the code.
 |------|---------|------------|
 | `0` | A result was produced | Read the result file and relay it. A `warning:` still qualifies it. |
 | `2` | (review) Nothing in scope | Say the scope was empty — **not** a clean review. |
-| `3` | Bad arguments or an unusable environment | Report the stderr reason. Do not substitute a host-written answer. |
+| `3` | Bad arguments or an unusable environment | Report the stderr reason; fix the arguments or environment — never rerun unchanged. If the CLI cannot be found, relay the `hint:` lines and stop. Do not substitute a host-written answer. |
 | `4` | No usable result | The CLI failed or the session did not resume. Report the `error:` and `hint:` lines; `provider-exit:` is the CLI's own code (provider reference). |
-| `5` | Timed out | Report it with the log tail. A `resume:` line, if printed, continues the session. |
-| `129`/`130`/`143` | The wrapper was signalled | Something outside the run interrupted it. |
+| `5` | Timed out | Report it with the log tail. |
+| `129`/`130`/`143` | The wrapper was signalled | Report it; do not rerun unless the user asks. |
+
+- On a review or consult, rerun at most once, only for a transient cause
+  (network, capacity, timeout, or a session that did not resume). When
+  rerunning:
+  - after exit `5`, append `-- "Continue; check the current state first."`
+    to the `resume:` line if one is usable — a retry, so no extra
+    authorization and the same label; with no usable `resume:` line, start
+    fresh;
+  - after exit `4`, start fresh (a consult restates the context).
+- A task follows delegate-to-peer's round limit instead.
+
+If a rerun still returns nothing usable, say so rather than paraphrasing a
+weak result into confidence.

@@ -22,9 +22,10 @@ reports to the user. Nothing the peer reports counts as done until the host has
 checked it.
 
 The command is the `task` mode of
-[peer-second-opinion](../peer-second-opinion/SKILL.md)'s `peer.mjs`. Its
-Providers, Usage and Exit Codes sections apply unchanged — read them, and the
-provider's reference, first. Never hand-roll the CLI instead: the script closes
+[peer-second-opinion](../peer-second-opinion/SKILL.md)'s `peer.mjs`. Read its
+§ Usage, § Running it from your harness, § Exit Codes and the provider's
+reference first (`peer.mjs` is in the peer-second-opinion skill directory,
+not this one). Never hand-roll the CLI instead: the script closes
 stdin (a bare CLI in a background shell can wait on it forever while looking
 busy), streams progress, enforces a timeout and prints authoritative markers.
 
@@ -33,8 +34,7 @@ peer.mjs <provider> task [--repo DIR] [OPTIONS] [--] TASK
 peer.mjs <provider> task [--repo DIR] --resume ID [OPTIONS] [--] FEEDBACK
 ```
 
-TASK is one argument; put it after `--`. The default timeout is 7200 s. If the
-provider's CLI cannot be found (exit `3`), report that to the user and stop.
+TASK is one argument; put it after `--`. The default timeout is 7200 s.
 
 ## Workflow
 
@@ -42,47 +42,49 @@ provider's CLI cannot be found (exit `3`), report that to the user and stop.
    conversation. Say what to achieve, which files, machines or areas matter,
    the constraints, what "done" looks like (for example, which tests must
    pass), and what to report back. A long brief goes in a file outside the
-   repository, with the TASK pointing at its absolute path. Say explicitly if
-   it must not commit or push — and by default it must not.
+   repository, with the TASK pointing at its absolute path. Tell it not to
+   commit or push unless the user asked for that.
 2. **Choose where it works.** `--repo` (default: the current directory) is its
    working directory. When the work should be isolated — the user has other
    changes in progress, or several tasks run in parallel — give it a worktree:
    create one yourself (`git worktree add -b <branch> <path>`) and pass it as
    `--repo`, or, with Command Code, pass `--worktree` and let the CLI create it.
-   Follow the user's preference when they state one.
+   Without a worktree, note `HEAD` and `git status` first. Follow the user's
+   preference when they state one.
 3. **Run** it as peer-second-opinion § Running it from your harness
    describes — in the background where the host has background tasks,
-   otherwise in the foreground until it exits, outside any host sandbox. On
-   exit `0`, read the file named by the last `result:` line; `workdir:` says
-   where the work happened.
-4. **Check.** For code, read the diff in `workdir` and run the relevant tests or
-   checks yourself. For research, investigation or measurements, verify the
-   claims that carry the conclusion. A report that it ran something is not
+   otherwise in the foreground until it exits, outside any host sandbox. For
+   a task likely to need more than two hours (or, with Command Code, 200
+   turns), raise `--timeout` or `--max-turns` up front. On exit `0`, read the
+   file named by the last `result:` line; `workdir:` says where the work
+   happened.
+4. **Check.** For code, read the diff against that starting point (or the
+   worktree's base) and run the relevant tests or checks yourself. For
+   research, investigation or measurements, verify the claims that carry
+   the conclusion. A report that it ran something is not
    proof: the `log:` file holds what each command actually returned. Relay
    every unprefixed `warning:` line — a turn-cap warning means the result is
    partial.
-5. **Feed back** in the same session: copy the last `resume:` line and append
-   `-- "concrete feedback"`. Name what is wrong and what to do, not just "try
-   again". A run cut short — a timeout (exit `5`) or a turn-cap warning — still
-   prints `workdir:` and `resume:`: the work so far is on disk and the session
-   keeps its history. Resume it the same way, asking it first to check the
-   current state: an interrupted step may be half done, and a killed local
-   `ssh` does not prove the remote command stopped. Copy a `resume:` line
-   only when it holds a command; when it reads `unavailable`, or the run
-   failed with exit `4` (which prints neither `workdir:` nor `resume:`), a
-   non-zero exit has rolled nothing back: inspect the working directory for
-   partial edits first, then start a fresh task whose brief says what is
-   already done, where it failed and what to check. For a task likely to need
-   more than two hours (or, with Command Code, 200 turns), raise `--timeout`
-   or `--max-turns` up front. Repeat steps 3–5 until the result passes the
-   check. If it is not converging after a few rounds, stop and tell the user
-   what is left, rather than looping.
-6. **Report.** Say what was done, where (`workdir` and, for a worktree, its
-   branch), what you checked and how, and anything still open. Leave merging a
-   worktree branch to the user unless they asked for it. Nothing removes a
-   worktree automatically: once its branch is merged or abandoned, remove it
-   with `git worktree remove <path>` and delete the branch, or tell the user it
-   is still there.
+5. **If the check fails or the run is cut short** (exit `4`/`5`, turn cap):
+   feed back in the same session, then repeat steps 3–4.
+   - **Feedback:** copy the last `resume:` line, minus the `resume: ` prefix,
+     and append `-- "concrete feedback"`, naming what is wrong and what to
+     do — not just "try again".
+   - **Cut short** (exit `5` or a turn-cap warning): the work so far is on
+     disk. Resume, asking it first to check the current state — a step may be
+     half done, and a killed local `ssh` does not prove the remote command
+     stopped.
+   - **No usable `resume:`** (exit `4` after the peer did work, or
+     `unavailable`): nothing is rolled back. Inspect the working directory
+     for partial edits, then start a fresh task whose brief says what is
+     done, where it failed and what to check. If the `unavailable` line
+     says to resume from inside a worktree, do that instead (see
+     [command-code.md § Worktree tasks](../peer-second-opinion/references/providers/command-code.md#worktree-tasks)).
+   - **Stop** when the check still fails after three follow-up runs
+     (feedback, resume or restart), and tell the user what is left.
+6. **Report.** Say what was done, where (`workdir`), what you checked and
+   how, and anything still open. If a worktree was used, report its path and
+   branch, and leave merging and removing it to the user unless they asked.
 
 The host may fix small things itself rather than round-tripping through
 feedback; say so in the report.

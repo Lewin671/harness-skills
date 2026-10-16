@@ -15,7 +15,8 @@ At most one explicit scope; omission means `--uncommitted`:
 | `--custom "<TEXT>"` | whatever the instructions describe |
 
 `--uncommitted` reviews *everything* uncommitted, related or not. On a tree with
-unrelated work in progress, commit the intended change and use `--commit`.
+unrelated work in progress, narrow with `--custom` naming the paths, or use
+`--commit` if the change is already committed.
 `--base` takes any ref: `--base HEAD~3` reviews the last three commits plus
 tracked working changes. If the user asked only about the commits, name the
 range in `--custom` rather than reshaping their tree.
@@ -40,12 +41,8 @@ changes inside a submodule, and a repository with no commits fail with exit `3`.
   400,000 bytes, and the prompt says so), the report format, and a read-only
   note. It always reads the live tree.
 
-Every live-tree review prints `identity: <sha256>` before and after the run — a
-fingerprint of the scoped paths, the index and the working-tree status. If they
-differ, a `warning:` says the tree changed mid-run: either someone edited it, or
-the run itself did. Relay it. The identity does not cover an in-place rewrite of
-an existing ignored file, or writes under `.git/`; never describe it as proof
-the tree was untouched.
+A live-tree review fingerprints the scoped paths, index and working-tree
+status as `identity:` (SKILL.md § Reading the output).
 
 ## --custom and --context
 
@@ -63,7 +60,7 @@ carries the current uncommitted diff as data.
 `--context` passes neutral background — what the change is meant to do, a
 constraint not visible in the diff — fenced as data. Keep it within the
 Independence Contract; the host's suspected defects belong in `--custom`, with
-the result labelled a cross-check. The peer is told to check the code against
+the result labelled **deliberation**. The peer is told to check the code against
 the background, not to accept it: a mismatch is itself a finding. With Codex,
 `--context` turns the scope flag into prose (its review command refuses a flag
 and a prompt together), so prefer a plain scope when no context is needed.
@@ -87,9 +84,9 @@ severe, down to `P3`. No bullets is not, by itself, a clean review:
 ## Following up
 
 A Codex review is ephemeral: to discuss a finding, start a consult carrying it,
-or run a `--custom` cross-check. A Command Code review leaves a session; its
+or run a `--custom` review of it. A Command Code review leaves a session; its
 `resume:` line continues it in consult mode with the same read-only note. Both
-are **deliberation**.
+are **deliberation** (SKILL.md § Independence Contract).
 
 ## Reporting duties
 

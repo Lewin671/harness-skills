@@ -26,27 +26,18 @@ Keep the first question blind — the Independence Contract says what may go in.
 ## Continuing the discussion
 
 A successful run prints `session: <ID>` and a `resume:` line holding the
-complete follow-up command except the question:
-
-```bash
-<the resume: line, minus "resume: "> -- "the follow-up question"
-```
-
-Copy it rather than rebuilding it from the id: it carries the model that
-answered, which a session does not remember. The peer resumes with everything
-it already read and said, so a follow-up needs only the new material.
+complete follow-up command except the question (SKILL.md § Reading the
+output). The peer resumes with everything it already read and said, so a follow-up
+needs only the new material.
 
 - The wrapper checks that the CLI resumed the requested session. If it reports
   another one, or none, the answer is discarded and the run exits `4`; start
-  fresh and restate the context. Do the same after any failed follow-up: treat
-  the session as contaminated rather than resuming it by hand.
+  fresh and restate the context. The restated fresh run is **deliberation**.
 - A fresh run whose stream carried no session id still produced a valid
   answer; `session:` and `resume:` then read `unavailable — ...`.
 
 A follow-up needs the user's authorization, and authorization for one is not
-authorization for a loop. Label an answer **independent** only when its prompt
-held no host-derived analysis; once the host's position has entered the session
-— or a fresh session that restates it — every answer is **deliberation**.
+authorization for a loop. Labels follow SKILL.md § Independence Contract.
 
 ## Reporting duties
 

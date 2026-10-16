@@ -17,14 +17,9 @@ description: >-
 
 Complete one task through two checkpoints: an independent design
 opinion, then an independent review of the whole task change. The host
-writes all code; the peer only advises and reviews. Completion requires evidence-backed dispositions and
-verification of the final change, not identical model preferences;
-agreement alone does not establish correctness.
+writes all code; the peer only advises and reviews.
 
-The peer is Codex unless the user names another provider. Never use the
-CLI you are running inside: from Codex, use the provider the user names,
-or ask which — do not substitute one silently. The checkpoints are only as good as the
-reviewer, so the chosen model must be capable enough to act as a gate.
+Default peer: Codex, or Command Code when running inside Codex.
 
 Invocation authorizes the bounded peer calls below, implementation,
 in-scope fixes and verification — no extra approval is needed for
@@ -34,16 +29,14 @@ the user sets.
 
 Read [peer-second-opinion](../peer-second-opinion/SKILL.md), the
 provider's reference and the relevant mode reference before composing
-commands; its execution, model, permission, marker and exit-code rules
-apply unchanged.
+commands. Use its commands, output rules and § Exit Codes; where with-peer
+says otherwise (peer choice, follow-ups, fixes, reruns), with-peer wins.
 
 **Independent prompts.** Both checkpoints start with a fresh, unseeded
-call whose prompt holds only the user's original requirements and
-decisions, repository references and mechanical scope facts — never
-the host's position, rationale, self-review, suspected defects, task
-record or design transcript. A new session does not make a seeded
-prompt independent: every call carrying prior findings or positions is
-**deliberation**.
+call whose prompt holds only the user's requirements and decisions,
+repository references and mechanical scope facts — never the host's
+position, self-review, task record or design transcript. Labels follow
+the parent's Independence Contract.
 
 ## At a glance
 
@@ -70,8 +63,8 @@ its recovery rule after any interruption.
 
 Always obtain a blind consult. If the user prescribed the approach, ask
 the peer to assess it against the requirements rather than reopen the
-decision. Relay the peer's position and load-bearing arguments before
-the host's comparison, checking factual claims first. Classify any
+decision. Relay the peer's position and load-bearing arguments first,
+then check its factual claims before comparing. Classify any
 disagreement:
 
 | Type | Disposition |
@@ -85,8 +78,8 @@ behaviour or a required constraint blocks the affected approach; never
 relabel it a preference. If investigation within scope cannot resolve
 it, present the evidence and options to the user.
 
-At most two consult follow-ups (failures and recovery calls included),
-each resuming the same session and labelled **deliberation**. Each must
+At most two consult follow-ups (reruns of a follow-up included),
+each labelled **deliberation**. Each must
 add evidence, a clarified requirement or a revised proposal; repeating
 positions does not justify a call. Two is a ceiling, not a target. End
 by the disposition rules, not a vote count. If the approach materially
@@ -102,27 +95,26 @@ without claiming consensus.
 The host implements and runs checks appropriate to the change. If
 implementation exposes a material design change, return to the design
 disposition rules, retaining spent attempts. Before calling the peer,
-record expected risk areas in the host's self-review (kept out of the
-prompt).
+record expected risk areas in the task record (never in a prompt).
 
 Run a fresh review invocation over the entire task change — all its
 commits and working changes — following the parent's scope reference.
-Pick the scope from the recorded base:
+Pick the scope from the recorded base; rows 1–2 assume no unrelated work
+in the tree:
 
 | Task change | Scope |
 |---|---|
-| Only uncommitted, no unrelated changes in the tree | `--uncommitted` |
+| Only uncommitted | `--uncommitted` |
 | Commits since the base, plus tracked edits; no new untracked task files | `--base <base>` |
-| Anything else — untracked task files beside commits, unrelated work in the tree | `--custom` naming the base, the commits and every task path (new files included) |
+| Anything else — untracked task files beside commits, unrelated work in the tree | `--custom` naming the base, the commits and every task path (new files included), and telling the peer to diff against the base and read the listed new files |
 
-Check that every task file is covered before launching. Isolate the task
-when unrelated work would pollute the review; never stash, commit or
-revert another task's changes to simplify scope.
+Never stash, commit or revert another task's changes to simplify scope.
 
 ## 4. Disposition findings and verify fixes
 
 Relay the verdict (including an affirmative zero-finding result), scope,
-model and every finding's ID, priority and location before fixing. Then
+model and every finding (numbered F1, F2, … as you relay) with its
+priority and location before fixing. Then
 record each as:
 
 - **Confirmed** — reproduced or evident from code → fix within scope.
@@ -132,41 +124,33 @@ record each as:
   completion, unresolved P2/P3 may stay explicitly open.
 - **Accepted limit** — a real P2/P3 whose fix cost outweighs its expected
   benefit in the user's intended use → record the impact and trade-off,
-  disclose the open limit in the final report and relevant documentation.
+  disclose the open limit in the final report and the task record.
   Never for P0/P1, unmet requirements or material blockers.
 
-The host may re-rate priority on evidence about impact and likelihood,
-recording both ratings and why. Fix cost or remaining budget cannot
-justify a downgrade. Rewording cannot downgrade a material blocker. A fix needing new scope
-or authorization goes to the user with concrete consequences. After each
-batch of fixes, verify by impact:
+Re-rate a priority only on evidence of impact or likelihood, never on
+fix cost, budget or rewording; record both ratings. A fix needing new
+scope or authorization goes to the user with concrete consequences.
+After each batch of fixes, verify by impact:
 
 | Fix impact | Required review |
 |---|---|
 | Local and demonstrably bounded | Fix delta, original finding, related callers and relevant tests; explain why this scope suffices. |
 | Interfaces, shared state, permissions, architecture, cross-module effects, or uncertain impact | The whole task change again. |
 
-Both use review mode. Targeted verification uses `--custom` with the
-exact before/after comparison, paths, finding and expected behaviour,
-and requires a disposition of each targeted finding plus prioritized
-new defects or an affirmative zero-new-finding statement. It has no
-empty-scope precheck and reads the live tree: confirm the delta exists
-and hold edits during the call. Label it **fix verification
-(deliberation)**. Any code drift invalidates verification of the
-affected changes. Investigate new findings under the same rules;
-refuted findings and open P2/P3s alone do not require another round.
+Both use review mode. For targeted verification, the `--custom` text
+names the finding, the paths, the expected behaviour and the fix (its
+commit SHA if committed, otherwise what changed in which paths). It
+asks for a disposition of each targeted finding plus any new defects, or
+an explicit "no new findings"; a missing disposition leaves that fix
+unverified. It has no empty-scope precheck and reads the live tree:
+confirm the delta exists and hold edits during the call. Label it
+**deliberation**. Code drift invalidates
+verification of the affected changes. Investigate new findings under the
+same rules.
 
 ### Completion and budget
 
-Every review invocation — initial, targeted, failed or unparseable —
-consumes one of five attempts by default; increment before launching.
-The user may set another positive finite limit; never reset it when
-narrowing scope or recovering. Re-review until a round confirms nothing
-new or the budget runs out. Refuted findings and open P2/P3s alone never
-justify another call; with no code change since the last successful
-review, the code checkpoint is decided now.
-
-The code checkpoint passes only when:
+Agreement alone is not correctness. The code checkpoint passes only when:
 
 - The initial whole-task review succeeded.
 - Every finding has an evidence-backed disposition; confirmed defects
@@ -175,44 +159,38 @@ The code checkpoint passes only when:
 - Every later task-code change has successful peer verification at the
   required impact scope, and relevant local checks pass — local checks
   cannot replace missing peer verification.
-- The final task-code identity matches that coverage; say whether it
-  combines an initial review with targeted checks or ends in a
-  whole-task review.
+- The final task-code identity equals the one recorded at the last
+  successful review call.
 
-If attempts run out after a fix, mark it **peer-unverified** and stop
-with the checkpoint incomplete. Offer more budget, acceptance of the
-disclosed incomplete result, or a revised approach; acceptance does not
-make it verified.
+Stop when they hold, or when attempts run out — then report the
+checkpoint incomplete (unverified fixes are **peer-unverified**) and
+offer more budget, acceptance of the disclosed result, or a revised
+approach; acceptance does not make it verified.
+
+Every review invocation — initial, targeted, rerun, failed, unparseable
+or turn-capped — consumes one of five attempts by default; increment
+before launching. The user may set another positive finite limit; never
+reset it when narrowing scope or recovering. Refuted findings and open
+P2/P3s alone never justify another call. If no code changed since the
+last successful review, make no further call: apply the pass conditions
+above and report.
 
 ## Failure exits
 
-The parent's exit-code and marker rules govern each call; relay every
-wrapper warning. Exit `0` means a usable result, not approval.
+Exit `0` means a usable result, not approval. Never replace a missing
+peer checkpoint with the host's own answer.
 
-- Review exit `2`: empty scope, not a pass. Correct the scope within the
-  remaining budget or report an incomplete checkpoint.
-- Retries (Codex capacity) happen inside one wrapper invocation (one
-  review attempt). If they exhaust or cannot fit the timeout, stop and
-  report; do not start another retry cycle.
-- A Command Code turn-cap `warning:` makes the result partial: it cannot
-  pass a checkpoint. Count it as an attempt.
-- Other exit `3`–`5`: at most one retry when the parent's rules justify
-  it, within the remaining budget; otherwise stop and report. Never
-  replace a missing peer checkpoint with the host's own answer.
-- Failed consult follow-up (overrides the rule above): do not resume the
-  possibly contaminated session. One fresh recovery consult may restate
-  context, labelled **deliberation**, only if a follow-up slot remains;
-  a failed recovery stops.
-- No priority findings and no affirmative zero-finding statement:
-  unparseable. Relay verbatim; one rerun within the remaining budget,
-  otherwise stop incomplete. A targeted answer omitting a requested
-  finding's disposition leaves that fix unverified.
-- A task with no reviewable repository change cannot pass the code
-  checkpoint; say so rather than claiming completion.
+| Case | Handling |
+|---|---|
+| Review exit `2` | Empty scope, not a pass: fix the scope within budget or report the checkpoint incomplete. |
+| Failed (exit `4`/`5`), unparseable or turn-capped | Rerun once unless the cause is permanent (auth, credits, rejected model); if it fails again, the checkpoint is incomplete — for the design checkpoint, do not implement. Rerunning the first blind consult uses no budget and stays **independent**. |
+| No reviewable repository change | Cannot pass the code checkpoint; say so. |
 
 ## Final report and boundaries
 
-Summarize checkpoint outcomes, scope and final code identity, model and
+Summarize checkpoint outcomes, scope and final code identity (and
+whether its coverage combines an initial review with targeted checks or
+ends in a whole-task review), model and
 independence labels, attempts used, substantive disagreements, and every
 finding's priority, location and disposition, including open P2/P3s.
 Link the task record and preserved reports. Disclose failed checks,
@@ -221,6 +199,6 @@ unverified fixes and coverage limits explicitly.
 The host remains the only writer: never use `codex apply`, bypass flags
 or the wrapper's `task` mode here. Codex's read-only sandbox does not
 restrict MCP servers' external effects, and Command Code is read-only by
-prompt only — relay any `identity:` drift warning and check the tree.
+prompt only — relay any drift warning and check the tree.
 Mention MCP use when the output shows it. This workflow grants no
 external mutation authority.

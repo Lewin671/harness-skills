@@ -10,15 +10,8 @@ unauthenticated one fails the run with exit `4` and its own message in the log
 tail. The wrapper finds `codex` on the absolute entries of `PATH`, or uses
 `CODEX_BIN` (an absolute path to an executable file), and prints
 `note: using codex binary: <path>` first. A binary inside the repository under
-review is refused.
-
-An agent's shell is usually non-interactive and does not load interactive
-startup files, so a `codex` that is a shell function or alias there (often one
-that also sets a proxy) is not found: exit `3` with "could not find 'codex'".
-That is the user's environment to fix — export `CODEX_BIN` and whatever the
-function sets where non-interactive shells see it. Report it and stop; never
-work around it with a hand-rolled `codex exec` or an interactive shell, which
-bypasses the wrapper's protections.
+review is refused. If it is not found, see SKILL.md § Exit Codes; never
+hand-roll `codex exec` instead.
 
 ## Permissions
 
@@ -44,7 +37,8 @@ inside it are rewritten to the source repository in the report.
 
 - An unchanged submodule appears as an empty directory, and ignored untracked
   files (a local `.env`, build output) never enter it. A review that needs
-  them should use `--commit`, which reads the live tree.
+  them should use `--commit` if committed, otherwise `--custom`; both read the
+  live tree.
 - Embedded repositories, changed symlinks that resolve outside the clone, and
   any symlink that resolves back into the live source repository fail with exit
   `3`. An unchanged symlink pointing elsewhere (a dotfiles repository linking

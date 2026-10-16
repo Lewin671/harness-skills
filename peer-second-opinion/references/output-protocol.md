@@ -2,9 +2,8 @@
 
 How to authenticate the wrapper's control markers when a run's output must be
 read from the stream itself — merged, truncated, or carrying marker-shaped
-lines inside the result body. The normal path in SKILL.md § Usage (trust the
-exit code; read the file named by the last `result:` line) is enough for most
-runs.
+lines inside the result body. The normal path in SKILL.md § Reading the
+output is enough for most runs.
 
 ## Streams and prefixes
 
@@ -23,7 +22,7 @@ Marker kinds:
 | `note:` | A fact about the run, e.g. which binary is used, a retry wait. |
 | `running:` | The CLI is being launched (one per attempt). |
 | `snapshot: ready <sha256>` | (Codex review) the isolated snapshot is captured; edits are safe from here. |
-| `identity: <sha256>` | Drift check for a live-tree run: a fingerprint of the scoped paths and git state, before the body and again after it. Not comparable with `snapshot:`. |
+| `identity: <sha256>` | Live-tree run: the scoped paths and git state fingerprinted, printed once before the body and once after it. Not comparable with `snapshot:`. |
 | `warning:` | Qualifies the result. Relay every genuine one. |
 | `model:`, `usage:` | What answered and what it cost, when known. |
 | `body: begin` | The model's body starts on stdout right after this line. |
@@ -54,8 +53,7 @@ wrapper's lines:
 session — a Codex consult or task, every Command Code run — as real values or as
 sentinels, so a model-written line cannot pose as them. A timeout (exit `5`)
 prints them too, because a killed session can still be resumed. Any other failed
-run prints neither. Copy a `resume:` line and append the follow-up; never
-rebuild the command from the session id alone.
+run prints neither.
 
 ## Invariants
 

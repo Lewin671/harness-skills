@@ -22,9 +22,8 @@ That request is **not a sandbox** — the run has the user's own shell.
 - The reviewed project's `AGENTS.md`, the user's `~/.commandcode/AGENTS.md` and
   any configured MCP servers load into the run. Review and consult pass
   `--no-skills`, so the repository's own skills stay out; a task loads them.
-- The `identity:` fingerprint, before and after, is how a read-only run's writes
-  get noticed. An unflagged identity means the reviewed change did not shift,
-  not that nothing outside it was touched.
+- The `identity:` check (SKILL.md § Reading the output) is how a read-only
+  run's writes get noticed.
 
 ## Cost and turns
 
@@ -41,8 +40,7 @@ Without `--model`, the run uses the model configured in `cmd`. Pass `--model`
 only when the user names one. `--effort` is rarely needed: pass it only when
 asked, because the CLI stores it as that model's default in the user's config.
 Levels vary by model and are not listed anywhere; a bad value fails with exit
-`4`, `provider-exit: 1` and the CLI's own reason. A `resume:` line always
-carries the model that answered, because a session does not remember it.
+`4`, `provider-exit: 1` and the CLI's own reason.
 
 ## Worktree tasks
 
@@ -50,8 +48,10 @@ carries the model that answered, because a session does not remember it.
 path arrives only at the end of the run, as `workdir:`, and the session lives
 there: the `resume:` line points into it. A run cut short before reporting it
 prints `workdir: unavailable` and no runnable resume — find it with
-`git worktree list` and resume from inside it. Nothing removes a worktree
-automatically.
+`git worktree list`, then build the one command not copied from a `resume:`
+line: `"$PEER" command-code task --resume <session: value> --repo
+<worktree path> -- "..."`, repeating `--model`, `--max-turns` or `--timeout`
+if the original run passed them. Nothing removes a worktree automatically.
 
 ## provider-exit
 
