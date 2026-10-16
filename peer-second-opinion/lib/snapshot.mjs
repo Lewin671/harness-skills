@@ -89,7 +89,8 @@ function fingerprintEntry(hash, root, path) {
   try {
     stat = lstatSync(source)
   } catch (error) {
-    if (error?.code === 'ENOENT') {
+    // ENOTDIR: an ancestor became a file, so the path is gone too.
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
       hash.update('deleted\0')
       return
     }
@@ -132,12 +133,19 @@ function copyEntry(sourceRoot, targetRoot, path) {
   const target = safePath(targetRoot, path)
   rejectSymlinkAncestor(sourceRoot, path)
   rejectSymlinkAncestor(targetRoot, path)
-  rmSync(target, { recursive: true, force: true })
+  try {
+    rmSync(target, { recursive: true, force: true })
+  } catch (error) {
+    // An ancestor is already a file in the snapshot (a directory replaced by
+    // a file sorts before its old children): nothing is there to remove.
+    if (error?.code !== 'ENOTDIR') throw error
+  }
   let stat
   try {
     stat = lstatSync(source)
   } catch (error) {
-    if (error?.code === 'ENOENT') return
+    // ENOTDIR: an ancestor became a file, so the path is gone too.
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return
     die(EXIT.usage, `error: cannot copy ${flat(path)} into the review snapshot: ${flat(error.message)}`)
   }
   mkdirSync(dirname(target), { recursive: true })
@@ -193,7 +201,7 @@ function guardSnapshotSymlinks(review, env, state, sourceRoot) {
     try {
       stat = lstatSync(link)
     } catch (error) {
-      if (error?.code === 'ENOENT') continue
+      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') continue
       die(EXIT.usage, `error: cannot inspect snapshot symlink ${flat(path)}: ${flat(error.message)}`)
     }
     if (!stat.isSymbolicLink()) continue

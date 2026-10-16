@@ -144,7 +144,8 @@ function parse(argv) {
       i += 2
       continue
     }
-    const extra = provider.options[option]
+    // Own properties only: a prompt such as "constructor" is not an option.
+    const extra = Object.hasOwn(provider.options, option) ? provider.options[option] : null
     if (extra && extra.modes.includes(mode)) {
       if (extra.value) {
         extra.apply(policy, valueOf(i))

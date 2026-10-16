@@ -777,3 +777,23 @@ test('a consult runs in a repository with no commits yet', () => {
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stderr, /^identity: [0-9a-f]{64}$/m)
 })
+
+test('a directory replaced by a file reviews in both a snapshot and a commit', () => {
+  const swap = mkdtempSync(join(root, 'dir-to-file-'))
+  sh('git init -q && mkdir dir && echo old > dir/old.js && git add dir && git -c user.email=t@t -c user.name=t commit -q -m init', { cwd: swap })
+  sh('git rm -q -r dir && echo now-a-file > dir && git add dir', { cwd: swap })
+  const live = run(['review', '--uncommitted'], {}, swap)
+  assert.equal(live.status, 0, live.stderr)
+  assert.match(live.stderr, /^snapshot: ready /m)
+  sh('git -c user.email=t@t -c user.name=t commit -q -m swap', { cwd: swap })
+  const commit = run(['review', '--commit', 'HEAD'], {}, swap)
+  assert.equal(commit.status, 0, commit.stderr)
+  assert.match(commit.stderr, /^identity: /m)
+})
+
+test('a prompt that names an Object.prototype property is a prompt, not an option', () => {
+  for (const word of ['constructor', 'toString', '__proto__']) {
+    const result = run(['consult', word])
+    assert.equal(result.status, 0, `${word}: ${result.stderr}`)
+  }
+})

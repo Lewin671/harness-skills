@@ -266,7 +266,8 @@ export function fingerprintScope(env, scope) {
     try {
       stat = lstatSync(target)
     } catch (error) {
-      if (error?.code === 'ENOENT') {
+      // ENOTDIR: an ancestor became a file, so the path is gone too.
+      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
         hash.update('absent\0')
         continue
       }
