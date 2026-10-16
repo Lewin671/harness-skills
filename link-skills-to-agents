@@ -11,10 +11,20 @@ default_dest_roots=(
   "${HOME}/.agents/skills"
 )
 
+# Former defaults. A default run removes this repo's links from them, so an
+# older installation converges on the two directories above; anything else
+# in them is left alone.
+retired_dest_roots=(
+  "${HOME}/.codex/skills"
+  "${HOME}/.kiro/skills"
+)
+
 if [ "$#" -gt 0 ]; then
   dest_roots=("$@")
+  retired_roots=()
 else
   dest_roots=("${default_dest_roots[@]}")
+  retired_roots=("${retired_dest_roots[@]}")
 fi
 
 # Harness ids a destination root serves, inferred from its path (space-
@@ -221,10 +231,27 @@ sync_dest_root() {
   echo "done  linked=${linked} skipped=${skipped} removed=${removed} dest=${dest_root}"
 }
 
+retire_dest_root() {
+  local dest_root="$1"
+  local dest_path
+
+  [ -d "${dest_root}" ] || return 0
+  for dest_path in "${dest_root}"/*; do
+    [ -L "${dest_path}" ] || continue
+    is_repo_managed_link "${dest_path}" || continue
+    rm "${dest_path}"
+    echo "clean $(basename "${dest_path}") (retired destination ${dest_root})"
+  done
+}
+
 parse_error_seen=0
 
 for dest_root in "${dest_roots[@]}"; do
   sync_dest_root "${dest_root}"
+done
+
+for dest_root in "${retired_roots[@]+"${retired_roots[@]}"}"; do
+  retire_dest_root "${dest_root}"
 done
 
 if [ "${parse_error_seen}" -ne 0 ]; then
