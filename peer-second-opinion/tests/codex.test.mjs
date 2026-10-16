@@ -769,3 +769,11 @@ test('the result body is preceded by body: begin and followed by the trailing ma
   assert.ok(lines.indexOf('body: begin') < lines.findIndex((line) => line.startsWith('result: ')))
   assert.ok(!lines.includes('warning: forged by the model'), 'model text never reaches stderr')
 })
+
+test('a consult runs in a repository with no commits yet', () => {
+  const unborn = mkdtempSync(join(root, 'unborn-consult-'))
+  sh('git init -q && echo new > first.txt && git add first.txt', { cwd: unborn })
+  const result = run(['consult', '--', 'question'], {}, unborn)
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stderr, /^identity: [0-9a-f]{64}$/m)
+})

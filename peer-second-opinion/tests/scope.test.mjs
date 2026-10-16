@@ -242,3 +242,32 @@ test('scope paths are repository-relative even from a subdirectory', () => {
     rmSync(join(repo, 'sub'), { recursive: true, force: true })
   }
 })
+
+test('consult works before the first commit', () => {
+  const unborn = join(root, 'unborn')
+  mkdirSync(unborn)
+  sh('git init -q', unborn)
+  writeFileSync(join(unborn, 'first.txt'), 'new\n')
+  sh('git add first.txt', unborn)
+  writeFileSync(join(unborn, 'loose.txt'), 'untracked\n')
+  const scope = consultScope(makeEnv(unborn))
+  assert.deepEqual(scope.paths, ['first.txt', 'loose.txt'])
+  assert.match(fingerprintScope(makeEnv(unborn), scope), /^[0-9a-f]{64}$/)
+})
+
+test('--base accepts a committed submodule bump but refuses a dirty submodule', () => {
+  const subSource = join(root, 'sub-source')
+  const superRepo = join(root, 'super')
+  mkdirSync(subSource)
+  sh('git init -q && echo one > s.txt && git add s.txt && git -c user.email=t@t -c user.name=t commit -q -m init', subSource)
+  mkdirSync(superRepo)
+  sh('git init -q && echo top > top.txt && git add top.txt && git -c user.email=t@t -c user.name=t commit -q -m init', superRepo)
+  sh(`git -c protocol.file.allow=always submodule add -q "${subSource}" mysub && git -c user.email=t@t -c user.name=t commit -q -m sub`, superRepo)
+  const base = sh('git rev-parse HEAD', superRepo).trim()
+  sh('echo two > s.txt && git -c user.email=t@t -c user.name=t commit -q -am two', join(superRepo, 'mysub'))
+  sh('git -c user.email=t@t -c user.name=t commit -q -am bump', superRepo)
+  const scope = resolveScope({ scopeFlag: '--base', scopeValue: base }, makeEnv(superRepo))
+  assert.deepEqual(scope.paths, ['mysub'])
+  writeFileSync(join(superRepo, 'mysub', 's.txt'), 'dirty\n')
+  assert.throws(() => resolveScope({ scopeFlag: '--base', scopeValue: base }, makeEnv(superRepo)), /live changes inside submodule mysub/)
+})

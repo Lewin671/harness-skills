@@ -59,8 +59,13 @@ function mustList(env, args, what) {
 const LIST = ['--name-only', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none']
 
 export function changedSet(env) {
+  // Before the first commit there is no HEAD to diff against: everything in
+  // the index is staged.
+  const unborn = git(env, ['rev-parse', '--verify', '--quiet', 'HEAD']).status !== 0
   return {
-    staged: mustList(env, ['diff', '--cached', ...LIST, 'HEAD', '--'], 'list staged files'),
+    staged: unborn
+      ? mustList(env, ['ls-files', '-z', '--'], 'list staged files')
+      : mustList(env, ['diff', '--cached', ...LIST, 'HEAD', '--'], 'list staged files'),
     unstaged: mustList(env, ['diff', ...LIST, '--'], 'list unstaged files'),
     untracked: mustList(env, ['ls-files', '--others', '--exclude-standard', '-z', '--'], 'list untracked files'),
   }
@@ -186,11 +191,12 @@ export function resolveScope(review, env, { diff = true } = {}) {
         die(EXIT.empty, 'nothing to review: no staged, unstaged, or untracked changes')
       }
     }
-    // A gitlink bump inside a commit is an ordinary reviewed change, so the
-    // submodule refusal applies to the live scopes only: a change inside a
+    // A committed gitlink bump is an ordinary reviewed change, so the
+    // submodule refusal looks at live changes only: a change inside a
     // submodule's own working tree cannot be reviewed from this repository.
     const submodules = submodulePaths(env)
-    for (const path of scope.paths) {
+    const { staged, unstaged } = changedSet(env)
+    for (const path of new Set([...staged, ...unstaged])) {
       if (submodules.has(path)) {
         die(EXIT.usage,
           `error: cannot review live changes inside submodule ${flat(path)}.`,
