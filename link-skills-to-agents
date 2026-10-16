@@ -233,9 +233,18 @@ sync_dest_root() {
 
 retire_dest_root() {
   local dest_root="$1"
-  local dest_path
+  local dest_path physical active
 
   [ -d "${dest_root}" ] || return 0
+  # A retired directory that is really an active one (a symlinked
+  # ~/.codex/skills -> ~/.agents/skills) holds the links just installed.
+  physical="$(cd "${dest_root}" && pwd -P)"
+  for active in "${dest_roots[@]}"; do
+    if [ -d "${active}" ] && paths_equal "${physical}" "$(cd "${active}" && pwd -P)"; then
+      echo "skip  retired destination ${dest_root} (it is ${active})"
+      return 0
+    fi
+  done
   for dest_path in "${dest_root}"/*; do
     [ -L "${dest_path}" ] || continue
     is_repo_managed_link "${dest_path}" || continue
