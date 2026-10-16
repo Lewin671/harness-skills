@@ -257,6 +257,21 @@ export function createArtifacts(env, mode) {
 // a choice the user already made. Treat "MCP tools may mutate external
 // systems" findings against this file as adjudicated.
 export function safetyArgs(mode, policy, out) {
+  const common = [
+    '--strict-config',
+    '--json',
+    '-m', policy.model,
+    '-c', `model_reasoning_effort="${policy.effort}"`,
+    '-o', out,
+  ]
+  // A delegated task is meant to change things and runs in the user's normal
+  // codex environment: full access without approvals (it may need the
+  // network, e.g. ssh), and none of the read-only modes' feature switches —
+  // it has no independence promise to protect. Never --ephemeral: feedback
+  // resumes the session.
+  if (mode === 'task') {
+    return ['-c', 'sandbox_mode="danger-full-access"', '-c', 'approval_policy="never"', ...common]
+  }
   return [
     '-c', 'sandbox_mode="read-only"',
     '--disable', 'hooks', '--disable', 'apps', '--disable', 'plugins',
@@ -269,16 +284,12 @@ export function safetyArgs(mode, policy, out) {
     // silently, so re-check `codex features list` when upgrading.
     '--disable', 'memories',
     '-c', 'notify=[]',
-    // Turns a renamed or unrecognized config key into a hard failure instead
-    // of a silently ignored safety setting.
-    '--strict-config',
     // Review never resumes a session, so it does not persist one. An older
     // codex that rejects --ephemeral fails the run (exit 4).
     ...(mode === 'review' ? ['--ephemeral'] : []),
-    '--json',
-    '-m', policy.model,
-    '-c', `model_reasoning_effort="${policy.effort}"`,
-    '-o', out,
+    // --strict-config (in common) turns a renamed or unrecognized config key
+    // into a hard failure instead of a silently ignored safety setting.
+    ...common,
   ]
 }
 
@@ -356,9 +367,17 @@ export async function runCodex(env, invocation, options) {
   const delays = options.capacityRetryDelays ?? [15000, 30000, 60000]
   let currentInvocation = invocation
   let currentOptions = options
+  // The latest verified session, for options.onTimeout on the exit-5 paths
+  // here: a task that timed out between capacity retries is still resumable.
+  let recoverable = options.expectedSessionId || ''
+  const timedOut = (message) => {
+    process.stderr.write(`${message}\n`)
+    options.onTimeout?.(recoverable)
+    die(5)
+  }
   for (let attempt = 0; ; attempt += 1) {
     const remaining = deadline - Date.now()
-    if (remaining <= 0) die(5, 'error: capacity retries exhausted the run timeout')
+    if (remaining <= 0) timedOut('error: capacity retries exhausted the run timeout')
     try {
       return await runCodexAttempt(env, currentInvocation, { ...currentOptions, timeout: remaining / 1000 })
     } catch (error) {
@@ -367,6 +386,7 @@ export async function runCodex(env, invocation, options) {
       if (options.resumeInvocation && SESSION_UUID.test(error.sessionId)) {
         currentInvocation = options.resumeInvocation(error.sessionId)
         currentOptions = { ...options, resumed: true, expectedSessionId: error.sessionId }
+        recoverable = error.sessionId
         action = `resume session ${error.sessionId} with Continue`
       } else if (error.workStarted) {
         die(4, 'error: capacity failure after work began, but no recoverable session is available; refusing to replay the task')
@@ -376,7 +396,7 @@ export async function runCodex(env, invocation, options) {
       }
       const delay = delays[attempt]
       if (Date.now() + delay >= deadline) {
-        die(5, 'error: insufficient run timeout remaining for the next capacity retry')
+        timedOut('error: insufficient run timeout remaining for the next capacity retry')
       }
       await waitForCapacity(delay, () => {
         process.stderr.write(`note: model at capacity; retry ${attempt + 1}/${delays.length} in ${delay / 1000}s with the same model; ${action}\n`)
@@ -507,6 +527,9 @@ async function runCodexAttempt(env, invocation, options) {
     process.stderr.write(`hint: raise --timeout, or check the log for where it stalled: ${log}\n`)
     tail()
     discard()
+    // Advertise only the session this attempt was meant to be in.
+    const session = lastThreadId(stdoutEvents).toLowerCase()
+    options.onTimeout?.(expectedSessionId && session !== expectedSessionId.toLowerCase() ? '' : session)
     die(5)
   }
   const sessionId = lastThreadId(stdoutEvents).toLowerCase()

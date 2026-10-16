@@ -39,6 +39,7 @@ case "$1" in
       sleep 300 &
       echo $! > "$FAKE_CHILD_PID_FILE"
     fi
+    echo '{"type":"thread.started","thread_id":"'"\${FAKE_THREAD_ID:-11111111-2222-3333-4444-555555555555}"'"}'
     if [ -n "$FAKE_SLEEP" ]; then
       sleep "$FAKE_SLEEP"
     fi
@@ -64,7 +65,6 @@ case "$1" in
       printf 'tracked-after=' >> "$FAKE_CAPTURE_FILE"
       cat tracked.txt >> "$FAKE_CAPTURE_FILE"
     fi
-    echo '{"type":"thread.started","thread_id":"'"\${FAKE_THREAD_ID:-11111111-2222-3333-4444-555555555555}"'"}'
     echo 'free text from codex' >&2
     if [ -n "$FAKE_BIG_RESULT" ] && [ -n "$out" ]; then
       awk 'BEGIN{for(i=0;i<20000;i++)print "model text line " i}' > "$out"
@@ -141,6 +141,8 @@ test('argument and mode errors exit 3 before codex runs', () => {
     ['consult'], // no question
     ['consult', '--continue', 'not-a-uuid', 'question'],
     ['consult', 'question one', 'question two'],
+    ['task'], // no task
+    ['task', '--worktree', 'do it'], // caller creates worktrees
   ]) {
     const result = run(args)
     assert.equal(result.status, 3, `expected 3 for ${JSON.stringify(args)}: ${result.stderr}`)
@@ -149,7 +151,7 @@ test('argument and mode errors exit 3 before codex runs', () => {
 })
 
 test('--help exits 0 without running codex', () => {
-  for (const args of [['--help'], ['review', '--help'], ['consult', '--help']]) {
+  for (const args of [['--help'], ['review', '--help'], ['consult', '--help'], ['task', '--help']]) {
     const result = run(args)
     assert.equal(result.status, 0, result.stderr)
     assert.equal(result.argv.length, 0)
@@ -679,4 +681,48 @@ test('a CODEX_BIN that does not exist is refused with a clear message', () => {
   assert.equal(result.status, 3, result.stderr)
   assert.match(result.stderr, /not an executable file/)
   assert.equal(result.argv.length, 0)
+})
+
+test('task runs with full access and none of the read-only switches', () => {
+  const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const result = run(['task', '--', 'Do the work'], { FAKE_THREAD_ID: id })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /the fake result body/)
+  const exec = result.argv.find((line) => line.startsWith('exec'))
+  assert.ok(exec.includes('sandbox_mode="danger-full-access"'), exec)
+  assert.ok(exec.includes('approval_policy="never"'), exec)
+  assert.ok(exec.includes('--strict-config'), exec)
+  for (const absent of ['read-only', '--disable', 'notify=', '--ephemeral']) {
+    assert.ok(!exec.includes(absent), `task must not pass ${absent}: ${exec}`)
+  }
+  assert.match(result.stderr, /^result: /m)
+  assert.match(result.stderr, new RegExp(`^workdir: ${realpathSync(repo)}$`, 'm'))
+  const resume = /^resume: (.*)$/m.exec(result.stderr)[1]
+  assert.ok(resume.includes(` task --continue ${id}`), resume)
+  assert.ok(!resume.includes('--timeout'), `the task default timeout must not be repeated: ${resume}`)
+
+  const follow = run(['task', '--continue', id, '--', 'feedback'], { FAKE_THREAD_ID: id })
+  assert.equal(follow.status, 0, follow.stderr)
+  assert.ok(follow.argv.some((line) => line.startsWith(`exec resume ${id}`) && line.includes('danger-full-access')), follow.argv)
+})
+
+test('a timed-out task exits 5 but stays resumable', () => {
+  const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const result = run(['task', '--timeout', '1', '--', 'Do the work'], { FAKE_THREAD_ID: id, FAKE_SLEEP: '30' })
+  assert.equal(result.status, 5, result.stderr)
+  assert.equal(result.stdout, '')
+  assert.match(result.stderr, /^workdir: /m)
+  const resume = /^resume: (.*)$/m.exec(result.stderr)[1]
+  assert.ok(resume.includes(` task --continue ${id}`) && resume.includes('--timeout 1'), resume)
+
+  // a timed-out follow-up that landed in another session advertises none
+  const other = '99999999-8888-7777-6666-555555555555'
+  const drifted = run(['task', '--continue', id, '--timeout', '1', '--', 'feedback'], { FAKE_THREAD_ID: other, FAKE_SLEEP: '30' })
+  assert.equal(drifted.status, 5, drifted.stderr)
+  assert.match(drifted.stderr, /^resume: unavailable/m)
+
+  // a timed-out consult advertises nothing to resume
+  const consult = run(['consult', '--timeout', '1', '--', 'question'], { FAKE_THREAD_ID: id, FAKE_SLEEP: '30' })
+  assert.equal(consult.status, 5, consult.stderr)
+  assert.ok(!/^resume:/m.test(consult.stderr), consult.stderr)
 })

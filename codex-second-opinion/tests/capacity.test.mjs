@@ -198,3 +198,15 @@ test('no valid session repeats the original question instead of sending Continue
     for (const call of f.calls()) assert.deepEqual(call, f.invocation.args.slice(1))
   } finally { f.cleanup() }
 })
+
+test('a capacity retry that cannot fit the timeout still reports the recoverable session', async () => {
+  const f = fixture('session', 1, [2000])
+  const prefix = f.invocation.args
+  f.options.resumeInvocation = id => ({ args: [...prefix, 'exec', 'resume', id, '--', 'Continue'], diagnostic: 'running: resume' })
+  let reported = null
+  f.options.onTimeout = session => { reported = session }
+  try {
+    await assert.rejects(runCodex(f.env, f.invocation, f.options), e => e.code === 5)
+    assert.equal(reported, sessionId)
+  } finally { f.cleanup() }
+})

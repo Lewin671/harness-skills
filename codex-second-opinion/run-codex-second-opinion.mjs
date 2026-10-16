@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Get a second opinion from the codex CLI, read-only. Two modes:
-//   review  — codex exec review over a code change, with scope prechecks
-//   consult — codex exec over one free-form question, resumable
+// Run the codex CLI. Three modes:
+//   review  — codex exec review over a code change, with scope prechecks (read-only)
+//   consult — codex exec over one free-form question, resumable (read-only)
+//   task    — delegated work, resumable, with full access (delegate-to-codex)
 // The process/environment layer lives in lib/runtime.mjs.
 
 import { writeFileSync } from 'node:fs'
@@ -23,10 +24,11 @@ import {
 } from './lib/runtime.mjs'
 import { createReviewSnapshot } from './lib/snapshot.mjs'
 
-const TOP_USAGE = `Usage: run-codex-second-opinion <review|consult> [ARGS]
+const TOP_USAGE = `Usage: run-codex-second-opinion <review|consult|task> [ARGS]
 
   review   run codex exec review over a code change
   consult  ask a free-form question answered with the repo as context
+  task     delegate a task; codex may edit files and run any command
 
 Run run-codex-second-opinion <mode> --help for that mode's arguments.`
 
@@ -60,10 +62,27 @@ Options:
   --repo <DIR>         repository for context (default: current directory)
   --timeout <SECONDS>  abort a hung run (default: 3000; 1-86400)`
 
+const TASK_USAGE = `Usage: run-codex-second-opinion task [OPTIONS] [--] TASK
+
+The TASK is one free-form argument; put it after -- when it starts with a
+dash. Codex runs with full access (no sandbox, no approvals): --repo is its
+working directory, not a boundary.
+
+Options:
+  --continue <SESSION> resume a session UUID with follow-up FEEDBACK as TASK
+  --model <MODEL>      override the pinned model (requires --effort)
+  --effort <LEVEL>     override reasoning effort (requires --model)
+  --repo <DIR>         working directory (default: current directory)
+  --timeout <SECONDS>  abort a hung run (default: 7200; 1-86400)`
+
+const DEFAULT_TIMEOUT = 3000
+// Delegated work runs far longer than a review or a question.
+const TASK_DEFAULT_TIMEOUT = 7200
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CONTEXT_FENCE = 'CALLER-BACKGROUND'
 
-function createPolicy() {
+function createPolicy(mode) {
   const envModel = process.env.CODEX_SECOND_OPINION_MODEL || ''
   const envEffort = process.env.CODEX_SECOND_OPINION_EFFORT || ''
   return {
@@ -75,7 +94,7 @@ function createPolicy() {
     modelSet: false,
     effortSet: false,
     repo: '.',
-    timeout: 3000,
+    timeout: mode === 'task' ? TASK_DEFAULT_TIMEOUT : DEFAULT_TIMEOUT,
     sessionId: '',
   }
 }
@@ -272,7 +291,7 @@ function buildReviewCommand(review, env, safety) {
 }
 
 async function runReview(args) {
-  const policy = createPolicy()
+  const policy = createPolicy('review')
   const review = parseReviewArgs(policy, args)
   validatePolicy(policy)
   const env = createEnvironment(policy.repo)
@@ -305,11 +324,13 @@ async function runReview(args) {
   if (snapshot) process.stderr.write(`snapshot: ready ${snapshot.fingerprint}\n`)
 }
 
-function parseConsultArgs(policy, args) {
+function parseQuestionArgs(policy, args, mode) {
+  const usage = mode === 'task' ? TASK_USAGE : CONSULT_USAGE
+  const noun = mode === 'task' ? 'TASK' : 'QUESTION'
   let question = ''
   let questionSet = false
   const setQuestion = (value) => {
-    if (questionSet) die(3, 'error: expected exactly one QUESTION; quote the whole question as one argument')
+    if (questionSet) die(3, `error: expected exactly one ${noun}; quote the whole ${noun.toLowerCase()} as one argument`)
     question = value
     questionSet = true
   }
@@ -326,11 +347,11 @@ function parseConsultArgs(policy, args) {
       continue
     }
     if (option === '-h' || option === '--help') {
-      process.stderr.write(`${CONSULT_USAGE}\n`)
+      process.stderr.write(`${usage}\n`)
       die(0)
     }
     if (option === '--') {
-      if (args.length - i - 1 !== 1) die(3, 'error: expected exactly one QUESTION after --')
+      if (args.length - i - 1 !== 1) die(3, `error: expected exactly one ${noun} after --`)
       setQuestion(args[i + 1])
       break
     }
@@ -340,21 +361,40 @@ function parseConsultArgs(policy, args) {
       continue
     }
     if (option.startsWith('-')) {
-      die(3, `error: unknown argument: ${flat(option)}`, ...CONSULT_USAGE.split('\n'))
+      die(3, `error: unknown argument: ${flat(option)}`, ...usage.split('\n'))
     }
     setQuestion(option)
     i += 1
   }
-  if (!question) die(3, 'error: a non-empty QUESTION is required', ...CONSULT_USAGE.split('\n'))
+  if (!question) die(3, `error: a non-empty ${noun} is required`, ...usage.split('\n'))
   return question
 }
 
-async function emitResume(policy, env, run, artifacts) {
+// The session:/resume: pair. Printed whenever a run ends with something to
+// continue — a successful consult or task, and a timed-out task — as real
+// values or as unavailable sentinels, so a model-written line cannot pose as
+// them in a merged stream.
+function writeResume(policy, env, mode, session) {
+  if (!session) {
+    process.stderr.write('session: unavailable — the stream carried no thread id\n')
+    process.stderr.write(`resume: unavailable — no session id in the stream; start a fresh ${mode === 'task' ? 'task' : 'consultation'}\n`)
+    return
+  }
+  process.stderr.write(`session: ${session}\n`)
+  const modeDefault = mode === 'task' ? TASK_DEFAULT_TIMEOUT : DEFAULT_TIMEOUT
+  const timeout = policy.timeout !== modeDefault ? ` --timeout ${policy.timeout}` : ''
+  // A complete follow-up command except for the question, so the caller
+  // appends `-- "..."` and runs it instead of reassembling an argument tail.
+  const script = shellQuote(fileURLToPath(import.meta.url))
+  process.stderr.write(`resume: ${script} ${mode} --continue ${session} --model ${shellQuote(policy.model)} --effort ${shellQuote(policy.effort)}${timeout} --repo ${shellQuote(env.cwd)}\n`)
+}
+
+async function emitResume(policy, env, run, artifacts, mode) {
   let session = lastThreadId(run.events)
   if (policy.sessionId && session.toLowerCase() !== policy.sessionId) {
     process.stderr.write(`error: codex did not resume session ${policy.sessionId} (stream reported '${flat(session) || 'no thread id'}').\n`)
     process.stderr.write('error: the answer therefore lacked the prior discussion and was discarded.\n')
-    process.stderr.write('hint: the session may have expired, or the installed codex may have changed its resume behaviour; start a fresh consultation and restate the context.\n')
+    process.stderr.write(`hint: the session may have expired, or the installed codex may have changed its resume behaviour; start a fresh ${mode === 'task' ? 'task' : 'consultation'} and restate the context.\n`)
     run.tail()
     run.discard()
     die(4)
@@ -366,50 +406,45 @@ async function emitResume(policy, env, run, artifacts) {
     process.stderr.write('warning: the stream reported a thread id that is not a session UUID; not advertising a resume command for it\n')
     session = ''
   }
-  await emitResult(run, artifacts, 'answer')
-  if (!session) {
-    // Printed even when unavailable: the answer body is model-controlled, so
-    // a run that printed no session:/resume: line at all would leave whatever
-    // the model wrote as the last line of that kind in a merged stream.
-    process.stderr.write('session: unavailable — the stream carried no thread id\n')
-    process.stderr.write('resume: unavailable — no session id in the stream; start a fresh consultation\n')
-    return
-  }
-  process.stderr.write(`session: ${session}\n`)
-  const timeout = policy.timeout !== 3000 ? ` --timeout ${policy.timeout}` : ''
-  // A complete follow-up command except for the question, so the caller
-  // appends `-- "..."` and runs it instead of reassembling an argument tail.
-  const script = shellQuote(fileURLToPath(import.meta.url))
-  process.stderr.write(`resume: ${script} consult --continue ${session} --model ${shellQuote(policy.model)} --effort ${shellQuote(policy.effort)}${timeout} --repo ${shellQuote(env.cwd)}\n`)
+  await emitResult(run, artifacts, mode === 'task' ? 'result' : 'answer')
+  if (mode === 'task') process.stderr.write(`workdir: ${flat(env.cwd)}\n`)
+  writeResume(policy, env, mode, session)
 }
 
-async function runConsult(args) {
-  const policy = createPolicy()
-  const question = parseConsultArgs(policy, args)
+// consult and task share one shape: a free-form prompt, a resumable session.
+// They differ in access: consult is read-only, a task has full access.
+async function runPrompted(args, mode) {
+  const policy = createPolicy(mode)
+  const question = parseQuestionArgs(policy, args, mode)
   validatePolicy(policy)
   const env = createEnvironment(policy.repo, { requireWorkTree: false })
-  const artifacts = createArtifacts(env, 'consult')
-  const cmdArgs = policy.sessionId ? ['exec', 'resume', policy.sessionId] : ['exec']
-  cmdArgs.push(...safetyArgs('consult', policy, artifacts.out))
-  // codex refuses to start outside a git work tree unless told to skip the
-  // check; consult promises repository-free questions, so honour that here.
-  // The read-only sandbox applies either way.
-  if (!env.repoRoot) cmdArgs.push('--skip-git-repo-check')
-  const diagnostic = `running: ${env.codexBin} ${cmdArgs.join(' ')} -- <question: ${question.length} chars>`
-  cmdArgs.push('--', question)
-  const run = await runCodex(env, { args: cmdArgs, diagnostic }, {
-    ...artifacts, timeout: policy.timeout, runNoun: 'consultation', resultNoun: 'answer',
+  const artifacts = createArtifacts(env, mode)
+  const invocationFor = (session, prompt, label) => {
+    const args = session ? ['exec', 'resume', session] : ['exec']
+    args.push(...safetyArgs(mode, policy, artifacts.out))
+    // codex refuses to start outside a git work tree unless told to skip the
+    // check; consult promises repository-free questions, so honour that here.
+    if (!env.repoRoot) args.push('--skip-git-repo-check')
+    const diagnostic = `running: ${env.codexBin} ${args.join(' ')} -- ${label}`
+    args.push('--', prompt)
+    return { args, diagnostic }
+  }
+  const noun = mode === 'task' ? 'task' : 'question'
+  const run = await runCodex(env, invocationFor(policy.sessionId, question, `<${noun}: ${question.length} chars>`), {
+    ...artifacts, timeout: policy.timeout,
+    runNoun: mode === 'task' ? 'task' : 'consultation', resultNoun: mode === 'task' ? 'result' : 'answer',
     model: policy.model, modelSource: modelSource(policy), resumed: Boolean(policy.sessionId),
     expectedSessionId: policy.sessionId || undefined,
-    resumeInvocation: (session) => {
-      const args = ['exec', 'resume', session, ...safetyArgs('consult', policy, artifacts.out)]
-      if (!env.repoRoot) args.push('--skip-git-repo-check')
-      const diagnostic = `running: ${env.codexBin} ${args.join(' ')} -- Continue`
-      args.push('--', 'Continue')
-      return { args, diagnostic }
-    },
+    resumeInvocation: (session) => invocationFor(session, 'Continue', 'Continue'),
+    // A timed-out task has done real work on disk; keep it resumable.
+    onTimeout: mode === 'task'
+      ? (session) => {
+        process.stderr.write(`workdir: ${flat(env.cwd)}\n`)
+        writeResume(policy, env, mode, UUID.test(session) ? session : '')
+      }
+      : undefined,
   })
-  await emitResume(policy, env, run, artifacts)
+  await emitResume(policy, env, run, artifacts, mode)
 }
 
 async function main(argv) {
@@ -426,11 +461,11 @@ async function main(argv) {
     process.stderr.write(`${TOP_USAGE}\n`)
     return
   }
-  if (mode !== 'review' && mode !== 'consult') {
+  if (mode !== 'review' && mode !== 'consult' && mode !== 'task') {
     die(3, mode ? `error: unknown mode: ${flat(mode)}` : 'error: a mode is required', ...TOP_USAGE.split('\n'))
   }
   if (mode === 'review') await runReview(args)
-  else await runConsult(args)
+  else await runPrompted(args, mode)
 }
 
 // Anything thrown outside the awaited path (a stream callback, a timer)
