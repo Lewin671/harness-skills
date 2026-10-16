@@ -23,7 +23,7 @@ Marker kinds:
 | `note:` | A fact about the run, e.g. which binary is used, a retry wait. |
 | `running:` | The CLI is being launched (one per attempt). |
 | `snapshot: ready <sha256>` | (Codex review) the isolated snapshot is captured; edits are safe from here. |
-| `identity: <sha256>` | Fingerprint of the bytes a live-tree run read — before the body, and again after it. |
+| `identity: <sha256>` | Drift check for a live-tree run: a fingerprint of the scoped paths and git state, before the body and again after it. Not comparable with `snapshot:`. |
 | `warning:` | Qualifies the result. Relay every genuine one. |
 | `model:`, `usage:` | What answered and what it cost, when known. |
 | `body: begin` | The model's body starts on stdout right after this line. |

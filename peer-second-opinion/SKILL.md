@@ -110,16 +110,18 @@ Review requires a git work tree; consult runs in any directory.
 
 ## Usage
 
-`peer.mjs` sits next to this SKILL.md. Harnesses load it from different
+`peer.mjs` sits next to this SKILL.md. Harnesses load skills from different
 places (`~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex and
-Command Code), so resolve the path from the directory this file was loaded
-from. It needs
+Command Code), so take the directory this SKILL.md was loaded from — never
+copy a path from an example — and use that script for every run. It needs
 Node.js 18+, macOS or Linux, and the provider's CLI, authenticated.
 
 ```bash
-~/.claude/skills/peer-second-opinion/peer.mjs codex review --repo /path/to/repo --uncommitted
+PEER=<directory of this SKILL.md>/peer.mjs
 
-~/.claude/skills/peer-second-opinion/peer.mjs command-code consult --repo /path/to/repo \
+"$PEER" codex review --repo /path/to/repo --uncommitted
+
+"$PEER" command-code consult --repo /path/to/repo \
   -- "Evaluate the migration plan in docs/plan.md: risks, missing edge cases"
 ```
 
@@ -136,21 +138,26 @@ as TMPDIR.
   for it to exit — the completion notice resumes you (Command Code: read the
   task with a wait for exit). Never `sleep`-poll.
 - **Codex, or any host without background tasks:** run it in the foreground
-  with the shell tool's longest timeout, and keep waiting until the process
-  exits. A model can be silent for minutes; never kill a run because it looks
-  idle.
+  with the shell tool's longest timeout. If the tool returns before the
+  process exits, keep waiting on that same process (its session or task id) —
+  never start a second run. A model can be silent for minutes; never kill a
+  run because it looks idle.
 - **A sandboxed host shell** (Codex in `read-only` or `workspace-write`): run
-  the command with escalated permissions, outside the sandbox. Inside it, the
-  peer fails with exit `4` and a network or `EPERM` error in the log tail —
-  the host's sandbox, not the peer.
+  the command outside the sandbox through the host's own escalation mechanism.
+  Inside it, the run typically fails — exit `3` (scratch files cannot be
+  written) or exit `4` with a network or `EPERM` error in the log tail —
+  because of the host's sandbox, not the peer. If the host forbids escalation,
+  report that the peer cannot run here and stop; do not retry or work around
+  it.
 
 Reading the output:
 
 - Trust the exit code. On `0`, read the file named by the last `result:` line.
 - `codex> ` / `cmd> ` lines are the CLI; unprefixed lines are the wrapper.
   **Relay every unprefixed `warning:` line** — each one qualifies the result.
-- `model:` names the model that answered; `identity:` ties a live-tree run to
-  the bytes it saw.
+- `model:` names the model that answered; `identity:` fingerprints the
+  scoped paths and git state of a live-tree run, so a before/after mismatch
+  means the tree drifted — a match is not proof that nothing it read changed.
 - To follow up, copy the last `resume:` line and append `-- "question"`.
 
 When a merged or truncated stream must be interpreted directly, see

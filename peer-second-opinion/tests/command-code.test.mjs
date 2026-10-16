@@ -769,5 +769,5 @@ test('an unknown provider exits 3 and lists the known ones', () => {
   const result = spawnSync(process.execPath, [SCRIPT, 'no-such-cli', 'review'], { encoding: 'utf8' })
   assert.equal(result.status, 3, result.stderr)
   assert.match(result.stderr, /unknown provider: no-such-cli/)
-  assert.match(result.stderr, /Providers: codex, command-code/)
+  assert.match(result.stderr, /Providers: codex \(runs codex\), command-code \(runs cmd\)/)
 })

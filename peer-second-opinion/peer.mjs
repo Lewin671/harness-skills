@@ -32,7 +32,7 @@ const DEFAULT_TIMEOUT = { review: 3000, consult: 3000, task: 7200 }
 
 const TOP_USAGE = `Usage: peer.mjs <provider> <review|consult|task> [ARGS]
 
-Providers: ${[...PROVIDERS.keys()].join(', ')}
+Providers: ${[...PROVIDERS.values()].map((p) => `${p.id} (runs ${p.binary.name})`).join(', ')}
 
   review   a prioritised defect list over a code change (read-only)
   consult  one free-form question, answered with the repo as context (read-only)

@@ -17,8 +17,8 @@ At most one explicit scope; omission means `--uncommitted`:
 `--uncommitted` reviews *everything* uncommitted, related or not. On a tree with
 unrelated work in progress, commit the intended change and use `--commit`.
 `--base` takes any ref: `--base HEAD~3` reviews the last three commits plus
-tracked working changes — commit or stash the tree first if the user asked only
-about the commits.
+tracked working changes. If the user asked only about the commits, name the
+range in `--custom` rather than reshaping their tree.
 
 An empty scope — a clean tree, an empty commit, no changes since the merge base
 — exits `2` before the peer runs, because a CLI reports "no changes" as an

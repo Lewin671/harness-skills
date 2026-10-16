@@ -2,14 +2,15 @@
 name: with-peer
 description: >-
   Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`,
-  the default) or Command Code (`cmd`). Complete a task with an independent
-  peer design opinion and whole-task code review. The host implements;
-  disagreements receive evidence-backed dispositions and fixes receive
-  impact-scoped verification. Trigger only when the user explicitly asks to
-  work with the peer ("和 codex 一起完成这个任务", "build this with codex", "run
-  this task with-peer"). Both checkpoints always run once invoked. For a
-  standalone review or question, use peer-second-opinion directly; to hand the
-  peer the work itself, use delegate-to-peer.
+  the default) or Command Code (`cmd`). Complete a code-changing task with the
+  peer as advisor and reviewer: the host writes all the code, the peer gives a
+  blind design opinion first and then reviews the whole change, and every
+  disagreement is settled by evidence rather than by vote. Trigger only when
+  the user explicitly asks to work with the peer ("和 codex 一起完成这个任务",
+  "build this with codex", "run this task with-peer"). Both checkpoints always
+  run once invoked; a task that changes no repository code cannot pass the
+  second. For a standalone review or question, use peer-second-opinion
+  directly; to hand the peer the work itself, use delegate-to-peer.
 ---
 
 # With Peer
@@ -43,6 +44,18 @@ the host's position, rationale, self-review, suspected defects, task
 record or design transcript. A new session does not make a seeded
 prompt independent: every call carrying prior findings or positions is
 **deliberation**.
+
+## At a glance
+
+1. Record requirements, base commit and an initial position (§1).
+2. Blind consult → relay → disposition each disagreement; at most two
+   follow-ups (§2).
+3. Implement, check locally, then a blind review of the whole task
+   change (§3).
+4. Relay findings → disposition each → fix confirmed ones → verify fixes
+   at their impact scope; at most five review attempts (§4).
+5. Done when the checkpoint conditions in §4 hold; otherwise stop and
+   report what is incomplete. Final report (last section).
 
 ## 1. Record the task and initial position
 
@@ -94,8 +107,17 @@ prompt).
 
 Run a fresh review invocation over the entire task change — all its
 commits and working changes — following the parent's scope reference.
-Isolate the task when unrelated work would pollute the review; never
-stash, commit or revert another task's changes to simplify scope.
+Pick the scope from the recorded base:
+
+| Task change | Scope |
+|---|---|
+| Only uncommitted, no unrelated changes in the tree | `--uncommitted` |
+| Commits since the base, plus tracked edits; no new untracked task files | `--base <base>` |
+| Anything else — untracked task files beside commits, unrelated work in the tree | `--custom` naming the base, the commits and every task path (new files included) |
+
+Check that every task file is covered before launching. Isolate the task
+when unrelated work would pollute the review; never stash, commit or
+revert another task's changes to simplify scope.
 
 ## 4. Disposition findings and verify fixes
 
@@ -134,7 +156,9 @@ Every review invocation — initial, targeted, failed or unparseable —
 consumes one of five attempts by default; increment before launching.
 The user may set another positive finite limit; never reset it when
 narrowing scope or recovering. Re-review until a round confirms nothing
-new or the budget runs out.
+new or the budget runs out. Refuted findings and open P2/P3s alone never
+justify another call; with no code change since the last successful
+review, the code checkpoint is decided now.
 
 The code checkpoint passes only when:
 

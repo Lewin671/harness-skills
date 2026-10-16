@@ -67,7 +67,12 @@ provider's CLI cannot be found (exit `3`), report that to the user and stop.
    prints `workdir:` and `resume:`: the work so far is on disk and the session
    keeps its history. Resume it the same way, asking it first to check the
    current state: an interrupted step may be half done, and a killed local
-   `ssh` does not prove the remote command stopped. For a task likely to need
+   `ssh` does not prove the remote command stopped. Copy a `resume:` line
+   only when it holds a command; when it reads `unavailable`, or the run
+   failed with exit `4` (which prints neither `workdir:` nor `resume:`), a
+   non-zero exit has rolled nothing back: inspect the working directory for
+   partial edits first, then start a fresh task whose brief says what is
+   already done, where it failed and what to check. For a task likely to need
    more than two hours (or, with Command Code, 200 turns), raise `--timeout`
    or `--max-turns` up front. Repeat steps 3–5 until the result passes the
    check. If it is not converging after a few rounds, stop and tell the user
