@@ -130,8 +130,14 @@ record each as:
   the peer need not retract it.
 - **Uncertain** — investigate proportionally; unresolved P0/P1 blocks
   completion, unresolved P2/P3 may stay explicitly open.
+- **Accepted limit** — a real P2/P3 whose fix cost outweighs its expected
+  benefit in the user's intended use → record the impact and trade-off,
+  disclose the open limit in the final report and relevant documentation.
+  Never for P0/P1, unmet requirements or material blockers.
 
-Rewording cannot downgrade a material blocker. A fix needing new scope
+The host may re-rate priority on evidence about impact and likelihood,
+recording both ratings and why. Fix cost or remaining budget cannot
+justify a downgrade. Rewording cannot downgrade a material blocker. A fix needing new scope
 or authorization goes to the user with concrete consequences. After each
 batch of fixes, verify by impact:
 
@@ -163,8 +169,9 @@ review, the code checkpoint is decided now.
 The code checkpoint passes only when:
 
 - The initial whole-task review succeeded.
-- Every finding has an evidence-backed disposition; confirmed findings
-  are fixed and no unresolved P0/P1 remains.
+- Every finding has an evidence-backed disposition; confirmed defects
+  are fixed unless they qualify as Accepted limits, and no unresolved
+  P0/P1 remains.
 - Every later task-code change has successful peer verification at the
   required impact scope, and relevant local checks pass — local checks
   cannot replace missing peer verification.
