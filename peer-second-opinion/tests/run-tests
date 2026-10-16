@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+
+import { spawnSync } from 'node:child_process'
+import { readdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+// Every *.test.mjs here, so a new suite cannot be left out by accident.
+const suites = readdirSync(here).filter((name) => name.endsWith('.test.mjs')).sort().map((name) => join(here, name))
+const result = spawnSync(process.execPath, ['--test', ...suites], { stdio: 'inherit', env: process.env })
+process.exitCode = result.status ?? 1
