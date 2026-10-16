@@ -726,3 +726,11 @@ test('a timed-out task exits 5 but stays resumable', () => {
   assert.equal(consult.status, 5, consult.stderr)
   assert.ok(!/^resume:/m.test(consult.stderr), consult.stderr)
 })
+
+test('a codex missing from PATH explains the shell-function case', () => {
+  const result = run(['task', '--', 'Do the work'], { CODEX_BIN: '', PATH: '/usr/bin:/bin' })
+  assert.equal(result.status, 3, result.stderr)
+  assert.match(result.stderr, /could not find 'codex'/)
+  assert.match(result.stderr, /shell function or alias/)
+  assert.equal(result.argv.length, 0)
+})

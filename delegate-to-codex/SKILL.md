@@ -39,7 +39,8 @@ run-codex-second-opinion.mjs task [--repo DIR] --continue ID [OPTIONS] [--] FEED
   pinned default unless the user asked for another model).
 - It needs an authenticated `codex` on `PATH`, or `CODEX_BIN` set to its
   absolute path; exit `3` with "could not find 'codex'" means neither holds
-  in this shell. Prerequisites, capacity retries and model rejections:
+  in this shell. Report that to the user and stop — never fall back to a
+  hand-rolled `codex exec` or `zsh -ic codex`. Prerequisites, capacity retries and model rejections:
   [execution.md](../codex-second-opinion/references/execution.md).
 - Progress streams to stderr: `codex> ` lines are Codex, unprefixed lines are
   the script. Trust the exit code, not the prose: `0` result produced, `3` bad

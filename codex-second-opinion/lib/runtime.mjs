@@ -189,7 +189,8 @@ function resolveCodexBin(env) {
     if (!env.codexBin) {
       die(3,
         "error: could not find 'codex' on an absolute PATH entry.",
-        'hint: install the codex CLI, or set CODEX_BIN to its absolute path.')
+        'hint: install the codex CLI, or set CODEX_BIN to its absolute path.',
+        'hint: if `codex` works in your terminal, it may be a shell function or alias, which non-interactive shells do not load; export CODEX_BIN (and any environment the function sets, such as a proxy) where non-interactive shells see it.')
     }
   }
   if (env.repoRoot && isInside(bestRealpath(env.codexBin), env.repoRoot)) {

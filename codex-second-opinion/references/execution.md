@@ -13,6 +13,14 @@ finds `codex` on the absolute entries of `PATH`, or uses `CODEX_BIN`
 `note: using codex binary: <path>` before anything runs; a binary that
 resolves inside the repository under review is refused (exit `3`).
 
+An agent's shell is usually non-interactive and does not load
+interactive startup files, so a `codex` that is a shell function or
+alias there (often one that also sets a proxy) is not found. That is the
+user's environment to fix — exporting `CODEX_BIN` and whatever the
+function sets where non-interactive shells read it. Report it; do not
+work around it by running `codex exec` through an interactive shell,
+which bypasses this script's protections.
+
 The wrapper's own git prechecks run outside Codex's sandbox: ordinary
 read-only git commands (`--no-optional-locks`, no external
 diff/textconv) — best effort, not a guarantee.
