@@ -78,7 +78,7 @@ export async function runAgent(ctx) {
         { ...decoder.state, sessionId: expected && session !== expected ? '' : session })
     }
 
-    const outcome = decoder.finish(proc)
+    const outcome = { ...decoder.finish(proc), providerExit: proc.status }
     const failed = !outcome.usable && !outcome.transient
     // A plain failure reports its own reason below; a session check on it
     // would bury that reason under a resume error.
@@ -104,6 +104,7 @@ export async function runAgent(ctx) {
         die(EXIT.failed, 'error: transient failure after work began, but no recoverable session is available; refusing to replay the run')
       }
       if (attempt >= delays.length) {
+        process.stderr.write(`provider-exit: ${proc.status}\n`)
         die(EXIT.failed, `error: ${outcome.transient} persisted after ${attempt + 1} attempts; no model change was attempted`)
       }
       const delay = delays[attempt]

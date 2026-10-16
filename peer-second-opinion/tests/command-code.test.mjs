@@ -314,6 +314,7 @@ test('a task reports its workdir and resumes from the worktree it ran in', () =>
 test('a turn-capped or partly refused task is flagged, not passed off as done', () => {
   const capped = run(['task', 'do it'], { FAKE_SUBTYPE: 'max_turns', FAKE_EXIT: '8' })
   assert.equal(capped.status, 0, capped.stderr)
+  assert.match(capped.stderr, /^provider-exit: 8$/m)
   assert.match(capped.stderr, /^warning: the run hit its turn cap/m)
   const refused = run(['task', 'do it'], { FAKE_BLOCKED: '1' })
   assert.match(refused.stderr, /^warning: the permission engine refused 1 tool call/m)
@@ -349,6 +350,7 @@ test('markers, prefixes and usage land where the output protocol says', () => {
     assert.match(result.stderr, /^identity: [0-9a-f]{64}$/m)
     assert.match(result.stderr, /^model: fake\/model-1$/m)
     assert.match(result.stderr, /^usage: input=11 output=3 cacheRead=1 durationMs=7$/m)
+    assert.ok(!/^provider-exit:/m.test(result.stderr), 'a clean exit prints no provider-exit')
     assert.match(result.stderr, /^result: /m)
     assert.match(result.stderr, /^log: /m)
     // CLI-controlled lines are prefixed; wrapper lines are not

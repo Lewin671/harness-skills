@@ -32,8 +32,8 @@ Because it can investigate, the cost follows the repository: a toy change takes
 about fifteen seconds and 30k input tokens, while reviewing a real commit has
 taken four to five minutes, a dozen to twenty tool calls and 0.5–1.7M input
 tokens, mostly cache reads. Every run is capped at `--max-turns` (default 200);
-a capped run still exits `0` but prints a truncation `warning:` — treat that
-result as partial. A `usage:` line reports the tokens.
+a capped run still exits `0` but prints a truncation `warning:` and
+`provider-exit: 8` — treat that result as partial. A `usage:` line reports the tokens.
 
 ## Model
 

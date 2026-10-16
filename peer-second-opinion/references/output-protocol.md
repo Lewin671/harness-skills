@@ -30,7 +30,8 @@ Marker kinds:
 | `result:`, `log:` | Done: the result file and the event log. |
 | `workdir:` | (task) Where the work happened. |
 | `session:`, `resume:` | Continuation, or `unavailable — ...` sentinels. |
-| `error:`, `hint:`, `provider-exit:` | A failed run: the reason, the remedy, the CLI's own exit code. |
+| `provider-exit:` | The CLI's own exit code, whenever it was non-zero — on a failure, or beside a usable but partial result. |
+| `error:`, `hint:` | A failed run: the reason and the remedy. |
 
 ## Merged streams
 

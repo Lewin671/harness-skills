@@ -231,3 +231,20 @@ test('a capacity retry that cannot fit the timeout still reports the recoverable
     assert.equal(reported, sessionId)
   } finally { f.cleanup() }
 })
+
+test('exhausted retries report the CLI status as provider-exit', async () => {
+  const f = fixture('always', 10, [1])
+  try {
+    const driver = `import {runAgent} from ${JSON.stringify(runUrl)}; import codex from ${JSON.stringify(codexUrl)};
+      try {await runAgent({provider: codex, env: ${JSON.stringify(f.env)}, mode: 'consult', policy: ${JSON.stringify(f.policy)},
+        artifacts: ${JSON.stringify(f.artifacts)}, retryDelays: ${JSON.stringify(f.retryDelays)},
+        build: () => ({ args: ${JSON.stringify(f.args)}, prompt: null })});}
+      catch(e) {process.exitCode=e.code;}`
+    const child = spawn(process.execPath, ['--input-type=module', '-e', driver], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stderr = ''
+    child.stderr.on('data', chunk => { stderr += chunk })
+    const code = await new Promise(resolve => child.once('close', resolve))
+    assert.equal(code, 4, stderr)
+    assert.match(stderr, /^provider-exit: 1$/m)
+  } finally { f.cleanup() }
+})
