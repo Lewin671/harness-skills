@@ -3,11 +3,12 @@ set -euo pipefail
 
 src_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
+# Two directories cover every harness: Claude Code reads ~/.claude/skills;
+# Codex and Command Code both read ~/.agents/skills (verified 2026-10-16), so
+# linking ~/.codex/skills as well would show Codex every skill twice.
 default_dest_roots=(
-  "${HOME}/.agents/skills"
   "${HOME}/.claude/skills"
-  "${HOME}/.codex/skills"
-  "${HOME}/.kiro/skills"
+  "${HOME}/.agents/skills"
 )
 
 if [ "$#" -gt 0 ]; then
@@ -16,15 +17,17 @@ else
   dest_roots=("${default_dest_roots[@]}")
 fi
 
-# Harness id for a destination root, inferred from its path.
-# Unknown/shared destinations (e.g. ~/.agents/skills) get an empty id
-# and receive only unrestricted skills.
+# Harness ids a destination root serves, inferred from its path (space-
+# separated). ~/.agents/skills is read by both Codex and Command Code, so a
+# skill restricted to either lands there and both see it. Unknown
+# destinations get no id and receive only unrestricted skills.
 dest_root_harness() {
   case "$(casefold_path "$1")" in
-    *"/.claude/"*) echo "claude-code" ;;
-    *"/.codex/"*)  echo "codex" ;;
-    *"/.kiro/"*)   echo "kiro" ;;
-    *)             echo "" ;;
+    *"/.claude/"*)      echo "claude-code" ;;
+    *"/.agents/"*)      echo "codex command-code" ;;
+    *"/.codex/"*)       echo "codex" ;;
+    *"/.commandcode/"*) echo "command-code" ;;
+    *)                  echo "" ;;
   esac
 }
 
@@ -66,8 +69,8 @@ skill_harnesses() {
 
 skill_allowed_in_dest() {
   local skill_dir="$1"
-  local dest_harness="$2"
-  local harnesses harness
+  local dest_harnesses="$2"
+  local harnesses harness served
 
   harnesses="$(skill_harnesses "${skill_dir}/SKILL.md")"
   if [ "${harnesses}" = "__parse_error__" ]; then
@@ -78,9 +81,9 @@ skill_allowed_in_dest() {
   [ -n "${harnesses}" ] || return 0
 
   for harness in ${harnesses}; do
-    if [ "${harness}" = "${dest_harness}" ]; then
-      return 0
-    fi
+    for served in ${dest_harnesses}; do
+      [ "${harness}" = "${served}" ] && return 0
+    done
   done
   return 1
 }

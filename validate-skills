@@ -10,11 +10,11 @@ repo_root = ARGV.fetch(0)
 skill_files = Dir.glob(File.join(repo_root, "*", "SKILL.md")).sort
 errors = []
 
-KNOWN_HARNESSES = %w[claude-code codex kiro].freeze
+KNOWN_HARNESSES = %w[claude-code codex command-code].freeze
 ONLY_DESCRIPTION_HARNESS = {
   /claude\s+code\s+only/i => "claude-code",
   /codex\s+only/i => "codex",
-  /kiro\s+only/i => "kiro",
+  /command\s+code\s+only/i => "command-code",
 }.freeze
 
 skill_files.each do |path|

@@ -110,9 +110,9 @@ Review requires a git work tree; consult runs in any directory.
 
 ## Usage
 
-`peer.mjs` sits next to this SKILL.md. Each harness links the skill elsewhere
-(`~/.claude/skills/`, `~/.codex/skills/`, `~/.agents/skills/` for Command Code,
-`~/.kiro/skills/`), so resolve the path from the directory this file was loaded
+`peer.mjs` sits next to this SKILL.md. Harnesses load it from different
+places (`~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex and
+Command Code), so resolve the path from the directory this file was loaded
 from. It needs
 Node.js 18+, macOS or Linux, and the provider's CLI, authenticated.
 
