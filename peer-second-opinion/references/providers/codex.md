@@ -58,7 +58,9 @@ answered.
 
 A model codex rejects — retired, renamed, not entitled, or newer than the
 installed CLI — fails with exit `4` and a hint naming where the model came from
-(flag, environment or pinned default). No fallback is attempted. Check
+(flag, environment or pinned default). No fallback is attempted. Rerun once
+unchanged first: a rejection of an available model has been seen to clear on
+the next run. Check
 `codex debug models` and upgrade codex before concluding a model is retired. Do
 not resume a session under a different model.
 

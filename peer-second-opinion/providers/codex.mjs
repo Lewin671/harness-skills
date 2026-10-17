@@ -167,7 +167,7 @@ export default {
           if (text.includes('unknown configuration field') || text.includes('Unknown feature flag')) {
             hints.push('codex rejected a configuration key or feature flag this script sets (--strict-config is deliberate); the installed codex CLI may have drifted from the keys in providers/codex.mjs.')
           } else if (text.includes(policy.model) && MODEL_DENIAL.test(text)) {
-            hints.push(`the selected model '${flat(policy.model)}' is unavailable to this codex login (retired, renamed, not entitled, or newer than the installed codex CLI — try upgrading it); no fallback was attempted.`)
+            hints.push(`codex rejected the selected model '${flat(policy.model)}' on this run; no fallback was attempted. Such a rejection has proved transient, so rerun once unchanged; if it is rejected again, the model is unavailable to this codex login (retired, renamed, not entitled, or newer than the installed codex CLI — try upgrading it).`)
             hints.push({
               flag: 'rerun with a supported --model M --effort L pair.',
               env: `update ${MODEL_ENV} and ${EFFORT_ENV} together to a supported model.`,

@@ -23,7 +23,7 @@ checked it.
 
 The command is the `task` mode of
 [peer-second-opinion](../peer-second-opinion/SKILL.md)'s `peer.mjs`. Read its
-§ Usage, § Running it from your harness, § Exit Codes and the provider's
+§ Providers (which peer to use when the user names none), § Usage, § Running it from your harness, § Exit Codes and the provider's
 reference first (`peer.mjs` is in the peer-second-opinion skill directory,
 not this one). Never hand-roll the CLI instead: the script closes
 stdin (a bare CLI in a background shell can wait on it forever while looking

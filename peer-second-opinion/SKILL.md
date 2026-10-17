@@ -3,8 +3,8 @@ name: peer-second-opinion
 description: >-
   Get an independent second opinion from a peer coding-agent CLI — Codex
   (`codex`) or Command Code (`cmd`) — a different harness and model that did
-  not write the code. Requires an explicit user request naming the peer; every
-  trigger below is conditional on that. Use review mode when the user asks the
+  not write the code. Requires an explicit user request for the peer, by name
+  or as "the peer" ("让 peer 看看"); every trigger below is conditional on that. Use review mode when the user asks the
   peer to review or cross-check a code change — a diff, the working tree, a
   branch, or a commit ("let codex review this", "让 command code 审一下") — or to
   adjudicate a contested finding from the host's own review. Use consult mode
@@ -33,11 +33,24 @@ them as input to weigh, never as a verdict.
 | `codex` | `codex` | a real read-only sandbox | Native review command; isolated review snapshots; pinned model. [providers/codex.md](./references/providers/codex.md) |
 | `command-code` | `cmd` | a prompt note only (`--yolo`) | Turn-capped; drift is detected, not prevented. [providers/command-code.md](./references/providers/command-code.md) |
 
-Use the provider the user named. **Never pick the CLI you are running inside**
-(Codex has its own `/review`; Command Code would be reviewing itself); if the
-user names it, say so and ask which peer to use. If the
-named provider fails, report that — never quietly switch to another one. Read
-the provider's reference before its first run.
+**Never pick the CLI you are running inside** (Codex has its own `/review`;
+Command Code would be reviewing itself); if the user names it, say so and ask
+which peer to use. Otherwise choose once per request — every resume and every
+call in a with-peer task keeps the choice:
+
+- **Named:** use it. If it fails, report that — never quietly switch.
+- **Not named:** inside Codex use Command Code; inside Command Code use Codex;
+  anywhere else use Codex, and if that run exits `3` with `could not find
+  'codex'`, run Command Code once instead. Any other failure follows § Exit
+  Codes.
+- Before running Command Code the user did not name, say that its read-only
+  mode is a prompt request, not a sandbox. When relaying, say which peer ran
+  and why.
+
+If the only peer CLI installed is the host itself, there is no peer: say so
+and name the other supported CLI.
+
+Read the provider's reference before its first run.
 
 ## Modes
 
@@ -176,13 +189,14 @@ The exit code is the verdict on *the run*, never on the code.
 |------|---------|------------|
 | `0` | A result was produced | Read the result file and relay it. A `warning:` still qualifies it. |
 | `2` | (review) Nothing in scope | Say the scope was empty — **not** a clean review. |
-| `3` | Bad arguments or an unusable environment | Report the stderr reason; fix the arguments or environment — never rerun unchanged. If the CLI cannot be found, relay the `hint:` lines and stop. Do not substitute a host-written answer. |
+| `3` | Bad arguments or an unusable environment | Report the stderr reason; fix the arguments or environment — never rerun unchanged. If the CLI cannot be found, relay the `hint:` lines and stop, unless § Providers allows the other peer. Do not substitute a host-written answer. |
 | `4` | No usable result | The CLI failed or the session did not resume. Report the `error:` and `hint:` lines; `provider-exit:` is the CLI's own code (provider reference). |
 | `5` | Timed out | Report it with the log tail. |
 | `129`/`130`/`143` | The wrapper was signalled | Report it; do not rerun unless the user asks. |
 
 - On a review or consult, rerun at most once, only for a transient cause
-  (network, capacity, timeout, or a session that did not resume). When
+  (network, capacity, timeout, a session that did not resume, or a first
+  model rejection — see the hint). When
   rerunning:
   - after exit `5`, append `-- "Continue; check the current state first."`
     to the `resume:` line if one is usable — a retry, so no extra

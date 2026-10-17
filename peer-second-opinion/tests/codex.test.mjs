@@ -542,7 +542,7 @@ test('a rejected pinned default gets a model-unavailable hint, no fallback', () 
     FAKE_STDERR_TEXT: "ERROR: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
   })
   assert.equal(result.status, 4, result.stderr)
-  assert.match(result.stderr, /model 'gpt-6\.1-sol' is unavailable to this codex login/)
+  assert.match(result.stderr, /rejected the selected model 'gpt-6\.1-sol' on this run.*rerun once unchanged/)
   assert.match(result.stderr, /pinned default in providers\/codex\.mjs/)
   assert.equal(result.argv.filter((line) => line.startsWith('exec')).length, 1,
     'exactly one codex invocation — no automatic fallback')
@@ -554,7 +554,7 @@ test('a rejected --model override points at the flag, not the pinned default', (
     FAKE_STDERR_TEXT: 'The model `gpt-old` does not exist or you do not have access to it.',
   })
   assert.equal(result.status, 4, result.stderr)
-  assert.match(result.stderr, /model 'gpt-old' is unavailable/)
+  assert.match(result.stderr, /rejected the selected model 'gpt-old'/)
   assert.match(result.stderr, /rerun with a supported --model M --effort L pair/)
   assert.ok(!/pinned default/.test(result.stderr), 'must not blame the default for a flag override')
 })
@@ -565,7 +565,7 @@ test('an unrelated codex failure gets no model-unavailable hint', () => {
     FAKE_STDERR_TEXT: 'HTTP 400: malformed request body for model gpt-6.1-sol',
   })
   assert.equal(result.status, 4, result.stderr)
-  assert.ok(!/unavailable to this codex login/.test(result.stderr),
+  assert.ok(!/rejected the selected model/.test(result.stderr),
     'a failure without a denial phrase must not be diagnosed as a model problem')
 })
 

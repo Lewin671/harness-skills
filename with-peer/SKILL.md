@@ -1,8 +1,8 @@
 ---
 name: with-peer
 description: >-
-  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`,
-  the default) or Command Code (`cmd`). Complete a code-changing task with the
+  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`)
+  or Command Code (`cmd`); either one is enough. Complete a code-changing task with the
   peer as advisor and reviewer: the host writes all the code, the peer gives a
   blind design opinion first and then reviews the whole change, and every
   disagreement is settled by evidence rather than by vote. Trigger only when
@@ -19,7 +19,8 @@ Complete one task through two checkpoints: an independent design
 opinion, then an independent review of the whole task change. The host
 writes all code; the peer only advises and reviews.
 
-Default peer: Codex, or Command Code when running inside Codex.
+Peer choice follows peer-second-opinion § Providers. An attempt that only
+found the CLI missing (exit `3`) consumes no budget.
 
 Invocation authorizes the bounded peer calls below, implementation,
 in-scope fixes and verification — no extra approval is needed for
@@ -30,7 +31,7 @@ the user sets.
 Read [peer-second-opinion](../peer-second-opinion/SKILL.md), the
 provider's reference and the relevant mode reference before composing
 commands. Use its commands, output rules and § Exit Codes; where with-peer
-says otherwise (peer choice, follow-ups, fixes, reruns), with-peer wins.
+says otherwise (follow-ups, fixes, reruns), with-peer wins.
 
 **Independent prompts.** Both checkpoints start with a fresh, unseeded
 call whose prompt holds only the user's requirements and decisions,
@@ -183,7 +184,7 @@ peer checkpoint with the host's own answer.
 | Case | Handling |
 |---|---|
 | Review exit `2` | Empty scope, not a pass: fix the scope within budget or report the checkpoint incomplete. |
-| Failed (exit `4`/`5`), unparseable or turn-capped | Rerun once unless the cause is permanent (auth, credits, rejected model); if it fails again, the checkpoint is incomplete — for the design checkpoint, do not implement. Rerunning the first blind consult uses no budget and stays **independent**. |
+| Failed (exit `4`/`5`), unparseable or turn-capped | Rerun once unless the cause is permanent (auth, credits, a model rejected twice); if it fails again, the checkpoint is incomplete — for the design checkpoint, do not implement. Rerunning the first blind consult uses no budget and stays **independent**. |
 | No reviewable repository change | Cannot pass the code checkpoint; say so. |
 
 ## Final report and boundaries
