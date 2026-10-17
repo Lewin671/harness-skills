@@ -99,8 +99,10 @@ After the peer answers:
 3. Flag splits between the two models explicitly rather than averaging them
    away; a genuine split is the most useful thing this skill produces.
 4. Label an answer **independent** only when its prompt held no host-derived
-   analysis. Once the host's position has entered the session — or a fresh
-   session that restates it — every answer is **deliberation**.
+   analysis and, for a review, the reviewing model did not write the change
+   (a fresh session with the authoring model is **self-review**). Once the
+   host's position has entered the session — or a fresh session that
+   restates it — every answer is **deliberation**.
 5. Then stop. Continue the session only if the user asked for a discussion or
    approves one. Applying fixes is the user's call; the host applies them,
    never the peer.

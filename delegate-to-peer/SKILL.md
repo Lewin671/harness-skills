@@ -59,7 +59,9 @@ TASK is one argument; put it after `--`. The default timeout is 7200 s.
    file named by the last `result:` line; `workdir:` says where the work
    happened.
 4. **Check.** For code, read the diff against that starting point (or the
-   worktree's base) and run the relevant tests or checks yourself. For
+   worktree's base) and run the relevant tests or checks yourself. A
+   review by the model that wrote the change is self-review, even in a
+   fresh session; it does not replace these checks. For
    research, investigation or measurements, verify the claims that carry
    the conclusion. A report that it ran something is not
    proof: the `log:` file holds what each command actually returned. Relay
