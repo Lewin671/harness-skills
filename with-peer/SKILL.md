@@ -1,8 +1,8 @@
 ---
 name: with-peer
 description: >-
-  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`)
-  or Command Code (`cmd`); either one is enough. Complete a code-changing task with the
+  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`),
+  Command Code (`cmd`) or DeepSeek Harness (`dsh`); either one is enough. Complete a code-changing task with the
   peer as advisor and reviewer: the host writes all the code, the peer gives a
   blind design opinion first and then reviews the whole change, and every
   disagreement is settled by evidence rather than by vote. Trigger only when

@@ -8,7 +8,8 @@ import { rmSync, writeFileSync } from 'node:fs'
 import { die, EXIT, flat, interruptibleWait, runProcess, tailLog, UUID } from './core.mjs'
 
 // ctx: { provider, env, mode, policy, artifacts, build, onTimeout, retryDelays }
-//   build(sessionId, continuing) -> { args, prompt, via: 'argv' | 'stdin' }
+//   build(sessionId, continuing) -> { args, prompt, via: 'argv' | 'stdin', env? }
+//     env: extra variables for this CLI process only (e.g. a sandbox mode).
 //     sessionId: the session to resume ('' for a fresh run); continuing: the
 //     run is a recovery after a transient failure and should send 'Continue'.
 //   onTimeout(state): called before the timeout exit with the decoder state
@@ -55,7 +56,8 @@ export async function runAgent(ctx) {
     const decoder = provider.decoder({ mode, policy, artifacts, env })
     let proc
     try {
-      proc = await runProcess(env, {
+      const procEnv = invocation.env ? { ...env, baseEnv: { ...env.baseEnv, ...invocation.env } } : env
+      proc = await runProcess(procEnv, {
         args,
         stdin: viaArgv ? null : prompt,
         timeoutSeconds: remaining / 1000,

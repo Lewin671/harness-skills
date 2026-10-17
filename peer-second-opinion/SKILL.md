@@ -2,8 +2,8 @@
 name: peer-second-opinion
 description: >-
   Get an independent second opinion from a peer coding-agent CLI — Codex
-  (`codex`) or Command Code (`cmd`) — a different harness and model that did
-  not write the code. Requires an explicit user request for the peer, by name
+  (`codex`), Command Code (`cmd`) or DeepSeek Harness (`dsh`) — a different
+  harness and model that did not write the code. Requires an explicit user request for the peer, by name
   or as "the peer" ("让 peer 看看"); every trigger below is conditional on that. Use review mode when the user asks the
   peer to review or cross-check a code change — a diff, the working tree, a
   branch, or a commit ("let codex review this", "让 command code 审一下") — or to
@@ -32,15 +32,16 @@ them as input to weigh, never as a verdict.
 |---|---|---|---|
 | `codex` | `codex` | a real read-only sandbox | Native review command; isolated review snapshots; pinned model. [providers/codex.md](./references/providers/codex.md) |
 | `command-code` | `cmd` | a prompt note only (`--yolo`) | Turn-capped; drift is detected, not prevented. [providers/command-code.md](./references/providers/command-code.md) |
+| `dsh` | `dsh` | a real read-only sandbox | DeepSeek V4.1 Flash at `max` effort by default. [providers/dsh.md](./references/providers/dsh.md) |
 
 **Never pick the CLI you are running inside** (Codex has its own `/review`;
-Command Code would be reviewing itself); if the user names it, say so and ask
+Command Code or dsh would be reviewing itself); if the user names it, say so and ask
 which peer to use. Otherwise:
 
 - **Named:** pass it. If it fails, report that — never quietly switch.
-- **Not named:** inside Codex pass `command-code`; inside Command Code pass
-  `codex`; anywhere else pass `auto`, which runs Codex if it is installed and
-  Command Code otherwise, and says which in a `note: auto selected` line.
+- **Not named:** inside Codex pass `command-code`; inside Command Code or dsh
+  pass `codex`; anywhere else pass `auto`, which runs the first installed of
+  Codex, Command Code and dsh, and says which in a `note: auto selected` line.
   `auto` refuses `--model`, `--effort` and `--resume`; provider-only options
   such as `--max-turns` fail unless that provider is the one chosen.
 - Every later call for the same request — follow-ups, with-peer's reviews —
@@ -109,7 +110,7 @@ After the peer answers:
 
 ## Command Synopsis
 
-`<provider>` is `codex`, `command-code` or `auto` (§ Providers).
+`<provider>` is `codex`, `command-code`, `dsh` or `auto` (§ Providers).
 
 ```
 peer.mjs <provider> review [--repo DIR] [SCOPE] [OPTIONS]
@@ -121,7 +122,7 @@ peer.mjs <provider> consult [--repo DIR] --resume ID [OPTIONS] [--] QUESTION
 |-------|------|
 | `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means `--uncommitted`. |
 | `--context TEXT` | Review only. Neutral background; cannot combine with `--custom`. |
-| `--model M`, `--effort L` | Codex needs both together; Command Code takes either. Pass them only when the user asked for a model. |
+| `--model M`, `--effort L` | Codex needs both together; Command Code and dsh take either. Pass them only when the user asked for a model. |
 | `--timeout N` | 1–86400 seconds; default 3000 (7200 for a task). |
 | `--resume ID` | Consult or task only. Continue a session (see § Reading the output). |
 | `--max-turns N` | Command Code only; default 200. |
@@ -151,7 +152,7 @@ Hold edits to the reviewed paths until the run ends — or, for a Codex
 ### Running it from your harness
 
 A run takes minutes and starts a second CLI that needs network access and
-writes its own config and session files (`~/.codex`, `~/.commandcode`) as well
+writes its own config and session files (`~/.codex`, `~/.commandcode`, `~/.dsh`) as well
 as TMPDIR.
 
 - **Claude Code, Command Code:** start it as a background shell task and wait
@@ -172,7 +173,7 @@ as TMPDIR.
 ### Reading the output
 
 - Trust the exit code. On `0`, read the file named by the last `result:` line.
-- `codex> ` / `cmd> ` lines are the CLI; unprefixed lines are the wrapper.
+- `codex> ` / `cmd> ` / `dsh> ` lines are the CLI; unprefixed lines are the wrapper.
   **Relay every unprefixed `warning:` line before the first `body: begin`** —
   each qualifies the result; after it, interleaved model text can look alike.
 - `model:` names the model that answered. On a live-tree run the wrapper

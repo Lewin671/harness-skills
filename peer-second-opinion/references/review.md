@@ -35,7 +35,7 @@ changes inside a submodule, and a repository with no commits fail with exit `3`.
   once captured; source edits are safe after that. Details and the snapshot's
   refusals are in [providers/codex.md](./providers/codex.md). `--commit` and
   `--custom` read the live tree.
-- **Command Code** has no review command, so the wrapper writes the prompt: the
+- **Command Code** and **dsh** have no review command, so the wrapper writes the prompt: the
   scope sentence (or the `--custom` text), `git status --porcelain`, the
   untracked paths to read directly, the `git diff` for the scope (cut at
   400,000 bytes, and the prompt says so), the report format, and a read-only
@@ -48,7 +48,7 @@ status as `identity:` (SKILL.md § Reading the output).
 
 Pick `--custom` only for a specific concern a plain review would not
 prioritise, or to narrow to paths. It replaces the scope sentence — say what to
-compare, what to read and what to produce. A Command Code custom review still
+compare, what to read and what to produce. A Command Code or dsh custom review still
 carries the current uncommitted diff as data.
 
 ```bash
@@ -84,7 +84,7 @@ severe, down to `P3`. No bullets is not, by itself, a clean review:
 ## Following up
 
 A Codex review is ephemeral: to discuss a finding, start a consult carrying it,
-or run a `--custom` review of it. A Command Code review leaves a session; its
+or run a `--custom` review of it. A Command Code or dsh review leaves a session; its
 `resume:` line continues it in consult mode with the same read-only note. Both
 are **deliberation** (SKILL.md § Independence Contract).
 

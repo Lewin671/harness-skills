@@ -18,7 +18,7 @@ Short material from the conversation goes in the question itself; for anything
 longer than a screenful, write a file **outside** the repository (under TMPDIR)
 and give its absolute path — a helper file inside the repo dirties later
 reviews. The question is one argument; put it after `--` so a leading dash is
-not parsed as an option. Command Code gets a fixed read-only note appended to
+not parsed as an option. Command Code and dsh get a fixed read-only note appended to
 the prompt; do not add one yourself.
 
 Keep the first question blind — the Independence Contract says what may go in.

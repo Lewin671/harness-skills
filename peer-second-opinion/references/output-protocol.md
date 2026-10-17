@@ -7,8 +7,8 @@ output is enough for most runs.
 
 ## Streams and prefixes
 
-Progress streams to stderr: lines prefixed `codex> ` or `cmd> ` come from the
-CLI; unprefixed lines are the wrapper. Command Code's raw NDJSON frames are not
+Progress streams to stderr: lines prefixed `codex> `, `cmd> ` or `dsh> ` come from the
+CLI; unprefixed lines are the wrapper. Command Code's and dsh's raw NDJSON frames are not
 echoed — only one `tool: <name> <command or path>` summary per tool call — but
 every frame is in the file named by `log:`. A failed run prints the log's last
 lines, cut to a bounded width. The result body arrives on stdout and in the
@@ -50,7 +50,7 @@ wrapper's lines:
 ## Session and resume lines
 
 `session:`/`resume:` print on every successful run of a mode that leaves a
-session — a Codex consult or task, every Command Code run — as real values or as
+session — a Codex consult or task, every Command Code or dsh run — as real values or as
 sentinels, so a model-written line cannot pose as them. A timeout (exit `5`)
 prints them too, because a killed session can still be resumed. Any other failed
 run prints neither.

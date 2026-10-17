@@ -4,5 +4,6 @@
 
 import codex from './codex.mjs'
 import commandCode from './command-code.mjs'
+import dsh from './dsh.mjs'
 
-export const PROVIDERS = new Map([codex, commandCode].map((provider) => [provider.id, provider]))
+export const PROVIDERS = new Map([codex, commandCode, dsh].map((provider) => [provider.id, provider]))

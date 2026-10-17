@@ -4,24 +4,12 @@
 // diff; runs are turn-capped; tasks can run in a worktree the CLI creates.
 
 import { die, EXIT, flat, parseWhole } from '../lib/core.mjs'
-import { contextFence } from '../lib/scope.mjs'
+import { reviewPrompt } from '../lib/review-prompt.mjs'
 
 // Twice the CLI's own default of 100 (cmd 1.82.3), which a real delegated
 // task hit mid-work on 2026-10-15; always passed, so a CLI default change
 // cannot move it.
 const DEFAULT_MAX_TURNS = 200
-
-// The report shape the wrapper asks for, and the only thing that makes a
-// headless answer parseable: Command Code has no `review` subcommand with a
-// built-in prompt, so this contract IS the review prompt.
-const REPORT_CONTRACT = `Report your findings as Markdown, in exactly this shape:
-
-<one paragraph: the overall verdict>
-
-- [P1] <title> — <path>:<line-range>
-  <body>
-
-One bullet per finding, priority ordered: [P0] most severe, then [P1], [P2], [P3]. Anchor each finding to a path and a line range. If there is nothing to report, say so explicitly in the verdict and return no bullets — never invent a finding to fill the list.`
 
 // Review and consult run with shell access (--yolo) so the model can
 // investigate, which leaves this note as the only thing asking it not to
@@ -30,33 +18,6 @@ One bullet per finding, priority ordered: [P0] most severe, then [P1], [P2], [P3
 function readOnlyNote(scratch) {
   return `---
 This is a read-only second opinion, run headlessly. You may run commands to investigate — tests, git log/show/diff, small reproduction scripts — but write scratch files only under ${scratch}. Do not modify files in the repository, do not change git state (no commit, checkout, reset, stash or push), do not install anything, and do not offer to make changes.`
-}
-
-function scopeSentence(scope) {
-  if (scope.scopeFlag === '--uncommitted') {
-    return 'Review the uncommitted changes in this repository: staged, unstaged, and untracked files. The authoritative diff for this review is included below, together with the `git status --porcelain` output captured when the review started.'
-  }
-  if (scope.scopeFlag === '--base') {
-    return `Review the changes on the current branch against base ${scope.scopeValue}: the diff from merge base ${scope.resolvedBase} to the working tree. Do not review anything already contained in ${scope.scopeValue}.`
-  }
-  return `Review only the changes introduced by commit ${scope.resolvedCommit} (given as ${scope.scopeValue}). Do not review unrelated code.`
-}
-
-// Every review prompt carries the same mechanical facts — status, untracked
-// list, authoritative diff — whichever scope named them.
-function reviewPrompt(review, scope, scratch) {
-  const parts = [review.scopeFlag === '--custom' ? review.scopeValue : scopeSentence(scope)]
-  if (scope.status) {
-    parts.push(`Working tree when the review started (\`git status --porcelain\`):\n\n\`\`\`\n${scope.status}\n\`\`\``)
-  }
-  if (scope.untracked.length) {
-    parts.push(`Untracked files — read them directly, their contents are not in the diff:\n\n\`\`\`\n${scope.untracked.join('\n')}\n\`\`\``)
-  }
-  if (scope.diff) parts.push(`Authoritative diff for this review (\`git diff\`):\n\n\`\`\`diff\n${scope.diff}\n\`\`\``)
-  if (scope.diffTruncated) parts.push('The diff above was truncated. Read the affected files directly to review the parts the diff does not show.')
-  if (review.context) parts.push(contextFence(review.context))
-  parts.push(REPORT_CONTRACT, readOnlyNote(scratch))
-  return `${parts.join('\n\n')}\n`
 }
 
 // One line per tool call — what the model actually ran or read — is all of
@@ -141,7 +102,7 @@ export default {
     // user's config, so it is passed only when a caller asked for one.
     if (policy.effort) args.push('--effort', policy.effort)
     let prompt = text
-    if (mode === 'review') prompt = reviewPrompt(review, scope, artifacts.scratch)
+    if (mode === 'review') prompt = reviewPrompt(review, scope, readOnlyNote(artifacts.scratch))
     else if (mode === 'consult') prompt = `${text}\n\n${readOnlyNote(artifacts.scratch)}\n`
     // The prompt travels on stdin: a scope diff can run to megabytes, past
     // the OS limit for one argv element. `-p` with no query reads stdin.
