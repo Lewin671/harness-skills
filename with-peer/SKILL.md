@@ -19,8 +19,7 @@ Complete one task through two checkpoints: an independent design
 opinion, then an independent review of the whole task change. The host
 writes all code; the peer only advises and reviews.
 
-Peer choice follows peer-second-opinion § Providers. An attempt that only
-found the CLI missing (exit `3`) consumes no budget.
+Peer choice follows peer-second-opinion § Providers.
 
 Invocation authorizes the bounded peer calls below, implementation,
 in-scope fixes and verification — no extra approval is needed for

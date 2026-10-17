@@ -35,17 +35,19 @@ them as input to weigh, never as a verdict.
 
 **Never pick the CLI you are running inside** (Codex has its own `/review`;
 Command Code would be reviewing itself); if the user names it, say so and ask
-which peer to use. Otherwise choose once per request — every resume and every
-call in a with-peer task keeps the choice:
+which peer to use. Otherwise:
 
-- **Named:** use it. If it fails, report that — never quietly switch.
-- **Not named:** inside Codex use Command Code; inside Command Code use Codex;
-  anywhere else use Codex, and if that run exits `3` with `could not find
-  'codex'`, run Command Code once instead. Any other failure follows § Exit
-  Codes.
-- Before running Command Code the user did not name, say that its read-only
-  mode is a prompt request, not a sandbox. When relaying, say which peer ran
-  and why.
+- **Named:** pass it. If it fails, report that — never quietly switch.
+- **Not named:** inside Codex pass `command-code`; inside Command Code pass
+  `codex`; anywhere else pass `auto`, which runs Codex if it is installed and
+  Command Code otherwise, and says which in a `note: auto selected` line.
+  `auto` refuses `--model`, `--effort` and `--resume`; provider-only options
+  such as `--max-turns` fail unless that provider is the one chosen.
+- Every later call for the same request — follow-ups, with-peer's reviews —
+  uses the provider that actually ran.
+- When relaying, say which peer ran and why; for a Command Code run the user
+  did not name, add that its read-only mode is a prompt request, not a
+  sandbox.
 
 If the only peer CLI installed is the host itself, there is no peer: say so
 and name the other supported CLI.
@@ -104,6 +106,8 @@ After the peer answers:
    never the peer.
 
 ## Command Synopsis
+
+`<provider>` is `codex`, `command-code` or `auto` (§ Providers).
 
 ```
 peer.mjs <provider> review [--repo DIR] [SCOPE] [OPTIONS]
@@ -189,7 +193,7 @@ The exit code is the verdict on *the run*, never on the code.
 |------|---------|------------|
 | `0` | A result was produced | Read the result file and relay it. A `warning:` still qualifies it. |
 | `2` | (review) Nothing in scope | Say the scope was empty — **not** a clean review. |
-| `3` | Bad arguments or an unusable environment | Report the stderr reason; fix the arguments or environment — never rerun unchanged. If the CLI cannot be found, relay the `hint:` lines and stop, unless § Providers allows the other peer. Do not substitute a host-written answer. |
+| `3` | Bad arguments or an unusable environment | Report the stderr reason; fix the arguments or environment — never rerun unchanged. If the CLI cannot be found, relay the `hint:` lines and stop. Do not substitute a host-written answer. |
 | `4` | No usable result | The CLI failed or the session did not resume. Report the `error:` and `hint:` lines; `provider-exit:` is the CLI's own code (provider reference). |
 | `5` | Timed out | Report it with the log tail. |
 | `129`/`130`/`143` | The wrapper was signalled | Report it; do not rerun unless the user asks. |

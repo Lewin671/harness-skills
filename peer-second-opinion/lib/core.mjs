@@ -171,6 +171,18 @@ function isExecutableFile(path) {
   }
 }
 
+function findOnPath(path, name) {
+  return String(path || '').split(delimiter)
+    .filter((dir) => dir && isAbsolute(dir))
+    .map((dir) => join(dir, name)).find(isExecutableFile) || null
+}
+
+// Whether resolveBin would find a binary to try: its variable is set (resolveBin
+// still validates it) or it is on an absolute PATH entry. Used by `auto`.
+export function binaryAvailable(binary) {
+  return Boolean(process.env[binary.envVar]) || Boolean(findOnPath(process.env.PATH, binary.name))
+}
+
 function resolveBin(env, binary) {
   const raw = process.env[binary.envVar]
   const hint = `hint: use the output of \`command -v ${binary.name}\` from an interactive shell.`
@@ -185,7 +197,7 @@ function resolveBin(env, binary) {
   } else {
     // spawn() would search the same absolute-only PATH, but resolving here
     // lets the `note:` line name the binary before anything runs.
-    env.bin = env.baseEnv.PATH.split(delimiter).map((dir) => join(dir, binary.name)).find(isExecutableFile) || null
+    env.bin = findOnPath(env.baseEnv.PATH, binary.name)
     if (!env.bin) {
       die(EXIT.usage,
         `error: could not find '${binary.name}' on an absolute PATH entry.`,

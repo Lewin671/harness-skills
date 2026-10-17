@@ -10,6 +10,7 @@ import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import {
+  binaryAvailable,
   createArtifacts,
   createEnvironment,
   die,
@@ -33,6 +34,7 @@ const DEFAULT_TIMEOUT = { review: 3000, consult: 3000, task: 7200 }
 const TOP_USAGE = `Usage: peer.mjs <provider> <review|consult|task> [ARGS]
 
 Providers: ${[...PROVIDERS.values()].map((p) => `${p.id} (runs ${p.binary.name})`).join(', ')}
+           auto (the first of these whose CLI is installed, in this order)
 
   review   a prioritised defect list over a code change (read-only)
   consult  one free-form question, answered with the repo as context (read-only)
@@ -75,6 +77,21 @@ Options:
 ${options}`
 }
 
+// `auto` serves a user who has only one of the CLIs: it picks the first
+// registered provider whose binary can be found. Which CLI is the host is
+// the caller's to know — an inherited environment cannot tell.
+function autoProvider() {
+  const all = [...PROVIDERS.values()]
+  const provider = all.find((candidate) => binaryAvailable(candidate.binary))
+  if (!provider) {
+    die(EXIT.usage,
+      `error: auto found no peer CLI: none of ${all.map((p) => `'${p.binary.name}'`).join(', ')} is on an absolute PATH entry or named by ${all.map((p) => p.binary.envVar).join(' / ')}.`,
+      'hint: install one and authenticate it; if it works in your terminal, it may be a shell function or alias, which non-interactive shells do not load — export its *_BIN variable instead.')
+  }
+  const skipped = all.slice(0, all.indexOf(provider)).map((p) => `'${p.binary.name}'`)
+  return { provider, note: `note: auto selected ${provider.id}${skipped.length ? ` (${skipped.join(', ')} not found)` : ''}\n` }
+}
+
 function parse(argv) {
   const [providerId, mode, ...args] = argv
   if (!providerId || providerId === '-h' || providerId === '--help') {
@@ -82,8 +99,8 @@ function parse(argv) {
     if (!providerId) die(EXIT.usage)
     die(EXIT.ok)
   }
-  const provider = PROVIDERS.get(providerId)
-  if (!provider) die(EXIT.usage, `error: unknown provider: ${flat(providerId)}`, ...TOP_USAGE.split('\n'))
+  const auto = providerId === 'auto'
+  if (!auto && !PROVIDERS.has(providerId)) die(EXIT.usage, `error: unknown provider: ${flat(providerId)}`, ...TOP_USAGE.split('\n'))
   if (mode === '-h' || mode === '--help') {
     process.stderr.write(`${TOP_USAGE}\n`)
     die(EXIT.ok)
@@ -91,6 +108,7 @@ function parse(argv) {
   if (!MODES.includes(mode)) {
     die(EXIT.usage, mode ? `error: unknown mode: ${flat(mode)}` : 'error: a mode is required', ...TOP_USAGE.split('\n'))
   }
+  const { provider, note } = auto ? autoProvider() : { provider: PROVIDERS.get(providerId), note: '' }
 
   const usage = modeUsage(provider, mode)
   const fail = (message) => die(EXIT.usage, message, ...usage.split('\n'))
@@ -126,6 +144,9 @@ function parse(argv) {
       review.context = valueOf(i)
       i += 2
       continue
+    }
+    if (auto && ['--resume', '--model', '--effort'].includes(option)) {
+      die(EXIT.usage, `error: auto does not take ${option}: sessions and models belong to one CLI; name the provider (a resume: line already does)`)
     }
     if (mode !== 'review' && option === '--resume') {
       const value = valueOf(i)
@@ -175,6 +196,7 @@ function parse(argv) {
     die(EXIT.usage, 'error: --context cannot be combined with --custom; custom instructions already carry their own context')
   }
   if (mode !== 'review' && !text) fail(`error: a non-empty ${mode === 'task' ? 'TASK' : 'QUESTION'} is required`)
+  process.stderr.write(note)
   provider.configure(policy, mode)
   if (/[\r\n]/.test(policy.model)) die(EXIT.usage, 'error: the model must not contain line breaks')
   // The effort reaches a CLI as a plain token or inside a quoted config
