@@ -86,7 +86,7 @@ function run(args, extra = {}) {
   return result
 }
 
-test('the default is deepseek-flash at max effort, passed as an overlay on the headless profile', () => {
+test('the default is deepseek-flash at high effort, passed as an overlay on the headless profile', () => {
   const result = run(['consult', '--', 'q'])
   assert.equal(result.status, 0, result.stderr)
   const [record] = result.records
@@ -96,7 +96,7 @@ test('the default is deepseek-flash at max effort, passed as an overlay on the h
   assert.match(record.patch, /id: agent-default-model/)
   assert.match(record.patch, /provider: "deepseek-official"/)
   assert.match(record.patch, /model: "deepseek-flash"/)
-  assert.match(record.patch, /reasoningEffort: "max"/)
+  assert.match(record.patch, /reasoningEffort: "high"/)
   assert.match(result.stderr, /^model: deepseek-flash$/m)
 })
 
@@ -104,10 +104,10 @@ test('--model and --effort replace the defaults independently', () => {
   const result = run(['consult', '--model', 'deepseek-v4-pro', '--', 'q'])
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.records[0].patch, /model: "deepseek-v4-pro"/)
-  assert.match(result.records[0].patch, /reasoningEffort: "max"/)
-  const effort = run(['consult', '--effort', 'high', '--', 'q'])
+  assert.match(result.records[0].patch, /reasoningEffort: "high"/)
+  const effort = run(['consult', '--effort', 'max', '--', 'q'])
   assert.match(effort.records[0].patch, /model: "deepseek-flash"/)
-  assert.match(effort.records[0].patch, /reasoningEffort: "high"/)
+  assert.match(effort.records[0].patch, /reasoningEffort: "max"/)
 })
 
 test('review and consult run in the read-only sandbox with the note; a task gets full access', () => {
@@ -137,7 +137,7 @@ test('the session prefix is stripped for the resume line and restored for dsh', 
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stderr, new RegExp(`^session: ${id}$`, 'm'))
   const resume = /^resume: (.*)$/m.exec(result.stderr)[1]
-  assert.ok(resume.includes(` dsh consult --resume ${id} --model deepseek-flash --effort max `), resume)
+  assert.ok(resume.includes(` dsh consult --resume ${id} --model deepseek-flash --effort high `), resume)
 
   const recordFile = join(mkdtempSync(join(root, 'rec-')), 'record.jsonl')
   const follow = sh(`${resume} -- "follow-up"`, { env: env({ FAKE_RECORD: recordFile }) })

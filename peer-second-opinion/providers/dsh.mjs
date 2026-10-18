@@ -13,7 +13,7 @@ import { reviewPrompt } from '../lib/review-prompt.mjs'
 // `deepseek-flash` is DeepSeek-V4.1-Flash on the official API (its /models
 // listing, 2026-10-17); efforts there are low, high and max.
 const DEFAULT_MODEL = 'deepseek-flash'
-const DEFAULT_EFFORT = 'max'
+const DEFAULT_EFFORT = 'high'
 // The route the overlay names. An overlay replaces the whole config entry, so
 // it cannot inherit the profile's own provider and must restate one.
 const ROUTE = 'deepseek-official'

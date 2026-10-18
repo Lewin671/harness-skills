@@ -28,7 +28,7 @@ load into every run.
 
 ## Model
 
-Without flags the run uses `deepseek-flash` at reasoning effort `max`.
+Without flags the run uses `deepseek-flash` at reasoning effort `high`.
 `deepseek-flash` is the official API's alias for the newest DeepSeek V4.1
 Flash snapshot (DeepSeek-V4.1-Flash-1017 since 2026-10-17), so it moves when
 DeepSeek ships a new one. The `model:` line repeats the requested id; dsh's

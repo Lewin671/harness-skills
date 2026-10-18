@@ -32,7 +32,7 @@ them as input to weigh, never as a verdict.
 |---|---|---|---|
 | `codex` | `codex` | a real read-only sandbox | Native review command; isolated review snapshots; pinned model. [providers/codex.md](./references/providers/codex.md) |
 | `command-code` | `cmd` | a prompt note only (`--yolo`) | Turn-capped; drift is detected, not prevented. [providers/command-code.md](./references/providers/command-code.md) |
-| `dsh` | `dsh` | a real read-only sandbox | DeepSeek V4.1 Flash at `max` effort by default. [providers/dsh.md](./references/providers/dsh.md) |
+| `dsh` | `dsh` | a real read-only sandbox | DeepSeek V4.1 Flash at `high` effort by default. [providers/dsh.md](./references/providers/dsh.md) |
 
 **Never pick the CLI you are running inside** (Codex has its own `/review`;
 Command Code or dsh would be reviewing itself); if the user names it, say so and ask
