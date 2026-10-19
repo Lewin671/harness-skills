@@ -57,6 +57,6 @@ There is no standalone `write` or `update` command. `create overwrite` is the co
 
 ## Working style
 
-- Use the CLI for Obsidian-aware operations before falling back to direct file edits.
+- Use the CLI for Obsidian-aware operations before falling back to direct file edits. An app that is not running is not a reason to fall back: launch it (see `references/setup-and-discovery.md`).
 - Keep commands explicit and composable so the user can rerun them outside the agent if needed.
 - For volatile command areas such as developer commands, plugin management, or newer workspace/base features, re-check `obsidian help` immediately before use.

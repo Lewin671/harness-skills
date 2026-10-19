@@ -21,6 +21,12 @@ host stays the lead: it writes the brief, checks the result, sends feedback and
 reports to the user. Nothing the peer reports counts as done until the host has
 checked it.
 
+**A peer reviewing its own task is self-review.** If the model that did the
+work also reviews it — in the same session or a fresh one — call that
+**self-review** to the user, never "independent review", and report it apart
+from the host's own checks. An independent review needs a different model
+(peer-second-opinion § Independence Contract).
+
 The command is the `task` mode of
 [peer-second-opinion](../peer-second-opinion/SKILL.md)'s `peer.mjs`. Read its
 § Providers (which peer to use when the user names none), § Usage, § Running it from your harness, § Exit Codes and the provider's
@@ -51,17 +57,17 @@ TASK is one argument; put it after `--`. The default timeout is 7200 s.
    `--repo`, or, with Command Code, pass `--worktree` and let the CLI create it.
    Without a worktree, note `HEAD` and `git status` first. Follow the user's
    preference when they state one.
-3. **Run** it as peer-second-opinion § Running it from your harness
-   describes — in the background where the host has background tasks,
-   otherwise in the foreground until it exits, outside any host sandbox. For
+3. **Run** it exactly as peer-second-opinion § Running it from your harness
+   describes — `peer.mjs` itself as the host's background task (never
+   `nohup`/`&`, never a polling loop), otherwise in the foreground until it
+   exits, outside any host sandbox. For
    a task likely to need more than two hours (or, with Command Code, 200
    turns), raise `--timeout` or `--max-turns` up front. On exit `0`, read the
    file named by the last `result:` line; `workdir:` says where the work
    happened.
 4. **Check.** For code, read the diff against that starting point (or the
-   worktree's base) and run the relevant tests or checks yourself. A
-   review by the model that wrote the change is self-review, even in a
-   fresh session; it does not replace these checks. For
+   worktree's base) and run the relevant tests or checks yourself; a
+   self-review does not replace them. For
    research, investigation or measurements, verify the claims that carry
    the conclusion. A report that it ran something is not
    proof: the `log:` file holds what each command actually returned. Relay
@@ -82,10 +88,13 @@ TASK is one argument; put it after `--`. The default timeout is 7200 s.
      done, where it failed and what to check. If the `unavailable` line
      says to resume from inside a worktree, do that instead (see
      [command-code.md § Worktree tasks](../peer-second-opinion/references/providers/command-code.md#worktree-tasks)).
+   - **Not transient** (an exit `4` hint says so — usage limit, content
+     refusal): do not resume or rerun; report it to the user.
    - **Stop** when the check still fails after three follow-up runs
      (feedback, resume or restart), and tell the user what is left.
 6. **Report.** Say what was done, where (`workdir`), what you checked and
-   how, and anything still open. If a worktree was used, report its path and
+   how — labelling any review by the authoring model **self-review** — and
+   anything still open. If a worktree was used, report its path and
    branch, and leave merging and removing it to the user unless they asked.
 
 The host may fix small things itself rather than round-tripping through

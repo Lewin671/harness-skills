@@ -611,8 +611,10 @@ test('a timed-out task still prints its session and a working resume line', () =
   const resume = result.stderr.split('\n').filter((line) => line.startsWith('resume: ')).at(-1)
   assert.match(resume, / task --resume aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --model fake\/model-1 --timeout 1 --repo /)
   assert.match(result.stderr, /^hint: the session survives the timeout/m)
-  // The resume marker is the last thing printed, after the log tail.
-  assert.ok(result.stderr.trimEnd().split('\n').at(-1).startsWith('hint: '), result.stderr)
+  // The resume marker follows the log tail; only the exit status comes after.
+  const lines = result.stderr.trimEnd().split('\n')
+  assert.ok(lines.at(-2).startsWith('hint: '), result.stderr)
+  assert.equal(lines.at(-1), 'exit-status: 5', result.stderr)
 })
 
 test('a timed-out review resumes as a consult', () => {

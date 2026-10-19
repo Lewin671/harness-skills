@@ -26,7 +26,8 @@ According to the official docs, Obsidian CLI is part of the desktop installer an
 
 Operational implications:
 
-- The Obsidian app must already be running; the CLI does not launch it. Otherwise it reports that it is unable to find Obsidian.
+- The Obsidian app must be running; the CLI does not launch it and otherwise reports that it is unable to find Obsidian. Launch it yourself (macOS: `open -g -a Obsidian`, which keeps it in the background), then retry a cheap read such as `obsidian vault` every few seconds for up to about a minute before rerunning the original command; if it never answers, tell the user. An app that is not running or not answering is never a reason to edit vault files directly.
+- Right after a cold start, `search` and other index-backed commands can hang for minutes. Time-limit CLI calls, e.g. `timeout 60 obsidian search query=...` (on macOS `timeout` comes from Homebrew coreutils). If a timed-out command was a write, read the note back before retrying it.
 - The app also needs an open window for the target vault. When none is open and no vault is resolved from the working directory or `vault=`, every command — even `help` and `version` — prints `Vault not found.` Pass `vault=<name>` (which opens that vault's window) or open the vault in the app. The first command sent to a freshly opened window can fail once with `Command "..." not found.`; retry it.
 - If the command is not found after registration, the shell PATH usually needs a refresh or manual fix.
 

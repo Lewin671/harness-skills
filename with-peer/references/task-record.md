@@ -10,7 +10,8 @@ fix.
 - Original requirements, task scope, design decision and unresolved
   objections.
 - Each peer call's provider, mode, scope, model, independence label, result/log
-  paths, code identity (review calls), outcome, and the exact consult `resume:`
+  paths, code identity (review calls), outcome (succeeded, failed or
+  cancelled), and the exact consult `resume:`
   command when available.
 - Stable finding IDs, priority, location, evidence, disposition, fix
   identity and verification status.
@@ -49,8 +50,8 @@ Design: <chosen approach> · Open objections: <none | list>
 Budgets: review <used>/<limit> · design follow-ups <used>/2
 
 ## Calls
-| # | Mode | Scope | Model | Label | Exit | Result | Code identity |
-|---|---|---|---|---|---|---|---|
+| # | Mode | Scope | Model | Label | Exit | Outcome | Result | Code identity |
+|---|---|---|---|---|---|---|---|---|
 
 ## Findings
 | ID | Pri | Location | Disposition + evidence | Fix identity | Verified by |

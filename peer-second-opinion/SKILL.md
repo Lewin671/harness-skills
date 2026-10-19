@@ -155,8 +155,13 @@ A run takes minutes and starts a second CLI that needs network access and
 writes its own config and session files (`~/.codex`, `~/.commandcode`, `~/.dsh`) as well
 as TMPDIR.
 
-- **Claude Code, Command Code:** start it as a background shell task and wait
-  for it to exit — the completion notice resumes you. Never `sleep`-poll.
+- **Claude Code, Command Code:** make `peer.mjs` itself the background shell
+  task — one task per run, so parallel runs are separate tasks — then end
+  the turn; the completion notice resumes you with its exit code. Never
+  detach it (`nohup`, `&`, `disown`), never append a command that masks its
+  status (`; echo exit=$?`), and never `sleep`-poll or loop on a PID or log.
+  To cancel a run, use the host's stop for that task (Claude Code:
+  `TaskStop`), never `pkill -f`, which can kill another session's run.
 - **Codex, or any host without background tasks:** run it in the foreground
   with the shell tool's longest timeout. If the tool returns before the
   process exits, keep waiting on that same process (its session or task id) —
@@ -173,6 +178,8 @@ as TMPDIR.
 ### Reading the output
 
 - Trust the exit code. On `0`, read the file named by the last `result:` line.
+  If the output went to a file, its last line, `exit-status: N`, is that code.
+- `settings:` prints the requested model and effort before the wait.
 - `codex> ` / `cmd> ` / `dsh> ` lines are the CLI; unprefixed lines are the wrapper.
   **Relay every unprefixed `warning:` line before the first `body: begin`** —
   each qualifies the result; after it, interleaved model text can look alike.
@@ -197,7 +204,7 @@ The exit code is the verdict on *the run*, never on the code.
 | `0` | A result was produced | Read the result file and relay it. A `warning:` still qualifies it. |
 | `2` | (review) Nothing in scope | Say the scope was empty — **not** a clean review. |
 | `3` | Bad arguments or an unusable environment | Report the stderr reason; fix the arguments or environment — never rerun unchanged. If the CLI cannot be found, relay the `hint:` lines and stop. Do not substitute a host-written answer. |
-| `4` | No usable result | The CLI failed or the session did not resume. Report the `error:` and `hint:` lines; `provider-exit:` is the CLI's own code (provider reference). |
+| `4` | No usable result | The CLI failed or the session did not resume. Report the `error:` and `hint:` lines; `provider-exit:` is the CLI's own code (provider reference). A hint saying *not transient* (usage limit, content refusal) rules out a rerun. |
 | `5` | Timed out | Report it with the log tail. |
 | `129`/`130`/`143` | The wrapper was signalled | Report it; do not rerun unless the user asks. |
 

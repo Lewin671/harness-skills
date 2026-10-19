@@ -40,6 +40,9 @@ case "$1" in
       echo $! > "$FAKE_CHILD_PID_FILE"
     fi
     echo '{"type":"thread.started","thread_id":"'"\${FAKE_THREAD_ID:-11111111-2222-3333-4444-555555555555}"'"}'
+    if [ -n "$FAKE_EVENT" ]; then
+      echo "$FAKE_EVENT"
+    fi
     if [ -n "$FAKE_SLEEP" ]; then
       sleep "$FAKE_SLEEP"
     fi
@@ -758,6 +761,55 @@ test('a failing codex reports its own exit code as provider-exit', () => {
   const result = run(['review', '--commit', 'HEAD'], { FAKE_EXIT: '7' })
   assert.equal(result.status, 4, result.stderr)
   assert.match(result.stderr, /^provider-exit: 7$/m)
+})
+
+test('a failed codex turn reports the CLI message and a no-rerun hint for a usage limit', () => {
+  const message = "You've hit your usage limit. Try again at Oct 21st, 2026 9:00 AM."
+  const result = run(['review', '--commit', 'HEAD'], {
+    FAKE_EXIT: '1', FAKE_EVENT: JSON.stringify({ type: 'turn.failed', error: { message } }),
+  })
+  assert.equal(result.status, 4, result.stderr)
+  assert.ok(result.stderr.split('\n').includes(`error: ${message}`), result.stderr)
+  assert.match(result.stderr, /^hint: the codex account hit its usage limit; not transient/m)
+  assert.ok(!/^note: .*retry/m.test(result.stderr), 'a usage limit is not retried')
+})
+
+test('a content refusal gets a no-rerun hint; model text alone never triggers it', () => {
+  const message = 'This content was flagged for possible cybersecurity risk.'
+  const flagged = run(['consult', '--', 'question'], {
+    FAKE_EXIT: '1', FAKE_EVENT: JSON.stringify({ type: 'turn.failed', error: { message } }),
+  })
+  assert.equal(flagged.status, 4, flagged.stderr)
+  assert.ok(flagged.stderr.split('\n').includes(`error: ${message}`), flagged.stderr)
+  assert.match(flagged.stderr, /^hint: codex refused the content; not transient/m)
+  const quoted = run(['consult', '--', 'question'], {
+    FAKE_EXIT: '1', FAKE_EVENT: JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: message } }),
+  })
+  assert.equal(quoted.status, 4, quoted.stderr)
+  assert.ok(!/^hint: codex refused/m.test(quoted.stderr), quoted.stderr)
+})
+
+test('a failed turn is no answer even when codex exits zero with partial output', () => {
+  const result = run(['consult', '--', 'question'], {
+    FAKE_EVENT: JSON.stringify({ type: 'turn.failed', error: { message: 'stream disconnected' } }),
+  })
+  assert.equal(result.status, 4, result.stderr)
+  assert.match(result.stderr, /^error: stream disconnected$/m)
+  assert.ok(!/^result: /m.test(result.stderr), result.stderr)
+})
+
+test('the requested settings print before the run and the exit status prints last', () => {
+  const ok = run(['review', '--commit', 'HEAD'])
+  assert.equal(ok.status, 0, ok.stderr)
+  const lines = ok.stderr.trimEnd().split('\n')
+  const settings = lines.indexOf('settings: model gpt-6.1-sol, effort high')
+  assert.ok(settings >= 0 && settings < lines.findIndex((line) => line.startsWith('running: ')), ok.stderr)
+  assert.equal(lines.at(-1), 'exit-status: 0', ok.stderr)
+  const failed = run(['review', '--commit', 'HEAD'], { FAKE_EXIT: '7' })
+  assert.equal(failed.stderr.trimEnd().split('\n').at(-1), 'exit-status: 4', failed.stderr)
+  const usage = run(['review', '--bogus'])
+  assert.equal(usage.status, 3, usage.stderr)
+  assert.equal(usage.stderr.trimEnd().split('\n').at(-1), 'exit-status: 3', usage.stderr)
 })
 
 test('the result body is preceded by body: begin and followed by the trailing markers', () => {

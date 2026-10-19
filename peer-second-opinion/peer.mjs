@@ -6,7 +6,7 @@
 // Providers live in providers/; the process layer in lib/core.mjs; the run
 // loop in lib/run.mjs; scope and identity in lib/scope.mjs.
 
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, writeSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -328,6 +328,12 @@ async function main(argv) {
   if (snapshot) process.stderr.write(`snapshot: ready ${snapshot.fingerprint}\n`)
   if (after) process.stderr.write(`identity: ${after}\n`)
 }
+
+// The wrapper's own exit code as the very last line, on every path that
+// exits normally, so a log read after `> FILE 2>&1` still carries it.
+process.on('exit', (code) => {
+  try { writeSync(2, `exit-status: ${code}\n`) } catch {}
+})
 
 // Anything thrown outside the awaited path (a stream callback, a timer)
 // would otherwise exit 1 with a raw stack trace and leave the detached CLI

@@ -148,6 +148,14 @@ confirm the delta exists and hold edits during the call. Label it
 verification of the affected changes. Investigate new findings under the
 same rules.
 
+Targeted verification must not become a narrowing loop. After two
+consecutive targeted calls on the same fix area, do not answer a new
+finding there with another patch-and-verify by default: disposition it
+first (refuted, Accepted limit, or confirmed), batch any confirmed fixes,
+and verify the batch at its impact scope. Findings that keep escalating
+point to the approach, not to one more patch. Exhausting this loop never
+counts as verification.
+
 ### Completion and budget
 
 Agreement alone is not correctness. The code checkpoint passes only when:
@@ -167,9 +175,10 @@ checkpoint incomplete (unverified fixes are **peer-unverified**) and
 offer more budget, acceptance of the disclosed result, or a revised
 approach; acceptance does not make it verified.
 
-Every review invocation — initial, targeted, rerun, failed, unparseable
-or turn-capped — consumes one of five attempts by default; increment
-before launching. The user may set another positive finite limit; never
+Every review invocation — initial, targeted, rerun, failed, unparseable,
+turn-capped or cancelled — consumes one of five attempts by default;
+settle its scope first, then increment before launching. Cancel only
+through the parent's § Running it from your harness rule. The user may set another positive finite limit; never
 reset it when narrowing scope or recovering. Refuted findings and open
 P2/P3s alone never justify another call. If no code changed since the
 last successful review, make no further call: apply the pass conditions
@@ -183,7 +192,7 @@ peer checkpoint with the host's own answer.
 | Case | Handling |
 |---|---|
 | Review exit `2` | Empty scope, not a pass: fix the scope within budget or report the checkpoint incomplete. |
-| Failed (exit `4`/`5`), unparseable or turn-capped | Rerun once unless the cause is permanent (auth, credits, a model rejected twice); if it fails again, the checkpoint is incomplete — for the design checkpoint, do not implement. Rerunning the first blind consult uses no budget and stays **independent**. |
+| Failed (exit `4`/`5`), unparseable or turn-capped | Rerun once unless the cause is permanent (auth, credits, a usage limit or content refusal — a hint saying *not transient* — or a model rejected twice); if it fails again, the checkpoint is incomplete — for the design checkpoint, do not implement. Rerunning the first blind consult uses no budget and stays **independent**. |
 | No reviewable repository change | Cannot pass the code checkpoint; say so. |
 
 ## Final report and boundaries
@@ -191,7 +200,9 @@ peer checkpoint with the host's own answer.
 Summarize checkpoint outcomes, scope and final code identity (and
 whether its coverage combines an initial review with targeted checks or
 ends in a whole-task review), model and
-independence labels, attempts used, substantive disagreements, and every
+independence labels, attempts used by outcome (for example "5 attempts:
+3 succeeded, 1 failed, 1 cancelled" — never "five review rounds"),
+substantive disagreements, and every
 finding's priority, location and disposition, including open P2/P3s.
 Link the task record and preserved reports. Disclose failed checks,
 unverified fixes and coverage limits explicitly.

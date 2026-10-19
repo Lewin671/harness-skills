@@ -20,6 +20,7 @@ Marker kinds:
 | Marker | Meaning |
 |---|---|
 | `note:` | A fact about the run, e.g. which binary is used, a retry wait. |
+| `settings:` | The requested model and effort (`CLI default` when the CLI picks); `model:` later names what answered. |
 | `running:` | The CLI is being launched (one per attempt). |
 | `snapshot: ready <sha256>` | (Codex review) the isolated snapshot is captured; edits are safe from here. |
 | `identity: <sha256>` | Live-tree run: the scoped paths and git state fingerprinted, printed once before the body and once after it. Not comparable with `snapshot:`. |
@@ -31,6 +32,7 @@ Marker kinds:
 | `session:`, `resume:` | Continuation, or `unavailable — ...` sentinels. |
 | `provider-exit:` | The CLI's own exit code, whenever it was non-zero — on a failure, or beside a usable but partial result. |
 | `error:`, `hint:` | A failed run: the reason and the remedy. |
+| `exit-status: N` | The wrapper's own exit code, always the last line of a run that ended without `SIGKILL`. |
 
 ## Merged streams
 

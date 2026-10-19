@@ -69,7 +69,7 @@ obsidian help <command>
 
 If a command fails, check in this order:
 
-1. Is the CLI installed and on PATH, and is the app running with the vault open? `Vault not found.` on every command means no vault window is open — see `setup-and-discovery.md`.
+1. Is the CLI installed and on PATH, and is the app running with the vault open? `Vault not found.` on every command means no vault window is open; `unable to find Obsidian` means the app is not running — launch it as `setup-and-discovery.md` describes rather than falling back to raw file edits.
 
 ```bash
 obsidian version

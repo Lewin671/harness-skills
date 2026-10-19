@@ -12,6 +12,11 @@ const EFFORT_ENV = 'PEER_CODEX_EFFORT'
 
 const CAPACITY_ERROR = /Selected model is at capacity\. Please try a different model\./i
 
+// Failures no rerun fixes soon; matched on the CLI's error events and stderr,
+// never on model text.
+const USAGE_LIMIT = /hit your usage limit/i
+const CONTENT_FLAG = /flagged for possible/i
+
 // A retired or entitlement-blocked model fails with a message naming the
 // model plus a denial phrase; require both so an unrelated failure is not
 // misdiagnosed as a model problem.
@@ -138,6 +143,10 @@ export default {
     let text = ''
     let capacity = false
     let workStarted = false
+    let turnFailed = false
+    // The CLI's own failure messages, deduplicated, for the error: lines.
+    const failures = []
+    const diagnostics = []
     return {
       state,
       push(stream, line) {
@@ -150,19 +159,34 @@ export default {
             }
             if (event?.type?.startsWith('item.')) workStarted = true
             if (event?.type === 'error' || event?.type === 'turn.failed') {
+              if (event.type === 'turn.failed') turnFailed = true
               const message = event.message ?? event.error?.message
-              if (typeof message === 'string' && CAPACITY_ERROR.test(message)) capacity = true
+              if (typeof message === 'string') {
+                if (CAPACITY_ERROR.test(message)) capacity = true
+                const short = message.length > 300 ? `${message.slice(0, 300)}...` : message
+                if (!failures.includes(short)) failures.push(short)
+                diagnostics.push(message)
+              }
             }
           } catch {}
-        } else if (CAPACITY_ERROR.test(line)) {
-          capacity = true
+        } else {
+          if (CAPACITY_ERROR.test(line)) capacity = true
+          diagnostics.push(line)
         }
         return line
       },
       finish({ status }) {
         const output = readText(artifacts.out)
-        const usable = status === 0 && Boolean(output.trim())
+        // A failed turn is not an answer, even beside a zero exit and partial
+        // output.
+        const usable = status === 0 && Boolean(output.trim()) && !turnFailed
         const hints = []
+        const said = diagnostics.join('\n')
+        if (!usable && USAGE_LIMIT.test(said)) {
+          hints.push('the codex account hit its usage limit; not transient — do not rerun before the reset time the CLI reported. Report it, or use another provider if the user agrees.')
+        } else if (!usable && CONTENT_FLAG.test(said)) {
+          hints.push('codex refused the content; not transient — do not rerun or reword the request to get past it. Report the reason to the user.')
+        }
         if (!usable && status !== 0) {
           if (text.includes('unknown configuration field') || text.includes('Unknown feature flag')) {
             hints.push('codex rejected a configuration key or feature flag this script sets (--strict-config is deliberate); the installed codex CLI may have drifted from the keys in providers/codex.mjs.')
@@ -183,7 +207,7 @@ export default {
           transient: capacity && !usable ? 'model at capacity' : '',
           workStarted: workStarted || Boolean(output.trim()),
           warnings: [],
-          errors: [],
+          errors: usable ? [] : failures,
           hints,
           usageLine: '',
         }

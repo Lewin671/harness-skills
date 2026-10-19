@@ -35,6 +35,10 @@ export async function runAgent(ctx) {
     die(EXIT.timeout)
   }
 
+  // What was asked for, before the wait; `model:` later names what answered.
+  const asked = (value) => (value ? flat(value) : 'CLI default')
+  process.stderr.write(`settings: model ${asked(policy.model)}, effort ${asked(policy.effort)}\n`)
+
   for (let attempt = 0; ; attempt += 1) {
     const remaining = deadline - Date.now()
     if (remaining <= 0) timedOut('error: retries exhausted the run timeout', { ...lastState, sessionId: expected })
