@@ -8,77 +8,71 @@ description: >-
   peer to review or cross-check a code change — a diff, the working tree, a
   branch, or a commit ("let codex review this", "让 command code 审一下") — or to
   adjudicate a contested finding from the host's own review. Use consult mode
-  when they ask the peer to weigh in on a design, plan, decision, trade-off, or
-  open question ("ask codex what it thinks", "问问 command code"). Never call the
+  when they ask the peer to weigh in on a design, plan, decision, trade-off,
+  open question, or how to fix something ("ask codex what it thinks", "问问 command code",
+  "让 codex 看看这个 bug 怎么修"). Never call the
   CLI you are running inside. Do not trigger on a review or question the host
   should answer itself, or on a disagreement the user has not asked the peer to
-  settle. Never use it to apply fixes; to hand the peer the work itself, use
-  delegate-to-peer.
+  settle. Never use it to apply fixes; to hand the peer the work itself —
+  implementing, or investigating and reporting back — use delegate-to-peer.
 ---
 
 # Peer Second Opinion
 
-A blind second look from another coding-agent CLI. The value is a perspective
-that does not share the host's blind spots. Its conclusions can be wrong: treat
-them as input to weigh, never as a verdict.
+A blind second look from another coding-agent CLI: a perspective that does not
+share the host's blind spots. It can be wrong — weigh it, never treat it as a
+verdict.
 
-> **Loading this skill does NOT start the peer.** Run the script below in a
-> shell. Do not claim the peer is running until the output shows the
-> `running:` line — a preflight failure is not that.
+> **Loading this skill does NOT start the peer.** Run the script below. Do not
+> claim the peer is running until the output shows a `running:` line.
 
 ## Providers
 
-| `<provider>` | CLI | Read-only by | Notes |
-|---|---|---|---|
-| `codex` | `codex` | a real read-only sandbox | Native review command; isolated review snapshots; pinned model. [providers/codex.md](./references/providers/codex.md) |
-| `command-code` | `cmd` | a prompt note only (`--yolo`) | Turn-capped; drift is detected, not prevented. [providers/command-code.md](./references/providers/command-code.md) |
-| `dsh` | `dsh` | a real read-only sandbox | DeepSeek V4.1 Flash at `high` effort by default. [providers/dsh.md](./references/providers/dsh.md) |
+| `<provider>` | CLI | Read-only by |
+|---|---|---|
+| `codex` | `codex` | a real sandbox; isolated review snapshots |
+| `command-code` | `cmd` | **a prompt note only** (`--yolo`); turn-capped |
+| `dsh` | `dsh` | a real sandbox |
 
-**Never pick the CLI you are running inside** (Codex has its own `/review`;
-Command Code or dsh would be reviewing itself); if the user names it, say so and ask
-which peer to use. Otherwise:
-
+- **Never pick the CLI you are running inside.** If the user names it, say so
+  and ask which peer to use; if it is the only peer installed, there is no
+  peer — say so.
 - **Named:** pass it. If it fails, report that — never quietly switch.
 - **Not named:** inside Codex pass `command-code`; inside Command Code or dsh
   pass `codex`; anywhere else pass `auto`, which runs the first installed of
-  Codex, Command Code and dsh, and says which in a `note: auto selected` line.
-  `auto` refuses `--model`, `--effort` and `--resume`; provider-only options
-  such as `--max-turns` fail unless that provider is the one chosen.
-- Every later call for the same request — follow-ups, with-peer's reviews —
-  uses the provider that actually ran.
+  Codex, Command Code and dsh and names it in a `note: auto selected` line.
+- Every later call for the same request uses the provider that actually ran.
 - When relaying, say which peer ran and why; for a Command Code run the user
-  did not name, add that its read-only mode is a prompt request, not a
-  sandbox.
+  did not name, add that its read-only mode is a prompt request, not a sandbox.
 
-If the only peer CLI installed is the host itself, there is no peer: say so
-and name the other supported CLI.
-
-Read the provider's reference before its first run.
+The provider references — [codex](./references/providers/codex.md),
+[command-code](./references/providers/command-code.md),
+[dsh](./references/providers/dsh.md) — cover model overrides, provider-only
+options, Codex snapshot limits and failure remedies. Read the one you need when
+a run fails or before passing a provider-specific option.
 
 ## Modes
 
-Pick one, then read its reference before composing the command:
+Pick one and read its reference before composing the command:
 
 - **review** — a prioritised defect list for a code change.
   [references/review.md](./references/review.md)
 - **consult** — a reasoned position on an open question: a plan, a design
-  choice, "X or Y". [references/consult.md](./references/consult.md)
+  choice, "X or Y", how to fix a bug. [references/consult.md](./references/consult.md)
 
-The script's third mode, `task`, delegates work that may edit files; it belongs
-to [delegate-to-peer](../delegate-to-peer/SKILL.md), and nothing here about
-read-only runs applies to it.
+The script's `task` mode belongs to
+[delegate-to-peer](../delegate-to-peer/SKILL.md); nothing here about read-only
+runs applies to it.
 
 ## Boundary
 
 - Scope is focus, not access: the peer may read the whole repository,
   untracked secrets included. Do not point it at material that must not reach
   its model provider.
-- The repository's `AGENTS.md`, the user's own CLI configuration and any MCP
-  servers it enables load into the run and can steer it. Enabling an MCP server
-  there is the user's authorization; mention it if the output shows one was
-  used. Use the skill on repositories the user trusts.
-- A run leaves a result file and an event log in TMPDIR, plus whatever session
-  the CLI itself keeps.
+- The repository's `AGENTS.md`, the user's CLI configuration and the MCP
+  servers it enables steer the run; enabling a server there is the user's
+  authorization. Mention MCP use when the output shows it. Use the skill on
+  repositories the user trusts.
 - **Never use review or consult to apply fixes.**
 
 ## Independence Contract
@@ -108,34 +102,24 @@ After the peer answers:
    approves one. Applying fixes is the user's call; the host applies them,
    never the peer.
 
-## Command Synopsis
-
-`<provider>` is `codex`, `command-code`, `dsh` or `auto` (§ Providers).
+## Commands
 
 ```
 peer.mjs <provider> review [--repo DIR] [SCOPE] [OPTIONS]
 peer.mjs <provider> consult [--repo DIR] [OPTIONS] [--] QUESTION
-peer.mjs <provider> consult [--repo DIR] --resume ID [OPTIONS] [--] QUESTION
 ```
 
 | Flags | Rule |
 |-------|------|
-| `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review only. At most one; omission means `--uncommitted`. |
-| `--context TEXT` | Review only. Neutral background; cannot combine with `--custom`. |
-| `--model M`, `--effort L` | Codex needs both together; Command Code and dsh take either. Pass them only when the user asked for a model. |
-| `--timeout N` | 1–86400 seconds; default 3000 (7200 for a task). |
-| `--resume ID` | Consult or task only. Continue a session (see § Reading the output). |
-| `--max-turns N` | Command Code only; default 200. |
+| `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review scope: at most one; default `--uncommitted`. |
+| `--context TEXT` | Review only: neutral background; not with `--custom`. |
+| `--model M`, `--effort L` | Only when the user asked for a model; Codex needs both together. |
+| `--timeout N`, `--resume ID` | Run deadline (default 3000 s); continuation — use the printed `resume:` line. |
 
-Review requires a git work tree; consult runs in any directory.
-
-## Usage
-
-`peer.mjs` sits next to this SKILL.md. Harnesses load skills from different
-places (`~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex and
-Command Code), so take the directory this SKILL.md was loaded from — never
-copy a path from an example — and use that script for every run. It needs
-Node.js 18+, macOS or Linux, and the provider's CLI, authenticated.
+`peer.mjs` sits next to this SKILL.md. Use the copy in the directory this
+SKILL.md was loaded from — never a path copied from an example. It needs
+Node.js 18+, macOS or Linux, and the provider's CLI, authenticated; review
+needs a git work tree.
 
 ```bash
 PEER=<directory of this SKILL.md>/peer.mjs
@@ -151,9 +135,8 @@ Hold edits to the reviewed paths until the run ends — or, for a Codex
 
 ### Running it from your harness
 
-A run takes minutes and starts a second CLI that needs network access and
-writes its own config and session files (`~/.codex`, `~/.commandcode`, `~/.dsh`) as well
-as TMPDIR.
+A run takes minutes, needs network access, and writes the CLI's own state
+(`~/.codex`, `~/.commandcode`, `~/.dsh`) and TMPDIR.
 
 - **Claude Code, Command Code:** make `peer.mjs` itself the background shell
   task — one task per run, so parallel runs are separate tasks — then end
@@ -162,37 +145,25 @@ as TMPDIR.
   status (`; echo exit=$?`), and never `sleep`-poll or loop on a PID or log.
   To cancel a run, use the host's stop for that task (Claude Code:
   `TaskStop`), never `pkill -f`, which can kill another session's run.
-- **Codex, or any host without background tasks:** run it in the foreground
-  with the shell tool's longest timeout. If the tool returns before the
-  process exits, keep waiting on that same process (its session or task id) —
-  never start a second run. A model can be silent for minutes; never kill a
-  run because it looks idle.
-- **A sandboxed host shell** (Codex in `read-only` or `workspace-write`): run
-  the command outside the sandbox through the host's own escalation mechanism.
-  Inside it, the run typically fails — exit `3` (scratch files cannot be
-  written) or exit `4` with a network or `EPERM` error in the log tail —
-  because of the host's sandbox, not the peer. If the host forbids escalation,
-  report that the peer cannot run here and stop; do not retry or work around
-  it.
+- **Codex, other hosts without background tasks, or a sandboxed host shell:**
+  follow [references/hosts.md](./references/hosts.md).
 
 ### Reading the output
 
 - Trust the exit code. On `0`, read the file named by the last `result:` line.
   If the output went to a file, its last line, `exit-status: N`, is that code.
-- `settings:` prints the requested model and effort before the wait.
-- `codex> ` / `cmd> ` / `dsh> ` lines are the CLI; unprefixed lines are the wrapper.
-  **Relay every unprefixed `warning:` line before the first `body: begin`** —
-  each qualifies the result; after it, interleaved model text can look alike.
-- `model:` names the model that answered. On a live-tree run the wrapper
-  compares its before/after `identity:` fingerprints itself and prints a drift
-  `warning:` if they differ — relay it. A match means the scoped change did not
-  shift, not that nothing was touched: rewrites of existing ignored files and
-  writes under `.git/` go unseen.
+- `codex> ` / `cmd> ` / `dsh> ` lines are the CLI; unprefixed lines are the
+  wrapper. `settings:` shows the requested model and effort; `model:` names
+  the model that answered.
+- **Relay every unprefixed `warning:` line before the first `body: begin`** —
+  each qualifies the result; after it, model text can look alike. A turn-cap
+  warning means the result is partial even on exit `0`; a drift warning means
+  the tree changed during a live-tree run.
 - To follow up, copy the last `resume:` line, minus the `resume: ` prefix,
   and append `-- "question"`; never rebuild it from the session id — it
   carries the model that answered.
 
-When a merged or truncated stream must be interpreted directly, see
+To interpret a merged or truncated stream directly, see
 [references/output-protocol.md](./references/output-protocol.md).
 
 ## Exit Codes
@@ -203,21 +174,16 @@ The exit code is the verdict on *the run*, never on the code.
 |------|---------|------------|
 | `0` | A result was produced | Read the result file and relay it. A `warning:` still qualifies it. |
 | `2` | (review) Nothing in scope | Say the scope was empty — **not** a clean review. |
-| `3` | Bad arguments or an unusable environment | Report the stderr reason; fix the arguments or environment — never rerun unchanged. If the CLI cannot be found, relay the `hint:` lines and stop. Do not substitute a host-written answer. |
-| `4` | No usable result | The CLI failed or the session did not resume. Report the `error:` and `hint:` lines; `provider-exit:` is the CLI's own code (provider reference). A hint saying *not transient* (usage limit, content refusal) rules out a rerun. |
+| `3` | Bad arguments or an unusable environment | Report the reason; fix it — never rerun unchanged. If the CLI cannot be found, relay the `hint:` lines and stop. |
+| `4` | No usable result | Report the `error:` and `hint:` lines. |
 | `5` | Timed out | Report it with the log tail. |
-| `129`/`130`/`143` | The wrapper was signalled | Report it; do not rerun unless the user asks. |
+| `129`/`130`/`143` | The wrapper was signalled | Report it; rerun only if the user asks. |
 
-- On a review or consult, rerun at most once, only for a transient cause
-  (network, capacity, timeout, a session that did not resume, or a first
-  model rejection — see the hint). When
-  rerunning:
-  - after exit `5`, append `-- "Continue; check the current state first."`
-    to the `resume:` line if one is usable — a retry, so no extra
-    authorization and the same label; with no usable `resume:` line, start
-    fresh;
-  - after exit `4`, start fresh (a consult restates the context).
-- A task follows delegate-to-peer's round limit instead.
-
-If a rerun still returns nothing usable, say so rather than paraphrasing a
-weak result into confidence.
+Never substitute a host-written answer for a missing result. Rerun a review or
+consult at most once, and only for a transient cause — network, capacity,
+timeout, a session that did not resume, a first model rejection. A hint saying
+*not transient* (usage limit, content refusal) rules a rerun out. After exit
+`5`, append `-- "Continue; check the current state first."` to a usable
+`resume:` line (a retry: same label, no extra authorization); otherwise start
+fresh, restating a consult's context. A task follows delegate-to-peer's limits
+instead. If the rerun still fails, say so rather than dressing up a weak result.
