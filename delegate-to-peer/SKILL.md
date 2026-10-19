@@ -21,11 +21,10 @@ host stays the lead: it writes the brief, checks the result, sends feedback and
 reports to the user. Nothing the peer reports counts as done until the host has
 checked it.
 
-**A peer reviewing its own task is self-review.** If the model that did the
-work also reviews it — in the same session or a fresh one — call that
-**self-review** to the user, never "independent review", and report it apart
-from the host's own checks. An independent review needs a different model
-(peer-second-opinion § Independence Contract).
+**Do not ask the peer to review its own work** — not in the same session,
+not in a fresh one. The host's own checks (step 4) are the verification. If
+the user also wants an independent review, run peer-second-opinion's review
+mode with a different model from the one that did the work.
 
 The command is the `task` mode of
 [peer-second-opinion](../peer-second-opinion/SKILL.md)'s `peer.mjs`. Read its
@@ -66,8 +65,7 @@ TASK is one argument; put it after `--`. The default timeout is 7200 s.
    file named by the last `result:` line; `workdir:` says where the work
    happened.
 4. **Check.** For code, read the diff against that starting point (or the
-   worktree's base) and run the relevant tests or checks yourself; a
-   self-review does not replace them. For
+   worktree's base) and run the relevant tests or checks yourself. For
    research, investigation or measurements, verify the claims that carry
    the conclusion. A report that it ran something is not
    proof: the `log:` file holds what each command actually returned. Relay
@@ -93,8 +91,7 @@ TASK is one argument; put it after `--`. The default timeout is 7200 s.
    - **Stop** when the check still fails after three follow-up runs
      (feedback, resume or restart), and tell the user what is left.
 6. **Report.** Say what was done, where (`workdir`), what you checked and
-   how — labelling any review by the authoring model **self-review** — and
-   anything still open. If a worktree was used, report its path and
+   how, and anything still open. If a worktree was used, report its path and
    branch, and leave merging and removing it to the user unless they asked.
 
 The host may fix small things itself rather than round-tripping through
