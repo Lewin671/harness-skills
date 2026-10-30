@@ -1,8 +1,8 @@
 ---
 name: with-peer
 description: >-
-  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`),
-  Command Code (`cmd`) or DeepSeek Harness (`dsh`); either one is enough. Complete a code-changing task with the
+  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`)
+  or Command Code (`cmd`); either one is enough. Complete a code-changing task with the
   peer as advisor and reviewer: the host writes all the code, the peer gives a
   blind design opinion first and then reviews the whole change, and every
   disagreement is settled by evidence rather than by vote. Trigger only when
@@ -185,6 +185,7 @@ including open P2/P3s and Accepted limits. Link the task record and
 preserved reports. Disclose failed checks, unverified fixes and coverage
 limits explicitly.
 
-The host remains the only writer: never use `codex apply`, bypass flags
-or the wrapper's `task` mode here. This workflow grants no external
+The host remains the only writer of the change: never use `codex apply`,
+bypass flags or the wrapper's `task` mode here. A review may build and test,
+and the output it leaves in ignored paths is not part of the change. This workflow grants no external
 mutation authority.

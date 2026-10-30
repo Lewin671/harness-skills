@@ -28,8 +28,8 @@ changes" as an answer that reads like a pass. `--custom` gets no such check.
 A Codex `--uncommitted` or `--base` review reads an isolated snapshot; edits
 are safe once `snapshot: ready` prints (limits in
 [providers/codex.md](./providers/codex.md)). Every other review reads the live
-tree, fingerprinted as `identity:`. Command Code and dsh get the scope's
-`git diff` in their prompt, cut at 400,000 bytes.
+tree, fingerprinted as `identity:`. Command Code gets the scope's `git diff`
+in its prompt, cut at 400,000 bytes.
 
 ## --custom and --context
 
@@ -46,8 +46,7 @@ compare, what to read and what to produce.
 `--context` passes neutral background — what the change is meant to do, a
 constraint not visible in the diff — fenced as data, and the peer checks the
 code against it. Keep it within the Independence Contract; the host's suspected
-defects belong in `--custom`, with the result labelled **deliberation**. With
-Codex, prefer a plain scope when no context is needed.
+defects belong in `--custom`, with the result labelled **deliberation**.
 
 ## Reading the report
 
@@ -58,7 +57,9 @@ Codex, prefer a plain scope when no context is needed.
   <body>
 ```
 
-Anchor on the `- [P<n>]` bullets, not any heading above them. `P0` is most
+A `Verification:` paragraph, before or after the bullets, says what the peer
+built, ran or reproduced, and what it could not. It is not a finding. Anchor on the
+`- [P<n>]` bullets, not any heading above them. `P0` is most
 severe, down to `P3`. No bullets is not, by itself, a clean review:
 
 - No bullets **and** the text says there is nothing to report → zero findings.
@@ -68,7 +69,7 @@ severe, down to `P3`. No bullets is not, by itself, a clean review:
 ## Following up
 
 A Codex review leaves no session: to discuss a finding, start a consult carrying
-it, or run a `--custom` review of it. A Command Code or dsh review's `resume:`
+it, or run a `--custom` review of it. A Command Code review's `resume:`
 line continues it in consult mode. Both are **deliberation**.
 
 ## Reporting duties

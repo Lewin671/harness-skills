@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Run a peer coding-agent CLI headlessly from another harness:
-//   peer.mjs <provider> review  — a prioritised defect list over a code change (read-only)
-//   peer.mjs <provider> consult — a reasoned position on one question (read-only)
+//   peer.mjs <provider> review  — a prioritised defect list over a code change (no edits)
+//   peer.mjs <provider> consult — a reasoned position on one question (no edits)
 //   peer.mjs <provider> task    — delegated work, allowed to write (delegate-to-peer)
 // Providers live in providers/; the process layer in lib/core.mjs; the run
 // loop in lib/run.mjs; scope and identity in lib/scope.mjs.
@@ -24,7 +24,7 @@ import {
   UUID,
 } from './lib/core.mjs'
 import { runAgent } from './lib/run.mjs'
-import { consultScope, fingerprintScope, resolveScope } from './lib/scope.mjs'
+import { consultScope, fingerprintScope, ignoredDigest, resolveScope } from './lib/scope.mjs'
 import { createReviewSnapshot } from './lib/snapshot.mjs'
 import { PROVIDERS } from './providers/index.mjs'
 
@@ -36,8 +36,8 @@ const TOP_USAGE = `Usage: peer.mjs <provider> <review|consult|task> [ARGS]
 Providers: ${[...PROVIDERS.values()].map((p) => `${p.id} (runs ${p.binary.name})`).join(', ')}
            auto (the first of these whose CLI is installed, in this order)
 
-  review   a prioritised defect list over a code change (read-only)
-  consult  one free-form question, answered with the repo as context (read-only)
+  review   a prioritised defect list over a code change (no edits)
+  consult  one free-form question, answered with the repo as context (no edits)
   task     delegated work; the peer may edit files and run any command
 
 Run peer.mjs <provider> <mode> --help for that mode's arguments.`
@@ -252,7 +252,7 @@ async function main(argv) {
   const { provider, mode, policy, review, text } = run
   const env = createEnvironment(policy.repo, provider, { requireWorkTree: mode === 'review' })
 
-  // Read-only runs are tied to the bytes they saw: an isolated snapshot where
+  // Review and consult are tied to the bytes they saw: an isolated snapshot where
   // the provider supports one, otherwise a before/after fingerprint of the
   // live tree. A task is meant to change the tree, so it gets neither.
   let scope = null
@@ -262,6 +262,7 @@ async function main(argv) {
     ? createReviewSnapshot(scope, env)
     : null
   const before = scope && !snapshot ? fingerprintScope(env, scope) : ''
+  const ignoredBefore = before ? ignoredDigest(env) : ''
 
   const runEnv = snapshot?.env || env
   let artifacts
@@ -298,6 +299,7 @@ async function main(argv) {
     die(EXIT.failed, `error: could not write the result file: ${flat(error.message)}`)
   }
   const after = before ? fingerprintScope(env, scope) : ''
+  const ignoredAfter = before ? ignoredDigest(env) : ''
 
   // Everything that qualifies the result prints before `body: begin`.
   if (before) process.stderr.write(`identity: ${before}\n`)
@@ -305,6 +307,9 @@ async function main(argv) {
   for (const warning of outcome.warnings) process.stderr.write(`warning: ${flat(warning)}\n`)
   if (before && after !== before) {
     process.stderr.write(`warning: the tree changed while this run was in progress (identity ${before} is not ${after}); the answer describes no single stable state. Check ${flat(env.repoRoot)} for edits the run may have made.\n`)
+  }
+  if (ignoredBefore !== ignoredAfter) {
+    process.stderr.write('note: ignored paths (build output, caches) appeared or disappeared during the run; the identity covers tracked and untracked files only.\n')
   }
   if (outcome.sessionId && !UUID.test(outcome.sessionId)) {
     process.stderr.write('warning: the stream reported a session id that is not a UUID; not advertising a resume command for it\n')

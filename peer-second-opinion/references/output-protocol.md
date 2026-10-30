@@ -7,8 +7,8 @@ output is enough for most runs.
 
 ## Streams and prefixes
 
-Progress streams to stderr: lines prefixed `codex> `, `cmd> ` or `dsh> ` come from the
-CLI; unprefixed lines are the wrapper. Command Code's and dsh's raw NDJSON frames are not
+Progress streams to stderr: lines prefixed `codex> ` or `cmd> ` come from the
+CLI; unprefixed lines are the wrapper. Command Code's raw NDJSON frames are not
 echoed — only one `tool: <name> <command or path>` summary per tool call — but
 every frame is in the file named by `log:`. A failed run prints the log's last
 lines, cut to a bounded width. The result body arrives on stdout and in the
@@ -23,7 +23,7 @@ Marker kinds:
 | `settings:` | The requested model and effort (`CLI default` when the CLI picks); `model:` later names what answered. |
 | `running:` | The CLI is being launched (one per attempt). |
 | `snapshot: ready <sha256>` | (Codex review) the isolated snapshot is captured; edits are safe from here. |
-| `identity: <sha256>` | Live-tree run: the scoped paths and git state fingerprinted, printed once before the body and once after it. Not comparable with `snapshot:`. |
+| `identity: <sha256>` | Live-tree run: the scoped paths and git state fingerprinted, ignored paths excluded, printed once before the body and once after it. Not comparable with `snapshot:`. |
 | `warning:` | Qualifies the result. Relay every genuine one. |
 | `model:`, `usage:` | What answered and what it cost, when known. |
 | `body: begin` | The model's body starts on stdout right after this line. |
@@ -52,7 +52,7 @@ wrapper's lines:
 ## Session and resume lines
 
 `session:`/`resume:` print on every successful run of a mode that leaves a
-session — a Codex consult or task, every Command Code or dsh run — as real values or as
+session — a Codex consult or task, every Command Code run — as real values or as
 sentinels, so a model-written line cannot pose as them. A timeout (exit `5`)
 prints them too, because a killed session can still be resumed. Any other failed
 run prints neither.

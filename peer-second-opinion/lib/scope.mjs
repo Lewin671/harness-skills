@@ -238,14 +238,13 @@ export function consultScope(env) {
 // The status line is in the digest on purpose. Hashing only the scoped paths
 // would miss a file the run creates during the review — a path that was not
 // in the set when it was resolved is not in the set afterwards either.
-// `--ignored` extends that to ignored paths, where a build directory or a
-// local `.env` would otherwise be a blind spot.
+// Ignored paths are left out: a second opinion may build and test, and the
+// build output and caches that leaves are not drift. ignoredDigest tracks
+// them separately, for a note.
 //
-// KNOWN BLIND SPOT — an in-place rewrite of an *existing* ignored file, and
-// any write under `.git/`, still leave this digest unchanged, because neither
-// the name nor the bytes of those paths are hashed. Hashing ignored file
-// contents would make the cost of a run proportional to `node_modules`. Do
-// not describe the identity as proving the tree was untouched.
+// KNOWN BLIND SPOT — a change to an ignored file (a local `.env`, an
+// installed dependency) and any write under `.git/` leave this digest
+// unchanged. Do not describe the identity as proving the tree was untouched.
 export function fingerprintScope(env, scope) {
   const hash = createHash('sha256')
   const head = git(env, ['rev-parse', '--verify', '--quiet', 'HEAD'])
@@ -255,7 +254,7 @@ export function fingerprintScope(env, scope) {
   hash.update('index\0')
   hash.update(indexPatch.status === 0 ? indexPatch.stdout : '')
   hash.update('\0')
-  const status = git(env, ['status', '--porcelain=v1', '--untracked-files=normal', '--ignored=matching'])
+  const status = git(env, ['status', '--porcelain=v1', '--untracked-files=normal'])
   hash.update('status\0')
   hash.update(status.status === 0 ? status.stdout : '')
   hash.update('\0')
@@ -297,4 +296,13 @@ export function contextFence(context) {
 <<<${CONTEXT_FENCE}
 ${body}
 ${CONTEXT_FENCE}`
+}
+
+// The names of the ignored paths, for a note when a run adds or removes some
+// (build output, caches). Names only: hashing ignored contents would make a
+// run's cost proportional to `node_modules`.
+export function ignoredDigest(env) {
+  const status = git(env, ['status', '--porcelain=v1', '--untracked-files=normal', '--ignored=matching'])
+  const ignored = status.status === 0 ? status.stdout.split('\n').filter((line) => line.startsWith('!! ')) : []
+  return createHash('sha256').update(ignored.join('\n')).digest('hex')
 }

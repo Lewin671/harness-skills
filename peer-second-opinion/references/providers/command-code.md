@@ -14,16 +14,17 @@ repository under review is refused.
 
 ## Permissions
 
-Every run passes `--yolo`, so the peer can investigate: run tests, read git
-history, try a reproduction script. Review and consult add a prompt note asking
-it to stay read-only and giving it a scratch directory outside the repository.
+Every run passes `--yolo`, so the peer can investigate: build, run tests, read
+git history, try a reproduction script. Review and consult add the shared note
+asking it not to modify the repository or git state, giving it a scratch
+directory outside the repository, and asking for a `Verification:` paragraph.
 That request is **not a sandbox** — the run has the user's own shell.
 
 - The reviewed project's `AGENTS.md`, the user's `~/.commandcode/AGENTS.md` and
   any configured MCP servers load into the run. Review and consult pass
   `--no-skills`, so the repository's own skills stay out; a task loads them.
-- The `identity:` check (SKILL.md § Reading the output) is how a read-only
-  run's writes get noticed.
+- The `identity:` check (SKILL.md § Reading the output) is how a review's or
+  consult's writes get noticed.
 
 ## Cost and turns
 

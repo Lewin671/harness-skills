@@ -15,16 +15,21 @@ hand-roll `codex exec` instead.
 
 ## Permissions
 
-Review and consult run in Codex's read-only sandbox (`sandbox_mode="read-only"`),
-with hooks, apps, plugins, cross-session memories and the `notify` callback
-disabled; `--strict-config` turns an unrecognized key into a failed run instead
-of a silently ignored safety setting. Review also passes `--ephemeral`, so it
-leaves no session. The sandbox covers Codex's local commands only: standalone
-MCP servers from the user's codex configuration stay reachable.
+Every mode runs with `sandbox_mode="danger-full-access"` and
+`approval_policy="never"`: a review or consult can build, test and reach the
+network like the user's own shell. They keep hooks, apps, plugins,
+cross-session memories and the `notify` callback disabled, and carry the shared
+note asking the peer not to modify the repository or git state;
+`--strict-config` turns an unrecognized key into a failed run. Review also
+passes `--ephemeral`, so it leaves no session. Standalone MCP servers from the
+user's codex configuration stay reachable.
 
-A task runs with `sandbox_mode="danger-full-access"` and
-`approval_policy="never"`, in the user's normal codex setup — hooks, plugins,
-memories and MCP included.
+A review always passes its scope as prose in the prompt, never as a native
+scope flag: `codex exec review` takes one or the other, and only the prompt can
+carry the note.
+
+A task runs in the user's normal codex setup — hooks, plugins, memories and MCP
+included — with no note.
 
 ## Review snapshots
 
@@ -36,9 +41,11 @@ are safe after that marker; the clone is removed after the run, and paths
 inside it are rewritten to the source repository in the report.
 
 - An unchanged submodule appears as an empty directory, and ignored untracked
-  files (a local `.env`, build output) never enter it. A review that needs
-  them should use `--commit` if committed, otherwise `--custom`; both read the
-  live tree.
+  files (a local `.env`, installed dependencies such as `node_modules` or
+  `.venv`, build output) never enter it, so a build or test there may fail for
+  want of them. A review that needs them should use `--commit` if committed,
+  otherwise `--custom` naming the comparison (for example "the staged,
+  unstaged and untracked changes"); both run in the live tree.
 - Embedded repositories, changed symlinks that resolve outside the clone, and
   any symlink that resolves back into the live source repository fail with exit
   `3`. An unchanged symlink pointing elsewhere (a dotfiles repository linking

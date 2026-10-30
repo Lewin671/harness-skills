@@ -242,7 +242,7 @@ export function createArtifacts(env, providerId, mode) {
     const dir = mkdtempSync(join(env.scratch, `peer-${providerId}-${mode}-`))
     const out = join(dir, 'result.md')
     const log = join(dir, 'events.jsonl')
-    // Where a read-only run may put reproduction scripts and other scratch
+    // Where a review or consult may put reproduction scripts and other scratch
     // files, so it has no reason to write into the repository.
     const scratch = join(dir, 'scratch')
     closeSync(openSync(out, 'wx', 0o600))

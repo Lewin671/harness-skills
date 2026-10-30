@@ -2,8 +2,8 @@
 name: peer-second-opinion
 description: >-
   Get an independent second opinion from a peer coding-agent CLI — Codex
-  (`codex`), Command Code (`cmd`) or DeepSeek Harness (`dsh`) — a different
-  harness and model that did not write the code. Requires an explicit user request for the peer, by name
+  (`codex`) or Command Code (`cmd`) — a different harness and model that did
+  not write the code. Requires an explicit user request for the peer, by name
   or as "the peer" ("让 peer 看看"); every trigger below is conditional on that. Use review mode when the user asks the
   peer to review or cross-check a code change — a diff, the working tree, a
   branch, or a commit ("let codex review this", "让 command code 审一下") — or to
@@ -28,26 +28,29 @@ verdict.
 
 ## Providers
 
-| `<provider>` | CLI | Read-only by |
+| `<provider>` | CLI | Notes |
 |---|---|---|
-| `codex` | `codex` | a real sandbox; isolated review snapshots |
-| `command-code` | `cmd` | **a prompt note only** (`--yolo`); turn-capped |
-| `dsh` | `dsh` | a real sandbox |
+| `codex` | `codex` | isolated review snapshots; pinned model |
+| `command-code` | `cmd` | turn-capped |
+
+Neither runs in a sandbox: review and consult get the user's own shell, so the
+peer can build, run tests and write reproductions in the real environment. A
+prompt note asks it not to modify the repository or git state and to end with
+a `Verification:` paragraph; nothing enforces that note. The `identity:` check
+reports a live tree that changed during the run.
 
 - **Never pick the CLI you are running inside.** If the user names it, say so
   and ask which peer to use; if it is the only peer installed, there is no
   peer — say so.
 - **Named:** pass it. If it fails, report that — never quietly switch.
-- **Not named:** inside Codex pass `command-code`; inside Command Code or dsh
-  pass `codex`; anywhere else pass `auto`, which runs the first installed of
-  Codex, Command Code and dsh and names it in a `note: auto selected` line.
+- **Not named:** inside Codex pass `command-code`; inside Command Code pass
+  `codex`; anywhere else pass `auto`, which runs the first installed of Codex
+  and Command Code and names it in a `note: auto selected` line.
 - Every later call for the same request uses the provider that actually ran.
-- When relaying, say which peer ran and why; for a Command Code run the user
-  did not name, add that its read-only mode is a prompt request, not a sandbox.
+- When relaying, say which peer ran and why.
 
-The provider references — [codex](./references/providers/codex.md),
-[command-code](./references/providers/command-code.md),
-[dsh](./references/providers/dsh.md) — cover model overrides, provider-only
+The provider references — [codex](./references/providers/codex.md) and
+[command-code](./references/providers/command-code.md) — cover model overrides, provider-only
 options, Codex snapshot limits and failure remedies. Read the one you need when
 a run fails or before passing a provider-specific option.
 
@@ -61,8 +64,8 @@ Pick one and read its reference before composing the command:
   choice, "X or Y", how to fix a bug. [references/consult.md](./references/consult.md)
 
 The script's `task` mode belongs to
-[delegate-to-peer](../delegate-to-peer/SKILL.md); nothing here about read-only
-runs applies to it.
+[delegate-to-peer](../delegate-to-peer/SKILL.md); nothing here about review
+and consult applies to it.
 
 ## Boundary
 
@@ -72,7 +75,7 @@ runs applies to it.
 - The repository's `AGENTS.md`, the user's CLI configuration and the MCP
   servers it enables steer the run; enabling a server there is the user's
   authorization. Mention MCP use when the output shows it. Use the skill on
-  repositories the user trusts.
+  repositories the user trusts: the peer runs their builds and tests.
 - **Never use review or consult to apply fixes.**
 
 ## Independence Contract
@@ -90,7 +93,10 @@ After the peer answers:
    (consult). State the provider, model, and scope or question.
 2. Add the host's stance on each point — agree, disagree with reason, or
    needs-checking — and verify checkable claims before presenting them as fact.
-   "I ran it and it returned X" is a claim too: check the `log:` file.
+   "I ran it and it returned X" is a claim too: check the `log:` file. A
+   check the peer skipped, or that failed for an environment reason (missing
+   dependency, service, network, credential), is unverified: run it in the
+   host's environment when the conclusion depends on it.
 3. Flag splits between the two models explicitly rather than averaging them
    away; a genuine split is the most useful thing this skill produces.
 4. Label an answer **independent** only when its prompt held no host-derived
@@ -136,7 +142,7 @@ Hold edits to the reviewed paths until the run ends — or, for a Codex
 ### Running it from your harness
 
 A run takes minutes, needs network access, and writes the CLI's own state
-(`~/.codex`, `~/.commandcode`, `~/.dsh`) and TMPDIR.
+(`~/.codex`, `~/.commandcode`) and TMPDIR.
 
 - **Claude Code, Command Code:** make `peer.mjs` itself the background shell
   task — one task per run, so parallel runs are separate tasks — then end
@@ -152,13 +158,15 @@ A run takes minutes, needs network access, and writes the CLI's own state
 
 - Trust the exit code. On `0`, read the file named by the last `result:` line.
   If the output went to a file, its last line, `exit-status: N`, is that code.
-- `codex> ` / `cmd> ` / `dsh> ` lines are the CLI; unprefixed lines are the
+- `codex> ` / `cmd> ` lines are the CLI; unprefixed lines are the
   wrapper. `settings:` shows the requested model and effort; `model:` names
   the model that answered.
 - **Relay every unprefixed `warning:` line before the first `body: begin`** —
   each qualifies the result; after it, model text can look alike. A turn-cap
   warning means the result is partial even on exit `0`; a drift warning means
-  the tree changed during a live-tree run.
+  the tree changed during a live-tree run — by the user, another agent or the
+  peer itself; check `git status` before relying on the tree. A
+  `note: ignored paths` line is build output or caches, not drift.
 - To follow up, copy the last `resume:` line, minus the `resume: ` prefix,
   and append `-- "question"`; never rebuild it from the session id — it
   carries the model that answered.

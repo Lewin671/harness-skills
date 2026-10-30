@@ -1,8 +1,8 @@
 ---
 name: delegate-to-peer
 description: >-
-  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`),
-  Command Code (`cmd`) or DeepSeek Harness (`dsh`). Delegate a task to the peer as a general-purpose
+  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`)
+  or Command Code (`cmd`). Delegate a task to the peer as a general-purpose
   subagent: it writes and changes code, researches a codebase, investigates a
   bug, or runs commands (including over the network), while the host briefs
   it, checks its work, sends feedback in the same session and reports back.

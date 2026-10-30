@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const SCRIPT = join(here, '..', 'peer.mjs')
+const INVESTIGATION_NOTE = /This is a second opinion, run headlessly with the user's own shell and no sandbox\./
 
 const FAKE_CODEX = `#!/bin/sh
 # Fake codex CLI for smoke tests.
@@ -209,17 +210,23 @@ test('review of a change succeeds with safety args, markers and prefixes', () =>
     // codex-controlled lines are prefixed, wrapper lines are not
     assert.match(result.stderr, /^codex> \{"type":"thread\.started"/m)
     assert.match(result.stderr, /^codex> free text from codex$/m)
-    // the exec call carries the read-only safety arguments
+    // the exec call carries full access plus the second-opinion switches
     const exec = result.argv.find((line) => line.startsWith('exec review'))
     assert.ok(exec, `no exec invocation in ${result.argv}`)
     for (const fragment of [
-      'sandbox_mode="read-only"', '--disable hooks', '--disable apps',
+      'sandbox_mode="danger-full-access"', 'approval_policy="never"', '--disable hooks', '--disable apps',
       '--disable plugins', '--disable memories', 'notify=[]',
       '--strict-config', '--ephemeral',
       '--json', '-m gpt-6.1-sol', 'model_reasoning_effort="high"',
     ]) {
       assert.ok(exec.includes(fragment), `missing ${fragment} in: ${exec}`)
     }
+    assert.ok(!exec.includes('read-only'), exec)
+    // the scope travels as prose so the prompt can carry the note
+    assert.ok(!exec.includes('--uncommitted'), `scope flag and prompt together in: ${exec}`)
+    const argv = result.argv.join('\n')
+    assert.ok(argv.includes('Review the uncommitted changes in this repository'), argv)
+    assert.match(argv, INVESTIGATION_NOTE)
   } finally {
     rmSync(join(repo, 'untracked.txt'), { force: true })
   }
@@ -265,8 +272,9 @@ test('base review snapshots a clean working tree', () => {
   const result = run(['review', '--base', 'HEAD^'])
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stderr, /^snapshot: ready [0-9a-f]{64}$/m)
-  const exec = result.argv.find((line) => line.startsWith('exec review'))
-  assert.match(exec, /--base [0-9a-f]{40}/)
+  const argv = result.argv.join('\n')
+  assert.match(argv, /merge base [0-9a-f]{40} to the working tree/)
+  assert.match(argv, INVESTIGATION_NOTE)
 })
 
 test('snapshot preserves staged changes separately from the working tree', () => {
@@ -477,6 +485,8 @@ test('review --commit works on a clean tree and --context reaches the prompt', (
   // with a prompt, no scope flag may be passed to codex
   const exec = result.argv.find((line) => line.startsWith('exec review'))
   assert.ok(!exec.includes('--commit'), `scope flag and prompt together in: ${exec}`)
+  assert.match(argv, /Review only the changes introduced by commit [0-9a-f]{40}/)
+  assert.match(argv, INVESTIGATION_NOTE)
 })
 
 test('trailing markers print after a large result body in a merged pipe stream', () => {
@@ -595,6 +605,8 @@ test('consult prints a resume line that is a complete runnable command', () => {
   // inside a work tree, codex's own git check stays active
   const exec = result.argv.find((line) => line.startsWith('exec'))
   assert.ok(!exec.includes('--skip-git-repo-check'), exec)
+  assert.ok(exec.includes('sandbox_mode="danger-full-access"'), exec)
+  assert.match(result.argv.join('\n'), INVESTIGATION_NOTE)
   assert.ok(resume.includes('--model gpt-6.1-sol --effort high'), resume)
   assert.ok(resume.includes('--repo '), resume)
 
@@ -616,6 +628,7 @@ test('consult prints a resume line that is a complete runnable command', () => {
   assert.equal(follow.status, 0, follow.stderr)
   const followArgv = readFileSync(argvLog, 'utf8')
   assert.ok(followArgv.includes(`exec resume ${id}`), followArgv)
+  assert.match(followArgv, INVESTIGATION_NOTE, 'a follow-up carries the note too')
 })
 
 test('a resumed consult passes exec resume and verifies continuation', () => {
@@ -688,7 +701,7 @@ test('a CODEX_BIN that does not exist is refused with a clear message', () => {
   assert.equal(result.argv.length, 0)
 })
 
-test('task runs with full access and none of the read-only switches', () => {
+test('task runs with full access and none of the second-opinion switches', () => {
   const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
   const result = run(['task', '--', 'Do the work'], { FAKE_THREAD_ID: id })
   assert.equal(result.status, 0, result.stderr)
@@ -700,6 +713,7 @@ test('task runs with full access and none of the read-only switches', () => {
   for (const absent of ['read-only', '--disable', 'notify=', '--ephemeral']) {
     assert.ok(!exec.includes(absent), `task must not pass ${absent}: ${exec}`)
   }
+  assert.doesNotMatch(result.argv.join('\n'), INVESTIGATION_NOTE, 'a task prompt carries no investigation note')
   assert.match(result.stderr, /^result: /m)
   assert.match(result.stderr, new RegExp(`^workdir: ${realpathSync(repo)}$`, 'm'))
   const resume = /^resume: (.*)$/m.exec(result.stderr)[1]

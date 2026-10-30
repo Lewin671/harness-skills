@@ -17,7 +17,7 @@ const SCRIPT = join(here, '..', 'peer.mjs')
 // Every run carries --yolo (user decision, 2026-10-14); none of these other
 // permission or tool-widening flags is ever emitted.
 const OTHER_PERMISSION_FLAGS = ['--dangerously-skip-permissions', '--accept-edits', '--permission-mode', '--plan', '--tools-all']
-const READ_ONLY_NOTE = /This is a read-only second opinion, run headlessly\..*write scratch files only under (\S+)\. Do not modify files in the repository/
+const INVESTIGATION_NOTE = /This is a second opinion, run headlessly with the user's own shell and no sandbox\..*every output you can redirect \(temporary files, build output, coverage, reports\) under (\S+)\. [^]*Do not modify the repository[^]*no git state changes[^]*starts with "Verification:"/
 
 const FAKE_CMD = `#!/usr/bin/env node
 // Fake cmd CLI for smoke tests.
@@ -268,13 +268,13 @@ test('model and effort are independent, and only the model travels with a resume
   assert.ok(!resume.includes('--effort'), resume)
 })
 
-test('review and consult prompts carry the read-only note; a task prompt does not', () => {
+test('review and consult prompts carry the investigation note; a task prompt does not', () => {
   dirty()
   try {
     for (const args of [['review', '--uncommitted'], ['consult', 'q']]) {
       const result = run(args)
-      const note = READ_ONLY_NOTE.exec(result.prompt)
-      assert.ok(note, `missing read-only note for ${args[0]}: ${result.prompt}`)
+      const note = INVESTIGATION_NOTE.exec(result.prompt)
+      assert.ok(note, `missing investigation note for ${args[0]}: ${result.prompt}`)
       assert.ok(existsSync(note[1]), `the scratch dir it names must exist: ${note[1]}`)
       assert.ok(!note[1].startsWith(repo), 'the scratch dir must be outside the repository')
     }
@@ -386,6 +386,7 @@ test('drift during the run is reported, but still yields the report', () => {
     assert.equal(result.status, 0, result.stderr)
     assert.match(result.stderr, /^warning: the tree changed while this run was in progress/m)
     assert.match(result.stderr, /describes no single stable state/)
+    assert.doesNotMatch(result.stderr, /^note: ignored paths/m, 'an untracked file is drift, not build output')
     assert.match(result.stdout, /the fake report body/)
     // The two identity lines differ, and the last one prints after the body.
     const identities = result.stderr.match(/^identity: [0-9a-f]{64}$/gm)
@@ -397,14 +398,16 @@ test('drift during the run is reported, but still yields the report', () => {
   }
 })
 
-test('a write into an ignored path during the run is caught', () => {
+test('build output in an ignored path is a note, not drift', () => {
   dirty()
   try {
-    // build/ is gitignored, so `--untracked-files=normal` alone would report a
-    // clean status and the identity would certify bytes the run had changed.
+    // build/ is gitignored: a run that builds may leave output there, which
+    // the identity leaves out and a note reports.
     const result = run(['review', '--uncommitted'], { FAKE_MUTATE_SOURCE: join(repo, 'build', 'out.txt') })
     assert.equal(result.status, 0, result.stderr)
-    assert.match(result.stderr, /^warning: the tree changed while this run was in progress/m)
+    assert.doesNotMatch(result.stderr, /^warning: the tree changed/m)
+    assert.match(result.stderr, /^note: ignored paths \(build output, caches\) appeared or disappeared during the run/m)
+    assert.ok(result.stderr.indexOf('note: ignored paths') < result.stderr.indexOf('body: begin'), 'the note qualifies the result, so it prints before the body')
     assert.ok(existsSync(join(repo, 'build', 'out.txt')), 'the fake CLI wrote the ignored path')
   } finally {
     rmSync(join(repo, 'build'), { recursive: true, force: true })
@@ -567,7 +570,7 @@ test('consult carries no scope precheck but still fingerprints', () => {
   const result = run(['consult', '--', 'a question about nothing in particular'])
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stderr, /^identity: [0-9a-f]{64}$/m)
-  // The question goes first and verbatim; only the fixed read-only note follows.
+  // The question goes first and verbatim; only the fixed investigation note follows.
   assert.ok(result.prompt.startsWith('a question about nothing in particular\n\n---\n'), result.prompt)
 })
 

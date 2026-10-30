@@ -1,24 +1,16 @@
 // Provider: the Command Code CLI (`cmd`). No sandbox: every run passes
-// --yolo, and review/consult are kept read-only by a prompt note plus the
-// live-tree fingerprint. Reviews are prompt-built around the wrapper's own
-// diff; runs are turn-capped; tasks can run in a worktree the CLI creates.
+// --yolo, and review/consult are kept from changing the repository by the
+// shared investigation note plus the live-tree fingerprint. Reviews are
+// prompt-built around the wrapper's own diff; runs are turn-capped; tasks can
+// run in a worktree the CLI creates.
 
 import { die, EXIT, flat, parseWhole } from '../lib/core.mjs'
-import { reviewPrompt } from '../lib/review-prompt.mjs'
+import { investigationNote, reviewPrompt } from '../lib/review-prompt.mjs'
 
 // Twice the CLI's own default of 100 (cmd 1.82.3), which a real delegated
 // task hit mid-work on 2026-10-15; always passed, so a CLI default change
 // cannot move it.
 const DEFAULT_MAX_TURNS = 200
-
-// Review and consult run with shell access (--yolo) so the model can
-// investigate, which leaves this note as the only thing asking it not to
-// write. Measured 2026-10-14: without it, 4/4 "fix it"-style consults tried
-// to edit the repository; with it, 0/4.
-function readOnlyNote(scratch) {
-  return `---
-This is a read-only second opinion, run headlessly. You may run commands to investigate — tests, git log/show/diff, small reproduction scripts — but write scratch files only under ${scratch}. Do not modify files in the repository, do not change git state (no commit, checkout, reset, stash or push), do not install anything, and do not offer to make changes.`
-}
 
 // One line per tool call — what the model actually ran or read — is all of
 // the event stream worth showing live; the full frames go to the log.
@@ -68,7 +60,7 @@ export default {
   },
 
   // Every mode leaves a session; a review is followed up as a consult — same
-  // session, same read-only note, no scope to re-resolve.
+  // session, same investigation note, no scope to re-resolve.
   resumeMode(mode) {
     return mode === 'review' ? 'consult' : mode
   },
@@ -92,7 +84,7 @@ export default {
     if (sessionId) args.push('--resume', sessionId)
     // Skipping onboarding keeps an automated run from waiting on a prompt.
     args.push('--yolo', '--output-format', 'json', '--skip-onboarding')
-    // The reviewed repository's own skills cannot steer a read-only pass; a
+    // The reviewed repository's own skills cannot steer a second opinion; a
     // delegated task may well want them.
     if (mode !== 'task') args.push('--no-skills')
     if (mode === 'task' && policy.worktree) args.push('--worktree')
@@ -102,8 +94,8 @@ export default {
     // user's config, so it is passed only when a caller asked for one.
     if (policy.effort) args.push('--effort', policy.effort)
     let prompt = text
-    if (mode === 'review') prompt = reviewPrompt(review, scope, readOnlyNote(artifacts.scratch))
-    else if (mode === 'consult') prompt = `${text}\n\n${readOnlyNote(artifacts.scratch)}\n`
+    if (mode === 'review') prompt = reviewPrompt(review, scope, investigationNote(artifacts.scratch))
+    else if (mode === 'consult') prompt = `${text}\n\n${investigationNote(artifacts.scratch)}\n`
     // The prompt travels on stdin: a scope diff can run to megabytes, past
     // the OS limit for one argv element. `-p` with no query reads stdin.
     return { args, prompt, via: 'stdin' }

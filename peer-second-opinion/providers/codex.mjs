@@ -1,8 +1,10 @@
-// Provider: the OpenAI codex CLI. Native `codex exec review` for reviews, a
-// real read-only sandbox for review and consult, isolated review snapshots,
-// a pinned model+effort pair, and capacity retries.
+// Provider: the OpenAI codex CLI. Native `codex exec review` for reviews,
+// isolated review snapshots, a pinned model+effort pair, and capacity
+// retries. Every mode runs without a sandbox; review and consult carry the
+// shared investigation note instead.
 
 import { die, EXIT, flat, readText, shellQuote } from '../lib/core.mjs'
+import { investigationNote } from '../lib/review-prompt.mjs'
 import { contextFence } from '../lib/scope.mjs'
 
 const DEFAULT_MODEL = 'gpt-6.1-sol'
@@ -24,8 +26,8 @@ const MODEL_DENIAL = /not supported when using Codex|does not exist or you do no
 
 // KNOWN, ACCEPTED GAP — do not re-add MCP switch-off here. Codex runs with
 // whatever standalone MCP servers the user's own configuration enables, and
-// such tools can mutate external systems from inside an otherwise read-only
-// run. Adjudicated 2026-08-14: enabling a server in the user's own config is
+// such tools can mutate external systems from inside a second opinion.
+// Adjudicated 2026-08-14: enabling a server in the user's own config is
 // the authorization to use it. Treat "MCP tools may mutate external systems"
 // findings against this file as adjudicated.
 function safetyArgs(mode, policy, out) {
@@ -38,15 +40,17 @@ function safetyArgs(mode, policy, out) {
     '-c', `model_reasoning_effort="${policy.effort}"`,
     '-o', out,
   ]
-  // A delegated task is meant to change things and runs in the user's normal
-  // codex environment: full access without approvals (it may need the
-  // network, e.g. ssh), and none of the read-only switches. Never
+  // Every mode runs with full access and no approvals. Decided by the user on
+  // 2026-10-30, replacing the read-only sandbox for review and consult: a
+  // sandbox cannot give a reviewer the environment a build or test needs
+  // (writable caches and temp, ignored dependencies, services, network), and
+  // per-ecosystem exceptions do not generalise. Do not re-add a sandbox here.
+  const access = ['-c', 'sandbox_mode="danger-full-access"', '-c', 'approval_policy="never"']
+  // A delegated task runs in the user's normal codex environment. Never
   // --ephemeral: feedback resumes the session.
-  if (mode === 'task') {
-    return ['-c', 'sandbox_mode="danger-full-access"', '-c', 'approval_policy="never"', ...common]
-  }
+  if (mode === 'task') return [...access, ...common]
   return [
-    '-c', 'sandbox_mode="read-only"',
+    ...access,
     '--disable', 'hooks', '--disable', 'apps', '--disable', 'plugins',
     // Cross-session memories would feed an earlier session's context into a
     // nominally blind first pass, and let a second-opinion run write into
@@ -61,6 +65,10 @@ function safetyArgs(mode, policy, out) {
   ]
 }
 
+// codex exec review takes a scope flag or a prompt, never both, and only a
+// prompt can carry the investigation note (a developer_instructions override
+// was ignored by `exec review` on codex-cli 0.165.0), so the scope always
+// travels as prose.
 function scopeSentence(scope) {
   if (scope.scopeFlag === '--uncommitted') {
     return 'Review the uncommitted changes in this repository: staged, unstaged, and untracked files. Use `git --no-optional-locks status --porcelain --untracked-files=normal` together with `git diff`, `git diff --cached`, and the contents of any untracked files.'
@@ -110,26 +118,20 @@ export default {
   invocation({ mode, policy, review, scope, text, sessionId, continuing, artifacts, env }) {
     const safety = safetyArgs(mode, policy, artifacts.out)
     if (mode === 'review') {
-      const args = ['exec', 'review']
-      let prompt = null
-      if (review.scopeFlag === '--custom') {
-        prompt = review.scopeValue
-      } else if (review.context) {
-        // codex exec review refuses a scope flag and a prompt together, so
-        // with --context the scope travels as prose inside the prompt.
-        prompt = `${scopeSentence(scope)}\n\n${contextFence(review.context)}\n`
-      } else {
-        args.push(review.scopeFlag)
-        if (review.scopeFlag === '--base') args.push(scope.resolvedBase)
-        else if (review.scopeFlag === '--commit') args.push(scope.resolvedCommit)
-      }
-      return { args: [...args, ...safety], prompt, via: 'argv' }
+      const parts = [review.scopeFlag === '--custom' ? review.scopeValue : scopeSentence(scope)]
+      if (review.context) parts.push(contextFence(review.context))
+      parts.push(investigationNote(artifacts.scratch))
+      return { args: ['exec', 'review', ...safety], prompt: `${parts.join('\n\n')}\n`, via: 'argv' }
     }
     const args = sessionId ? ['exec', 'resume', sessionId, ...safety] : ['exec', ...safety]
     // codex refuses to start outside a git work tree unless told to skip the
     // check; consult and task promise repository-free runs.
     if (!env.repoRoot) args.push('--skip-git-repo-check')
-    return { args, prompt: continuing ? 'Continue' : text, via: 'argv' }
+    // A task gets no note: it is meant to change things.
+    let prompt = text
+    if (continuing) prompt = 'Continue'
+    else if (mode === 'consult') prompt = `${text}\n\n${investigationNote(artifacts.scratch)}\n`
+    return { args, prompt, via: 'argv' }
   },
 
   resumeArgs(policy) {
