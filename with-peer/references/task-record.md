@@ -22,7 +22,7 @@ Budgets: review <used>/<limit> · design follow-ups <used>/2
 - **Outcome:** succeeded, failed or cancelled.
 - **Reviewed state:** the commit SHA when the reviewed change was
   committed and the task paths were clean; otherwise "uncommitted" plus
-  the wrapper's `snapshot:` or `identity:` value when printed.
+  the wrapper's `identity:` value when printed.
 - Finding IDs (F1, F2, …) stay stable across rounds.
 
 ## Recovery

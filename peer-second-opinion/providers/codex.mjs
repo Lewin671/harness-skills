@@ -1,6 +1,5 @@
-// Provider: the OpenAI codex CLI. Native `codex exec review` for reviews,
-// isolated review snapshots, a pinned model+effort pair, and capacity
-// retries. Every mode runs without a sandbox; review and consult carry the
+// Provider: the OpenAI codex CLI. Native `codex exec review` for reviews, a
+// pinned model+effort pair, and capacity retries. Every mode runs without a sandbox; review and consult carry the
 // shared investigation note instead.
 
 import { die, EXIT, flat, readText, shellQuote } from '../lib/core.mjs'
@@ -87,7 +86,6 @@ export default {
   name: 'Codex',
   prefix: 'codex> ',
   binary: { name: 'codex', envVar: 'CODEX_BIN' },
-  snapshot: true,
   reviewDiff: false,
   retryDelays: [15000, 30000, 60000],
   options: {},

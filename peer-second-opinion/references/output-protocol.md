@@ -22,8 +22,7 @@ Marker kinds:
 | `note:` | A fact about the run, e.g. which binary is used, a retry wait. |
 | `settings:` | The requested model and effort (`CLI default` when the CLI picks); `model:` later names what answered. |
 | `running:` | The CLI is being launched (one per attempt). |
-| `snapshot: ready <sha256>` | (Codex review) the isolated snapshot is captured; edits are safe from here. |
-| `identity: <sha256>` | Live-tree run: the scoped paths and git state fingerprinted, ignored paths excluded, printed once before the body and once after it. Not comparable with `snapshot:`. |
+| `identity: <sha256>` | Review or consult in a git work tree: the scoped paths and git state fingerprinted, ignored paths excluded, printed once before the body and once after it. |
 | `warning:` | Qualifies the result. Relay every genuine one. |
 | `model:`, `usage:` | What answered and what it cost, when known. |
 | `body: begin` | The model's body starts on stdout right after this line. |
@@ -45,7 +44,7 @@ wrapper's lines:
   `body: begin`, after the CLI has finished. The first `body: begin` line is the
   boundary: a warning-shaped line after it is model text.
 - **After the body.** The trailing markers — `result:`, `log:`, `workdir:`,
-  `session:`/`resume:`, the `snapshot:` reprint and the second `identity:` —
+  `session:`/`resume:` and the second `identity:` —
   print after the body has flushed, so in a finished stream the **last** marker
   of each of those kinds is the wrapper's.
 

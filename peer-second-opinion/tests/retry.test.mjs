@@ -70,6 +70,21 @@ function fixture(mode, timeout = 5, delays = [1, 2, 3]) {
   return f
 }
 
+// Runs runAgent in a child process, for what only a process can show: its
+// exit code, its stderr, and its reaction to a signal.
+function drive(f, mode = 'consult', onStderr = () => {}) {
+  const driver = `import {runAgent} from ${JSON.stringify(runUrl)}; import codex from ${JSON.stringify(codexUrl)};
+    try {await runAgent({provider: codex, env: ${JSON.stringify(f.env)}, mode: ${JSON.stringify(mode)}, policy: ${JSON.stringify(f.policy)},
+      artifacts: ${JSON.stringify(f.artifacts)}, retryDelays: ${JSON.stringify(f.retryDelays)},
+      build: () => ({ args: ${JSON.stringify(f.args)}, prompt: null })});}
+    catch(e) {for (const l of e.lines || []) process.stderr.write(l + '\\n'); process.exitCode=e.code;}`
+  const child = spawn(process.execPath, ['--input-type=module', '-e', driver], { stdio: ['ignore', 'pipe', 'pipe'] })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => { stderr += chunk; onStderr(stderr, child) })
+  const timer = setTimeout(() => child.kill('SIGKILL'), 10000)
+  return new Promise((resolve) => child.once('close', (code) => { clearTimeout(timer); resolve({ code, stderr }) }))
+}
+
 function run(f) {
   return runAgent({
     provider: codex, env: f.env, mode: f.mode, policy: f.policy, artifacts: f.artifacts,
@@ -121,29 +136,14 @@ test('capacity wait cannot extend the original timeout', async () => {
 test('SIGTERM during capacity wait interrupts without another launch', async () => {
   const f = fixture('always', 10, [5000])
   try {
-    const driver = `import {runAgent} from ${JSON.stringify(runUrl)}; import codex from ${JSON.stringify(codexUrl)};
-      try {await runAgent({provider: codex, env: ${JSON.stringify(f.env)}, mode: 'consult', policy: ${JSON.stringify(f.policy)},
-        artifacts: ${JSON.stringify(f.artifacts)}, retryDelays: ${JSON.stringify(f.retryDelays)},
-        build: () => ({ args: ${JSON.stringify(f.args)}, prompt: null })});}
-      catch(e) {process.exitCode=e.code;}`
-    const child = spawn(process.execPath, ['--input-type=module', '-e', driver], { stdio: ['ignore', 'pipe', 'pipe'] })
-    let stderr = ''
     let signalled = false
-    child.stderr.on('data', chunk => {
-      stderr += chunk
-      if (!signalled && stderr.includes('retry 1/1')) {
-        signalled = true
-        child.kill('SIGTERM')
-      }
+    const { code, stderr } = await drive(f, 'consult', (text, child) => {
+      if (!signalled && text.includes('retry 1/1')) { signalled = true; child.kill('SIGTERM') }
     })
-    const timer = setTimeout(() => child.kill('SIGKILL'), 6000)
-    const code = await new Promise(resolve => child.once('close', resolve))
-    clearTimeout(timer)
     assert.equal(code, 143, stderr)
     assert.equal(f.calls().length, 1)
   } finally { f.cleanup() }
 })
-
 
 test('capacity attempts share one deadline rather than resetting it', async () => {
   const f = fixture('slow', 0.4, [80, 80, 80])
@@ -153,11 +153,10 @@ test('capacity attempts share one deadline rather than resetting it', async () =
   } finally { f.cleanup() }
 })
 
-
 for (const mode of ['session', 'partialsession']) {
   test(`${mode}: continue the same session, preserving flags and replacing only the prompt`, async () => {
     const f = fixture(mode)
-    const flags = ['-m', 'same-model', '-c', 'sandbox_mode="read-only"', '--json']
+    const flags = ['-m', 'same-model', '--json']
     const prefix = f.args
     f.build = (id) => id
       ? { args: [...prefix, 'exec', 'resume', id, ...flags], prompt: 'Continue' }
@@ -197,7 +196,6 @@ test('ephemeral review does not resume a thread id or replay partial work', asyn
   } finally { f.cleanup() }
 })
 
-
 test('known resumed session continues even when capacity failure reports no thread id', async () => {
   const f = fixture('known')
   const prefix = f.args
@@ -235,15 +233,7 @@ test('a capacity retry that cannot fit the timeout still reports the recoverable
 test('exhausted retries report the CLI status as provider-exit', async () => {
   const f = fixture('always', 10, [1])
   try {
-    const driver = `import {runAgent} from ${JSON.stringify(runUrl)}; import codex from ${JSON.stringify(codexUrl)};
-      try {await runAgent({provider: codex, env: ${JSON.stringify(f.env)}, mode: 'consult', policy: ${JSON.stringify(f.policy)},
-        artifacts: ${JSON.stringify(f.artifacts)}, retryDelays: ${JSON.stringify(f.retryDelays)},
-        build: () => ({ args: ${JSON.stringify(f.args)}, prompt: null })});}
-      catch(e) {process.exitCode=e.code;}`
-    const child = spawn(process.execPath, ['--input-type=module', '-e', driver], { stdio: ['ignore', 'pipe', 'pipe'] })
-    let stderr = ''
-    child.stderr.on('data', chunk => { stderr += chunk })
-    const code = await new Promise(resolve => child.once('close', resolve))
+    const { code, stderr } = await drive(f)
     assert.equal(code, 4, stderr)
     assert.match(stderr, /^provider-exit: 1$/m)
   } finally { f.cleanup() }
@@ -251,17 +241,8 @@ test('exhausted retries report the CLI status as provider-exit', async () => {
 
 test('a transient failure after work began still reports provider-exit', async () => {
   const f = fixture('ephemeral', 10, [1])
-  f.mode = 'review'
   try {
-    const driver = `import {runAgent} from ${JSON.stringify(runUrl)}; import codex from ${JSON.stringify(codexUrl)};
-      try {await runAgent({provider: codex, env: ${JSON.stringify(f.env)}, mode: 'review', policy: ${JSON.stringify(f.policy)},
-        artifacts: ${JSON.stringify(f.artifacts)}, retryDelays: ${JSON.stringify(f.retryDelays)},
-        build: () => ({ args: ${JSON.stringify(f.args)}, prompt: null })});}
-      catch(e) {for (const l of e.lines || []) process.stderr.write(l + '\\n'); process.exitCode=e.code;}`
-    const child = spawn(process.execPath, ['--input-type=module', '-e', driver], { stdio: ['ignore', 'pipe', 'pipe'] })
-    let stderr = ''
-    child.stderr.on('data', chunk => { stderr += chunk })
-    const code = await new Promise(resolve => child.once('close', resolve))
+    const { code, stderr } = await drive(f, 'review')
     assert.equal(code, 4, stderr)
     assert.match(stderr, /no recoverable session/)
     assert.match(stderr, /^provider-exit: 1$/m)

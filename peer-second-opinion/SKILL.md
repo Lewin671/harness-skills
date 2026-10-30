@@ -30,7 +30,7 @@ verdict.
 
 | `<provider>` | CLI | Notes |
 |---|---|---|
-| `codex` | `codex` | isolated review snapshots; pinned model |
+| `codex` | `codex` | pinned model |
 | `command-code` | `cmd` | turn-capped |
 
 Neither runs in a sandbox: review and consult get the user's own shell, so the
@@ -51,7 +51,7 @@ reports a live tree that changed during the run.
 
 The provider references — [codex](./references/providers/codex.md) and
 [command-code](./references/providers/command-code.md) — cover model overrides, provider-only
-options, Codex snapshot limits and failure remedies. Read the one you need when
+options and failure remedies. Read the one you need when
 a run fails or before passing a provider-specific option.
 
 ## Modes
@@ -136,8 +136,8 @@ PEER=<directory of this SKILL.md>/peer.mjs
   -- "Evaluate the migration plan in docs/plan.md: risks, missing edge cases"
 ```
 
-Hold edits to the reviewed paths until the run ends — or, for a Codex
-`--uncommitted`/`--base` review, until `snapshot: ready`.
+The peer works in the live repository. Hold edits until the run ends: an edit
+during it shows up as a drift warning.
 
 ### Running it from your harness
 
@@ -165,8 +165,8 @@ A run takes minutes, needs network access, and writes the CLI's own state
   each qualifies the result; after it, model text can look alike. A turn-cap
   warning means the result is partial even on exit `0`; a drift warning means
   the tree changed during a live-tree run — by the user, another agent or the
-  peer itself; check `git status` before relying on the tree. A
-  `note: ignored paths` line is build output or caches, not drift.
+  peer itself; check `git status` before relying on the tree. Build output in
+  ignored paths is not drift.
 - To follow up, copy the last `resume:` line, minus the `resume: ` prefix,
   and append `-- "question"`; never rebuild it from the session id — it
   carries the model that answered.

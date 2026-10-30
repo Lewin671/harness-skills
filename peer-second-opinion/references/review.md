@@ -25,11 +25,9 @@ changes" as an answer that reads like a pass. `--custom` gets no such check.
 
 ## What the peer reads
 
-A Codex `--uncommitted` or `--base` review reads an isolated snapshot; edits
-are safe once `snapshot: ready` prints (limits in
-[providers/codex.md](./providers/codex.md)). Every other review reads the live
-tree, fingerprinted as `identity:`. Command Code gets the scope's `git diff`
-in its prompt, cut at 400,000 bytes.
+Every review reads the live tree, with its installed dependencies, and is
+fingerprinted as `identity:`. Command Code gets the scope's `git diff` in its
+prompt, cut at 400,000 bytes; Codex reads the diff itself.
 
 ## --custom and --context
 
@@ -76,5 +74,5 @@ line continues it in consult mode. Both are **deliberation**.
 
 Beyond SKILL.md § Independence Contract: account for every finding with its
 priority, file and line range, and say what was reviewed — only `--commit`
-names an immutable object; a snapshot or an `identity:` value ties the other
-scopes to the bytes read.
+names an immutable object; an `identity:` value ties the other scopes to the
+bytes read.

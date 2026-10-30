@@ -24,8 +24,7 @@ import {
   UUID,
 } from './lib/core.mjs'
 import { runAgent } from './lib/run.mjs'
-import { consultScope, fingerprintScope, ignoredDigest, resolveScope } from './lib/scope.mjs'
-import { createReviewSnapshot } from './lib/snapshot.mjs'
+import { consultScope, fingerprintScope, resolveScope } from './lib/scope.mjs'
 import { PROVIDERS } from './providers/index.mjs'
 
 const MODES = ['review', 'consult', 'task']
@@ -252,54 +251,39 @@ async function main(argv) {
   const { provider, mode, policy, review, text } = run
   const env = createEnvironment(policy.repo, provider, { requireWorkTree: mode === 'review' })
 
-  // Review and consult are tied to the bytes they saw: an isolated snapshot where
-  // the provider supports one, otherwise a before/after fingerprint of the
-  // live tree. A task is meant to change the tree, so it gets neither.
+  // Review and consult are tied to the bytes they saw by a before/after
+  // fingerprint of the live tree. A task is meant to change the tree.
   let scope = null
   if (mode === 'review') scope = resolveScope(review, env, { diff: provider.reviewDiff })
   else if (mode === 'consult' && env.repoRoot) scope = consultScope(env)
-  const snapshot = mode === 'review' && provider.snapshot && ['--uncommitted', '--base'].includes(review.scopeFlag)
-    ? createReviewSnapshot(scope, env)
-    : null
-  const before = scope && !snapshot ? fingerprintScope(env, scope) : ''
-  const ignoredBefore = before ? ignoredDigest(env) : ''
+  const before = scope ? fingerprintScope(env, scope) : ''
 
-  const runEnv = snapshot?.env || env
-  let artifacts
-  let outcome
-  try {
-    artifacts = createArtifacts(env, provider.id, mode)
-    outcome = await runAgent({
-      provider, env: runEnv, mode, policy, artifacts,
-      build: (sessionId, continuing) => provider.invocation({
-        mode, policy, review, scope, text, sessionId, continuing, artifacts, env: runEnv,
-      }),
-      onTimeout: (state) => {
-        if (mode === 'task') {
-          const dir = workdirOf(run, env, state)
-          process.stderr.write(dir ? `workdir: ${flat(dir)}\n` : 'workdir: unavailable — the CLI did not report the worktree it created\n')
-        }
-        if (!provider.resumeMode(mode)) return
-        writeResume(run, state, mode === 'task' ? workdirOf(run, env, state) : env.cwd)
-        if (state.sessionId) {
-          process.stderr.write('hint: the session survives the timeout; resume it, but have it check the current state first — it cannot tell how far the interrupted step got.\n')
-        }
-      },
-    })
-  } finally {
-    snapshot?.cleanup()
-  }
+  const artifacts = createArtifacts(env, provider.id, mode)
+  const outcome = await runAgent({
+    provider, env, mode, policy, artifacts,
+    build: (sessionId, continuing) => provider.invocation({
+      mode, policy, review, scope, text, sessionId, continuing, artifacts, env,
+    }),
+    onTimeout: (state) => {
+      if (mode === 'task') {
+        const dir = workdirOf(run, env, state)
+        process.stderr.write(dir ? `workdir: ${flat(dir)}\n` : 'workdir: unavailable — the CLI did not report the worktree it created\n')
+      }
+      if (!provider.resumeMode(mode)) return
+      writeResume(run, state, mode === 'task' ? workdirOf(run, env, state) : env.cwd)
+      if (state.sessionId) {
+        process.stderr.write('hint: the session survives the timeout; resume it, but have it check the current state first — it cannot tell how far the interrupted step got.\n')
+      }
+    },
+  })
 
-  // Paths inside the snapshot mean nothing to the caller; report the
-  // source repository's instead.
-  const output = snapshot ? outcome.output.replaceAll(snapshot.env.repoRoot, env.repoRoot) : outcome.output
+  const { output } = outcome
   try {
     writeFileSync(artifacts.out, output.endsWith('\n') ? output : `${output}\n`, { mode: 0o600 })
   } catch (error) {
     die(EXIT.failed, `error: could not write the result file: ${flat(error.message)}`)
   }
   const after = before ? fingerprintScope(env, scope) : ''
-  const ignoredAfter = before ? ignoredDigest(env) : ''
 
   // Everything that qualifies the result prints before `body: begin`.
   if (before) process.stderr.write(`identity: ${before}\n`)
@@ -307,9 +291,6 @@ async function main(argv) {
   for (const warning of outcome.warnings) process.stderr.write(`warning: ${flat(warning)}\n`)
   if (before && after !== before) {
     process.stderr.write(`warning: the tree changed while this run was in progress (identity ${before} is not ${after}); the answer describes no single stable state. Check ${flat(env.repoRoot)} for edits the run may have made.\n`)
-  }
-  if (ignoredBefore !== ignoredAfter) {
-    process.stderr.write('note: ignored paths (build output, caches) appeared or disappeared during the run; the identity covers tracked and untracked files only.\n')
   }
   if (outcome.sessionId && !UUID.test(outcome.sessionId)) {
     process.stderr.write('warning: the stream reported a session id that is not a UUID; not advertising a resume command for it\n')
@@ -330,7 +311,6 @@ async function main(argv) {
   process.stderr.write(`log: ${artifacts.log}\n`)
   if (mode === 'task') process.stderr.write(workdir ? `workdir: ${flat(workdir)}\n` : 'workdir: unavailable — the CLI did not report the worktree it created\n')
   if (provider.resumeMode(mode)) writeResume(run, outcome, mode === 'task' ? workdir : env.cwd)
-  if (snapshot) process.stderr.write(`snapshot: ready ${snapshot.fingerprint}\n`)
   if (after) process.stderr.write(`identity: ${after}\n`)
 }
 

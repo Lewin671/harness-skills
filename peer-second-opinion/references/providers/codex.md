@@ -31,30 +31,6 @@ carry the note.
 A task runs in the user's normal codex setup — hooks, plugins, memories and MCP
 included — with no note.
 
-## Review snapshots
-
-For `--uncommitted` and `--base` the wrapper builds an isolated local clone,
-overlays the changed tracked files (plus non-ignored untracked files for
-`--uncommitted`), preserves the index separately, verifies the source and
-copied bytes match, and prints `snapshot: ready <sha256>`. Edits to the source
-are safe after that marker; the clone is removed after the run, and paths
-inside it are rewritten to the source repository in the report.
-
-- An unchanged submodule appears as an empty directory, and ignored untracked
-  files (a local `.env`, installed dependencies such as `node_modules` or
-  `.venv`, build output) never enter it, so a build or test there may fail for
-  want of them. A review that needs them should use `--commit` if committed,
-  otherwise `--custom` naming the comparison (for example "the staged,
-  unstaged and untracked changes"); both run in the live tree.
-- Embedded repositories, changed symlinks that resolve outside the clone, and
-  any symlink that resolves back into the live source repository fail with exit
-  `3`. An unchanged symlink pointing elsewhere (a dotfiles repository linking
-  into `$HOME`) is tolerated.
-- The snapshot is retried once if the tree changes while it is copied, then
-  fails rather than use an unstable capture. Snapshot and preflight git steps
-  have their own 120 s budget; for a repository too large to clone in that,
-  review with `--commit`.
-
 ## Model
 
 The wrapper pins a high-capability model at the `high` effort tier. Override it

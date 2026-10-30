@@ -123,8 +123,6 @@ export function createEnvironment(repo, provider, { requireWorkTree = true } = {
     repoRoot: null,
     bin: null,
     scratch: null,
-    // `this`, not the closure, so a copy with another cwd (the review
-    // snapshot) runs its git calls there.
     command(command, args, options = {}) {
       const result = spawnSync(command, args, {
         cwd: this.cwd,

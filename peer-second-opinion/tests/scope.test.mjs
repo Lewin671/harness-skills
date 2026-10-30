@@ -127,6 +127,20 @@ test('a file that appears after the scope was resolved still changes the identit
   }
 })
 
+test('a deleted path, or one whose directory became a file, fingerprints as absent', () => {
+  const swap = join(root, 'dir-to-file')
+  mkdirSync(join(swap, 'dir'), { recursive: true })
+  writeFileSync(join(swap, 'dir', 'old.js'), 'old\n')
+  writeFileSync(join(swap, 'gone.txt'), 'gone\n')
+  sh('git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -q -m init', swap)
+  // dir/old.js is now under a file (ENOTDIR); gone.txt does not exist (ENOENT)
+  sh('git rm -q -r dir gone.txt && echo now-a-file > dir && git add dir', swap)
+  const env = makeEnv(swap)
+  const scope = uncommitted(env)
+  assert.deepEqual(scope.paths, ['dir', 'dir/old.js', 'gone.txt'])
+  assert.equal(fingerprintScope(env, scope), fingerprintScope(env, scope))
+})
+
 test('a symlink target is part of the identity and is not followed', () => {
   const outside = join(root, 'outside.txt')
   writeFileSync(outside, 'outside\n')

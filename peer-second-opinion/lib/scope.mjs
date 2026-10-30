@@ -5,9 +5,8 @@
 // fingerprint those paths before and after a live-tree run so a result can
 // be tied to the bytes it actually saw.
 //
-// The fingerprint is a detector, not a lock: a provider that reads the live
-// tree has a shell, so drift is reported after the fact rather than
-// prevented. Isolation, where a provider supports it, is lib/snapshot.mjs.
+// The fingerprint is a detector, not a lock: the peer has a shell, so drift is
+// reported after the fact rather than prevented.
 
 import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync, readlinkSync } from 'node:fs'
@@ -20,7 +19,7 @@ import { die, EXIT, flat } from './core.mjs'
 // context ceiling for no extra signal.
 export const MAX_DIFF_BYTES = 400000
 
-export const CONTEXT_FENCE = 'CALLER-BACKGROUND'
+const CONTEXT_FENCE = 'CALLER-BACKGROUND'
 
 // Every scope git call runs from the repository root: `ls-files --others`
 // lists only the current directory's subtree, relative to it, when run from
@@ -29,11 +28,11 @@ function git(env, args) {
   return env.git(['-C', env.repoRoot, '--no-optional-locks', ...args])
 }
 
-export function nulList(output) {
+function nulList(output) {
   return output.split('\0').filter(Boolean)
 }
 
-export function safePath(root, path) {
+function safePath(root, path) {
   if (!path || isAbsolute(path)) die(EXIT.usage, `error: unsafe path in git output: ${flat(path)}`)
   const target = resolve(root, path)
   const rel = relative(root, target)
@@ -58,7 +57,7 @@ function mustList(env, args, what) {
 
 const LIST = ['--name-only', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none']
 
-export function changedSet(env) {
+function changedSet(env) {
   // Before the first commit there is no HEAD to diff against: everything in
   // the index is staged.
   const unborn = git(env, ['rev-parse', '--verify', '--quiet', 'HEAD']).status !== 0
@@ -83,7 +82,6 @@ function newScope(scopeFlag, scopeValue) {
     status: '',
     diff: '',
     diffTruncated: false,
-    durable: false,
   }
 }
 
@@ -132,9 +130,6 @@ function resolveCommit(scope, env) {
     scope.paths = mustList(env, ['show', '--pretty=format:', '--name-only', '-z', scope.resolvedCommit], `list ${flat(scope.scopeValue)}`)
   }
   if (!scope.paths.length) die(EXIT.empty, `nothing to review: ${flat(scope.scopeValue)} is an empty commit`)
-  // The commit object is durable, but a live-tree reviewer reads the working
-  // tree, so those paths are still fingerprinted.
-  scope.durable = true
 }
 
 function submodulePaths(env) {
@@ -239,8 +234,7 @@ export function consultScope(env) {
 // would miss a file the run creates during the review — a path that was not
 // in the set when it was resolved is not in the set afterwards either.
 // Ignored paths are left out: a second opinion may build and test, and the
-// build output and caches that leaves are not drift. ignoredDigest tracks
-// them separately, for a note.
+// build output and caches that leaves are not drift.
 //
 // KNOWN BLIND SPOT — a change to an ignored file (a local `.env`, an
 // installed dependency) and any write under `.git/` leave this digest
@@ -296,13 +290,4 @@ export function contextFence(context) {
 <<<${CONTEXT_FENCE}
 ${body}
 ${CONTEXT_FENCE}`
-}
-
-// The names of the ignored paths, for a note when a run adds or removes some
-// (build output, caches). Names only: hashing ignored contents would make a
-// run's cost proportional to `node_modules`.
-export function ignoredDigest(env) {
-  const status = git(env, ['status', '--porcelain=v1', '--untracked-files=normal', '--ignored=matching'])
-  const ignored = status.status === 0 ? status.stdout.split('\n').filter((line) => line.startsWith('!! ')) : []
-  return createHash('sha256').update(ignored.join('\n')).digest('hex')
 }

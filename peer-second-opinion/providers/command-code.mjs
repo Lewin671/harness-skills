@@ -41,7 +41,6 @@ export default {
   name: 'Command Code',
   prefix: 'cmd> ',
   binary: { name: 'cmd', envVar: 'COMMAND_CODE_BIN' },
-  snapshot: false,
   reviewDiff: true,
   retryDelays: [],
   options: {
