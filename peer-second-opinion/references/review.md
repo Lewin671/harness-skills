@@ -1,6 +1,6 @@
 # Review Mode
 
-`peer.mjs <provider> review` asks the peer for a prioritised defect list over a
+`peer.mjs codex review` asks the peer for a prioritised defect list over a
 code change.
 
 ## Scope
@@ -26,8 +26,8 @@ changes" as an answer that reads like a pass. `--custom` gets no such check.
 ## What the peer reads
 
 Every review reads the live tree, with its installed dependencies, and is
-fingerprinted as `identity:`. Command Code gets the scope's `git diff` in its
-prompt, cut at 400,000 bytes; Codex reads the diff itself.
+fingerprinted as `identity:`. The prompt names the scope; Codex reads the diff
+itself.
 
 ## --custom and --context
 
@@ -66,9 +66,8 @@ severe, down to `P3`. No bullets is not, by itself, a clean review:
 
 ## Following up
 
-A Codex review leaves no session: to discuss a finding, start a consult carrying
-it, or run a `--custom` review of it. A Command Code review's `resume:`
-line continues it in consult mode. Both are **deliberation**.
+A review leaves no session: to discuss a finding, start a consult carrying it,
+or run a `--custom` review of it. Both are **deliberation**.
 
 ## Reporting duties
 

@@ -1,9 +1,8 @@
 ---
 name: with-peer
 description: >-
-  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`)
-  or Command Code (`cmd`); either one is enough. Complete a code-changing task with the
-  peer as advisor and reviewer: the host writes all the code, the peer gives a
+  Requires peer-second-opinion and an authenticated Codex CLI (`codex`), the
+  peer. Complete a code-changing task with the peer as advisor and reviewer: the host writes all the code, the peer gives a
   blind design opinion first and then reviews the whole change, and every
   disagreement is settled by evidence rather than by vote. Trigger only when
   the user explicitly asks to work with the peer ("和 codex 一起完成这个任务",
@@ -11,13 +10,14 @@ description: >-
   run once invoked; a task that changes no repository code cannot pass the
   second. For a standalone review or question, use peer-second-opinion
   directly; to hand the peer the work itself, use delegate-to-peer.
+harnesses: [claude-code, command-code]
 ---
 
 # With Peer
 
 Complete one task through two checkpoints: a blind design consult, then a
 blind review of the whole task change. **The host writes all code; the peer
-only advises and reviews.** Peer choice, commands, output handling and labels
+only advises and reviews.** Commands, output handling and labels
 follow [peer-second-opinion](../peer-second-opinion/SKILL.md) — read its
 SKILL.md first, then [consult.md](../peer-second-opinion/references/consult.md)
 before the design call and
@@ -151,7 +151,7 @@ offer more budget, acceptance of the disclosed result, or a revised
 approach; acceptance does not make it verified.
 
 Every review invocation — initial, targeted, rerun, failed, unparseable,
-turn-capped or cancelled — consumes one of five attempts by default;
+or cancelled — consumes one of five attempts by default;
 settle its scope first, then count it before launching. The user may set
 another positive finite limit; never reset it when narrowing scope or
 recovering. Refuted findings and open P2/P3s alone never justify another
@@ -165,7 +165,7 @@ peer checkpoint with the host's own answer.
 
 - **Review exit `2`:** empty scope, not a pass — fix the scope within
   budget or report the checkpoint incomplete.
-- **Failed, unparseable or turn-capped:** rerun once only for a transient
+- **Failed or unparseable:** rerun once only for a transient
   cause (the parent's § Exit Codes); if it fails again, the checkpoint is
   incomplete. A missing design checkpoint blocks implementation.
 - **Budgets:** rerunning the first blind consult uses no budget and stays

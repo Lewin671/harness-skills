@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { MAX_DIFF_BYTES, consultScope, fingerprintScope, resolveScope } from '../lib/scope.mjs'
+import { consultScope, fingerprintScope, resolveScope } from '../lib/scope.mjs'
 
 let root
 let repo
@@ -65,15 +65,11 @@ test('--uncommitted covers untracked files while --base does not', () => {
   try {
     const dirty = uncommitted()
     assert.deepEqual(dirty.paths, ['tracked.txt', 'untracked.txt'])
-    assert.deepEqual(dirty.untracked, ['untracked.txt'])
     // --base reports the tracked change since the merge base and ignores an
-    // unrelated untracked file. Its diff is the resolved one, not an empty
-    // string assembled from an unresolved argument.
+    // unrelated untracked file.
     const base = resolveScope({ scopeFlag: '--base', scopeValue: 'HEAD' }, makeEnv(repo))
     assert.deepEqual(base.paths, ['tracked.txt'])
-    assert.deepEqual(base.untracked, [])
-    assert.match(base.diff, /-committed/)
-    assert.match(base.diff, /\+changed/)
+    assert.match(base.resolvedBase, /^[0-9a-f]{40}$/)
   } finally {
     rmSync(join(repo, 'untracked.txt'), { force: true })
     writeFileSync(join(repo, 'tracked.txt'), 'committed\n')
@@ -161,29 +157,11 @@ test('a symlink target is part of the identity and is not followed', () => {
   }
 })
 
-test('an oversized diff is capped and flagged', () => {
-  const big = 'x'.repeat(MAX_DIFF_BYTES + 20000)
-  writeFileSync(join(repo, 'big.txt'), `${big}\n`)
-  sh('git add big.txt && git -c user.email=t@t -c user.name=t commit -q -m big')
-  try {
-    // The commit that adds the huge file: its diff is one enormous line pair.
-    const scope = resolveScope({ scopeFlag: '--commit', scopeValue: 'HEAD' }, makeEnv(repo))
-    assert.equal(scope.diffTruncated, true)
-    assert.ok(scope.diff.includes('diff truncated at'), scope.diff.slice(-200))
-    assert.ok(Buffer.byteLength(scope.diff, 'utf8') < MAX_DIFF_BYTES + 2000)
-  } finally {
-    sh('git reset -q --hard HEAD~1')
-    rmSync(join(repo, 'big.txt'), { force: true })
-  }
-})
-
-test('a root commit (no parent) resolves and diffs through git show', () => {
+test('a root commit (no parent) resolves without a parent', () => {
   const rootCommit = sh('git rev-list --max-parents=0 HEAD').trim()
   const scope = resolveScope({ scopeFlag: '--commit', scopeValue: rootCommit }, makeEnv(repo))
   assert.deepEqual(scope.paths, ['tracked.txt'])
   assert.equal(scope.resolvedParent, '')
-  assert.match(scope.diff, /\+committed/)
-  assert.equal(scope.diffTruncated, false)
 })
 
 test('consult takes a tolerant changed-set identity and refuses nothing', () => {
@@ -222,7 +200,6 @@ test('--base on a clean tree covers the branch commits, not just working changes
     // empty one.
     const scope = resolveScope({ scopeFlag: '--base', scopeValue: base }, makeEnv(repo))
     assert.deepEqual(scope.paths, ['branch.txt'])
-    assert.match(scope.diff, /\+on the branch/)
     // A dirty tree adds its tracked changes to the committed ones.
     writeFileSync(join(repo, 'tracked.txt'), 'changed\n')
     const dirty = resolveScope({ scopeFlag: '--base', scopeValue: base }, makeEnv(repo))
@@ -232,11 +209,10 @@ test('--base on a clean tree covers the branch commits, not just working changes
   }
 })
 
-test('--custom carries the current uncommitted diff', () => {
+test('--custom covers the current uncommitted changes', () => {
   writeFileSync(join(repo, 'tracked.txt'), 'changed\n')
   try {
     const scope = resolveScope({ scopeFlag: '--custom', scopeValue: 'check the guard' }, makeEnv(repo))
-    assert.match(scope.diff, /\+changed/)
     assert.deepEqual(scope.paths, ['tracked.txt'])
   } finally {
     writeFileSync(join(repo, 'tracked.txt'), 'committed\n')
@@ -250,7 +226,7 @@ test('scope paths are repository-relative even from a subdirectory', () => {
     const env = makeEnv(repo)
     env.cwd = join(repo, 'sub')
     const scope = resolveScope({ scopeFlag: '--uncommitted', scopeValue: '' }, env)
-    assert.deepEqual(scope.untracked, ['top-untracked.txt'])
+    assert.deepEqual(scope.paths, ['top-untracked.txt'])
   } finally {
     rmSync(join(repo, 'top-untracked.txt'), { force: true })
     rmSync(join(repo, 'sub'), { recursive: true, force: true })

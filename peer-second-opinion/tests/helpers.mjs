@@ -1,6 +1,6 @@
-// Shared fixtures for the peer.mjs tests: a git repository, fake codex and
-// cmd CLIs, and a runner. The fakes record every invocation as one JSON line
-// ({ argv, stdin }) in FAKE_LOG; FAKE_* variables steer what they print:
+// Shared fixtures for the peer.mjs tests: a git repository, a fake codex CLI,
+// and a runner. The fake records every invocation as one JSON line ({ argv })
+// in FAKE_LOG; FAKE_* variables steer what it prints:
 //
 //   FAKE_SESSION_ID  session they report (default SESSION); FAKE_NO_SESSION
 //   FAKE_RESULT_TEXT body text; FAKE_BIG_RESULT a 20000-line body; FAKE_NO_RESULT
@@ -8,12 +8,11 @@
 //   FAKE_SLEEP       seconds to stall after reporting the session
 //   FAKE_SPAWN_CHILD file to write the pid of a `sleep 300` grandchild into
 //   FAKE_WRITE       file to create during the run (drift, build output)
-//   codex only:      FAKE_EVENT one extra raw stdout line
-//   cmd only:        FAKE_MODEL, FAKE_SUBTYPE, FAKE_ERROR_TEXT, FAKE_WORKDIR, FAKE_BLOCKED
+//   FAKE_EVENT       one extra raw stdout line
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -25,14 +24,12 @@ export const OTHER_SESSION = '99999999-8888-7777-6666-555555555555'
 // and a Verification paragraph.
 export const NOTE = /This is a second opinion, run headlessly with the user's own shell and no sandbox\.[^]*Do not modify the repository[^]*no git state changes \(no commit, checkout, switch, reset, restore, stash[^]*starts with "Verification:"/
 
-const COMMON = `#!/usr/bin/env node
+const FAKE_CODEX = `#!/usr/bin/env node
 const fs = require('node:fs')
 const path = require('node:path')
 const env = process.env
 const argv = process.argv.slice(2)
-let stdin = ''
-try { stdin = fs.readFileSync(0, 'utf8') } catch {}
-if (env.FAKE_LOG) fs.appendFileSync(env.FAKE_LOG, JSON.stringify({ argv, stdin }) + '\\n')
+if (env.FAKE_LOG) fs.appendFileSync(env.FAKE_LOG, JSON.stringify({ argv }) + '\\n')
 if (env.FAKE_STDERR_TEXT) process.stderr.write(env.FAKE_STDERR_TEXT + '\\n')
 if (env.FAKE_WRITE) {
   fs.mkdirSync(path.dirname(env.FAKE_WRITE), { recursive: true })
@@ -47,53 +44,16 @@ const session = env.FAKE_SESSION_ID || '${SESSION}'
 const body = env.FAKE_BIG_RESULT
   ? Array.from({ length: 20000 }, (_, i) => 'model text line ' + i).join('\\n')
   : (env.FAKE_RESULT_TEXT || 'the fake result body')
-// Small frames before a stall go out synchronously; the sleep blocks the
-// event loop an async write would need.
 const frame = (value) => fs.writeSync(1, JSON.stringify(value) + '\\n')
-// Not process.exit(): a large stdout write to a pipe is asynchronous.
-const finish = () => { process.exitCode = Number(env.FAKE_EXIT || 0) }
-`
-
-const FAKE_CODEX = `${COMMON}
 if (argv[0] !== 'exec') process.exit(64)
 if (!env.FAKE_NO_SESSION) frame({ type: 'thread.started', thread_id: session })
 sleep()
 if (env.FAKE_EVENT) fs.writeSync(1, env.FAKE_EVENT + '\\n')
 process.stderr.write('free text from codex\\n')
 if (!env.FAKE_NO_RESULT) fs.writeFileSync(argv[argv.indexOf('-o') + 1], body + '\\n')
-finish()
+process.exitCode = Number(env.FAKE_EXIT || 0)
 `
 
-const FAKE_CMD = `${COMMON}
-const model = env.FAKE_MODEL || 'fake/model-1'
-if (!env.FAKE_NO_SESSION) frame({ type: 'event', event: { type: 'run_start', sessionId: session } })
-frame({ type: 'event', event: { type: 'model_request_start', model } })
-sleep()
-const lines = []
-if (env.FAKE_WORKDIR) {
-  lines.push({ type: 'event', event: { type: 'run_end', result: { nextState: { modState: { workspace: { cwd: env.FAKE_WORKDIR } } } } } })
-}
-lines.push({ type: 'event', event: { type: 'tool_queued', toolName: 'shell_command', input: { command: 'git log --oneline -1' } } })
-if (env.FAKE_BLOCKED) lines.push({ type: 'event', event: { type: 'tool_hook_blocked', toolName: 'shell_command' } })
-if (!env.FAKE_NO_RESULT) {
-  const subtype = env.FAKE_SUBTYPE || 'success'
-  const result = { type: 'result', subtype, usage: { inputTokens: 11, outputTokens: 3, cacheReadTokens: 1 }, durationMs: 7, finalText: body }
-  if (subtype === 'error') {
-    result.finalText = ''
-    result.error = env.FAKE_ERROR_TEXT || 'Error: something failed'
-  } else if (!env.FAKE_NO_SESSION) {
-    result.sessionId = session
-  }
-  lines.push(result)
-}
-process.stdout.write(lines.map((line) => JSON.stringify(line)).join('\\n') + '\\n')
-finish()
-`
-
-export const PROVIDERS = {
-  codex: { binary: 'codex', envVar: 'CODEX_BIN', source: FAKE_CODEX },
-  'command-code': { binary: 'cmd', envVar: 'COMMAND_CODE_BIN', source: FAKE_CMD },
-}
 
 export function sh(command, cwd) {
   const result = spawnSync('/bin/sh', ['-c', command], { cwd, encoding: 'utf8' })
@@ -110,60 +70,50 @@ export function makeRepo(dir) {
   return dir
 }
 
-export function installFake(dir, provider) {
+export function installFake(dir) {
   mkdirSync(dir, { recursive: true })
-  const path = join(dir, PROVIDERS[provider].binary)
-  writeFileSync(path, PROVIDERS[provider].source)
+  const path = join(dir, 'codex')
+  writeFileSync(path, FAKE_CODEX)
   chmodSync(path, 0o755)
   return path
 }
 
-// One fixture per test file: a scratch root, a repository, and both fakes in
-// a bin directory that also holds `node`, so a PATH of just that directory
-// still runs them.
+// One fixture per test file: a scratch root, a repository, and the fake.
 export function createFixture() {
   const root = mkdtempSync(join(tmpdir(), 'peer-test-'))
   mkdirSync(join(root, 'home'))
-  const bin = join(root, 'bin')
-  installFake(bin, 'codex')
-  installFake(bin, 'command-code')
-  symlinkSync(process.execPath, join(bin, 'node'))
+  const bin = installFake(join(root, 'bin'))
   const fixture = {
     root,
-    bin,
     repo: makeRepo(join(root, 'repo')),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
     // The environment a run gets; `env` entries override it, and an
     // undefined value removes a variable.
-    env(provider, env = {}) {
-      const merged = { PATH: process.env.PATH, HOME: join(root, 'home'), TMPDIR: root }
-      const known = PROVIDERS[provider]
-      if (known) merged[known.envVar] = join(bin, known.binary)
-      Object.assign(merged, env)
+    env(env = {}) {
+      const merged = { PATH: process.env.PATH, HOME: join(root, 'home'), TMPDIR: root, CODEX_BIN: bin, ...env }
       for (const key of Object.keys(merged)) if (merged[key] === undefined) delete merged[key]
       return merged
     },
-    // Runs peer.mjs and attaches what the fake saw: calls[i] = { argv, stdin,
-    // prompt } where prompt is stdin or the argv after `--`.
-    run(provider, args, { env = {}, cwd = fixture.repo } = {}) {
+    // Runs `peer.mjs codex` and attaches what the fake saw: calls[i] =
+    // { argv, prompt }, the prompt being the argument after `--`.
+    run(args, { env = {}, cwd = fixture.repo } = {}) {
       const log = join(mkdtempSync(join(root, 'log-')), 'calls.jsonl')
-      const result = spawnSync(process.execPath, [SCRIPT, provider, ...args], {
-        cwd, encoding: 'utf8', timeout: 60000, env: fixture.env(provider, { FAKE_LOG: log, ...env }),
+      const result = spawnSync(process.execPath, [SCRIPT, 'codex', ...args], {
+        cwd, encoding: 'utf8', timeout: 60000, env: fixture.env({ FAKE_LOG: log, ...env }),
       })
       result.calls = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map((line) => {
         const call = JSON.parse(line)
-        const dash = call.argv.indexOf('--')
-        call.prompt = call.stdin || (dash >= 0 ? call.argv.slice(dash + 1).join(' ') : '')
+        call.prompt = call.argv[call.argv.indexOf('--') + 1] ?? ''
         return call
       }) : []
       return result
     },
     // stdout and stderr merged through a real pipe, as a caller reading
     // `2>&1 | ...` sees them.
-    runMerged(provider, args, env = {}) {
+    runMerged(args, env = {}) {
       const file = join(mkdtempSync(join(root, 'merged-')), 'merged.txt')
-      const command = `"${process.execPath}" "${SCRIPT}" ${provider} ${args.join(' ')} 2>&1 | cat > "${file}"`
-      const result = spawnSync('/bin/sh', ['-c', command], { cwd: fixture.repo, encoding: 'utf8', timeout: 60000, env: fixture.env(provider, env) })
+      const command = `"${process.execPath}" "${SCRIPT}" codex ${args.join(' ')} 2>&1 | cat > "${file}"`
+      const result = spawnSync('/bin/sh', ['-c', command], { cwd: fixture.repo, encoding: 'utf8', timeout: 60000, env: fixture.env(env) })
       assert.equal(result.status, 0, result.stderr)
       return readFileSync(file, 'utf8')
     },

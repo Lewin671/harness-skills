@@ -7,11 +7,9 @@ output is enough for most runs.
 
 ## Streams and prefixes
 
-Progress streams to stderr: lines prefixed `codex> ` or `cmd> ` come from the
-CLI; unprefixed lines are the wrapper. Command Code's raw NDJSON frames are not
-echoed — only one `tool: <name> <command or path>` summary per tool call — but
-every frame is in the file named by `log:`. A failed run prints the log's last
-lines, cut to a bounded width. The result body arrives on stdout and in the
+Progress streams to stderr: lines prefixed `codex> ` come from the CLI;
+unprefixed lines are the wrapper. Every frame is also in the file named by
+`log:`. A failed run prints the log's last lines, cut to a bounded width. The result body arrives on stdout and in the
 result file; with separate streams, a marker-shaped line on stdout is model
 output.
 
@@ -24,12 +22,12 @@ Marker kinds:
 | `running:` | The CLI is being launched (one per attempt). |
 | `identity: <sha256>` | Review or consult in a git work tree: the scoped paths and git state fingerprinted, ignored paths excluded, printed once before the body and once after it. |
 | `warning:` | Qualifies the result. Relay every genuine one. |
-| `model:`, `usage:` | What answered and what it cost, when known. |
+| `model:` | The model that answered. |
 | `body: begin` | The model's body starts on stdout right after this line. |
 | `result:`, `log:` | Done: the result file and the event log. |
 | `workdir:` | (task) Where the work happened. |
 | `session:`, `resume:` | Continuation, or `unavailable — ...` sentinels. |
-| `provider-exit:` | The CLI's own exit code, whenever it was non-zero — on a failure, or beside a usable but partial result. |
+| `provider-exit:` | The CLI's own exit code, whenever it was non-zero. |
 | `error:`, `hint:` | A failed run: the reason and the remedy. |
 | `exit-status: N` | The wrapper's own exit code, always the last line of a run that ended without `SIGKILL`. |
 
@@ -51,7 +49,7 @@ wrapper's lines:
 ## Session and resume lines
 
 `session:`/`resume:` print on every successful run of a mode that leaves a
-session — a Codex consult or task, every Command Code run — as real values or as
+session — a consult or a task — as real values or as
 sentinels, so a model-written line cannot pose as them. A timeout (exit `5`)
 prints them too, because a killed session can still be resumed. Any other failed
 run prints neither.

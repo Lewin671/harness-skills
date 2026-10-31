@@ -10,7 +10,6 @@ import { writeFileSync, writeSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import {
-  binaryAvailable,
   createArtifacts,
   createEnvironment,
   die,
@@ -33,7 +32,6 @@ const DEFAULT_TIMEOUT = { review: 3000, consult: 3000, task: 7200 }
 const TOP_USAGE = `Usage: peer.mjs <provider> <review|consult|task> [ARGS]
 
 Providers: ${[...PROVIDERS.values()].map((p) => `${p.id} (runs ${p.binary.name})`).join(', ')}
-           auto (the first of these whose CLI is installed, in this order)
 
   review   a prioritised defect list over a code change (no edits)
   consult  one free-form question, answered with the repo as context (no edits)
@@ -47,10 +45,6 @@ const COMMON_OPTIONS = `  --model <MODEL>      run on a specific model (provider
   --timeout <SECONDS>  abort a hung run (default: 3000, task 7200; 1-86400)`
 
 function modeUsage(provider, mode) {
-  const extra = Object.entries(provider.options)
-    .filter(([, option]) => option.modes.includes(mode))
-    .map(([flag, option]) => `  ${`${flag}${option.value ? ` <${option.value}>` : ''}`.padEnd(20)} ${option.help}`)
-  const options = [COMMON_OPTIONS, ...extra].join('\n')
   if (mode === 'review') {
     return `Usage: peer.mjs ${provider.id} review [SCOPE] [OPTIONS]
 
@@ -63,7 +57,7 @@ Scope (at most one, default --uncommitted):
 
 Options:
   --context <TEXT>     neutral background for the reviewer
-${options}`
+${COMMON_OPTIONS}`
   }
   const noun = mode === 'task' ? 'TASK' : 'QUESTION'
   return `Usage: peer.mjs ${provider.id} ${mode} [OPTIONS] [--] ${noun}
@@ -73,22 +67,7 @@ must stand alone: a fresh run carries no conversation history.
 
 Options:
   --resume <SESSION>   continue a session with a follow-up ${noun}
-${options}`
-}
-
-// `auto` serves a user who has only one of the CLIs: it picks the first
-// registered provider whose binary can be found. Which CLI is the host is
-// the caller's to know — an inherited environment cannot tell.
-function autoProvider() {
-  const all = [...PROVIDERS.values()]
-  const provider = all.find((candidate) => binaryAvailable(candidate.binary))
-  if (!provider) {
-    die(EXIT.usage,
-      `error: auto found no peer CLI: none of ${all.map((p) => `'${p.binary.name}'`).join(', ')} is on an absolute PATH entry or named by ${all.map((p) => p.binary.envVar).join(' / ')}.`,
-      'hint: install one and authenticate it; if it works in your terminal, it may be a shell function or alias, which non-interactive shells do not load — export its *_BIN variable instead.')
-  }
-  const skipped = all.slice(0, all.indexOf(provider)).map((p) => `'${p.binary.name}'`)
-  return { provider, note: `note: auto selected ${provider.id}${skipped.length ? ` (${skipped.join(', ')} not found)` : ''}\n` }
+${COMMON_OPTIONS}`
 }
 
 function parse(argv) {
@@ -98,8 +77,7 @@ function parse(argv) {
     if (!providerId) die(EXIT.usage)
     die(EXIT.ok)
   }
-  const auto = providerId === 'auto'
-  if (!auto && !PROVIDERS.has(providerId)) die(EXIT.usage, `error: unknown provider: ${flat(providerId)}`, ...TOP_USAGE.split('\n'))
+  if (!PROVIDERS.has(providerId)) die(EXIT.usage, `error: unknown provider: ${flat(providerId)}`, ...TOP_USAGE.split('\n'))
   if (mode === '-h' || mode === '--help') {
     process.stderr.write(`${TOP_USAGE}\n`)
     die(EXIT.ok)
@@ -107,7 +85,7 @@ function parse(argv) {
   if (!MODES.includes(mode)) {
     die(EXIT.usage, mode ? `error: unknown mode: ${flat(mode)}` : 'error: a mode is required', ...TOP_USAGE.split('\n'))
   }
-  const { provider, note } = auto ? autoProvider() : { provider: PROVIDERS.get(providerId), note: '' }
+  const provider = PROVIDERS.get(providerId)
 
   const usage = modeUsage(provider, mode)
   const fail = (message) => die(EXIT.usage, message, ...usage.split('\n'))
@@ -144,9 +122,6 @@ function parse(argv) {
       i += 2
       continue
     }
-    if (auto && ['--resume', '--model', '--effort'].includes(option)) {
-      die(EXIT.usage, `error: auto does not take ${option}: sessions and models belong to one CLI; name the provider (a resume: line already does)`)
-    }
     if (mode !== 'review' && option === '--resume') {
       const value = valueOf(i)
       if (!UUID.test(value)) die(EXIT.usage, 'error: --resume needs the session id (a UUID) printed by the previous run')
@@ -162,18 +137,6 @@ function parse(argv) {
     if (option === '--timeout') {
       policy.timeout = parseWhole(valueOf(i), '--timeout', 86400)
       i += 2
-      continue
-    }
-    // Own properties only: a prompt such as "constructor" is not an option.
-    const extra = Object.hasOwn(provider.options, option) ? provider.options[option] : null
-    if (extra && extra.modes.includes(mode)) {
-      if (extra.value) {
-        extra.apply(policy, valueOf(i))
-        i += 2
-      } else {
-        extra.apply(policy)
-        i += 1
-      }
       continue
     }
     if (mode !== 'review' && option === '--') {
@@ -195,7 +158,6 @@ function parse(argv) {
     die(EXIT.usage, 'error: --context cannot be combined with --custom; custom instructions already carry their own context')
   }
   if (mode !== 'review' && !text) fail(`error: a non-empty ${mode === 'task' ? 'TASK' : 'QUESTION'} is required`)
-  process.stderr.write(note)
   provider.configure(policy, mode)
   if (/[\r\n]/.test(policy.model)) die(EXIT.usage, 'error: the model must not contain line breaks')
   // The effort reaches a CLI as a plain token or inside a quoted config
@@ -218,10 +180,6 @@ function writeResume({ provider, mode, policy }, state, dir) {
     return
   }
   process.stderr.write(`session: ${session}\n`)
-  if (!dir) {
-    process.stderr.write('resume: unavailable — the session lives in the unreported worktree; run the resume from inside it\n')
-    return
-  }
   // A complete follow-up command except for the prompt, so the caller
   // appends `-- "..."` and runs it instead of reassembling an argument tail.
   const parts = [
@@ -231,13 +189,6 @@ function writeResume({ provider, mode, policy }, state, dir) {
   if (policy.timeout !== DEFAULT_TIMEOUT[resumeMode]) parts.push('--timeout', String(policy.timeout))
   parts.push('--repo', shellQuote(dir))
   process.stderr.write(`resume: ${parts.join(' ')}\n`)
-}
-
-// Where a task worked: a worktree the CLI created when it reports one,
-// otherwise the run's own directory — never a guess for an unreported
-// worktree, where the session actually lives.
-function workdirOf(run, env, state) {
-  return state.workdir || (run.policy.worktree ? '' : env.cwd)
 }
 
 async function main(argv) {
@@ -254,7 +205,7 @@ async function main(argv) {
   // Review and consult are tied to the bytes they saw by a before/after
   // fingerprint of the live tree. A task is meant to change the tree.
   let scope = null
-  if (mode === 'review') scope = resolveScope(review, env, { diff: provider.reviewDiff })
+  if (mode === 'review') scope = resolveScope(review, env)
   else if (mode === 'consult' && env.repoRoot) scope = consultScope(env)
   const before = scope ? fingerprintScope(env, scope) : ''
 
@@ -265,12 +216,9 @@ async function main(argv) {
       mode, policy, review, scope, text, sessionId, continuing, artifacts, env,
     }),
     onTimeout: (state) => {
-      if (mode === 'task') {
-        const dir = workdirOf(run, env, state)
-        process.stderr.write(dir ? `workdir: ${flat(dir)}\n` : 'workdir: unavailable — the CLI did not report the worktree it created\n')
-      }
+      if (mode === 'task') process.stderr.write(`workdir: ${flat(env.cwd)}\n`)
       if (!provider.resumeMode(mode)) return
-      writeResume(run, state, mode === 'task' ? workdirOf(run, env, state) : env.cwd)
+      writeResume(run, state, env.cwd)
       if (state.sessionId) {
         process.stderr.write('hint: the session survives the timeout; resume it, but have it check the current state first — it cannot tell how far the interrupted step got.\n')
       }
@@ -288,7 +236,6 @@ async function main(argv) {
   // Everything that qualifies the result prints before `body: begin`.
   if (before) process.stderr.write(`identity: ${before}\n`)
   else if (mode === 'consult') process.stderr.write('identity: unavailable — not a git work tree, so the bytes read cannot be fingerprinted\n')
-  for (const warning of outcome.warnings) process.stderr.write(`warning: ${flat(warning)}\n`)
   if (before && after !== before) {
     process.stderr.write(`warning: the tree changed while this run was in progress (identity ${before} is not ${after}); the answer describes no single stable state. Check ${flat(env.repoRoot)} for edits the run may have made.\n`)
   }
@@ -296,12 +243,7 @@ async function main(argv) {
     process.stderr.write('warning: the stream reported a session id that is not a UUID; not advertising a resume command for it\n')
     outcome.sessionId = ''
   }
-  const workdir = mode === 'task' ? workdirOf(run, env, outcome) : ''
-  if (mode === 'task' && !workdir) {
-    process.stderr.write('warning: the worktree path was not reported; find it with `git worktree list` and resume from inside it.\n')
-  }
   if (outcome.model) process.stderr.write(`model: ${flat(outcome.model)}\n`)
-  if (outcome.usageLine) process.stderr.write(`usage: ${outcome.usageLine}\n`)
 
   await emitBody(output)
 
@@ -309,8 +251,8 @@ async function main(argv) {
   // wrapper's, never model text.
   process.stderr.write(`result: ${artifacts.out}\n`)
   process.stderr.write(`log: ${artifacts.log}\n`)
-  if (mode === 'task') process.stderr.write(workdir ? `workdir: ${flat(workdir)}\n` : 'workdir: unavailable — the CLI did not report the worktree it created\n')
-  if (provider.resumeMode(mode)) writeResume(run, outcome, mode === 'task' ? workdir : env.cwd)
+  if (mode === 'task') process.stderr.write(`workdir: ${flat(env.cwd)}\n`)
+  if (provider.resumeMode(mode)) writeResume(run, outcome, env.cwd)
   if (after) process.stderr.write(`identity: ${after}\n`)
 }
 

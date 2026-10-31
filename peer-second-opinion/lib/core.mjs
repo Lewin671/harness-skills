@@ -175,12 +175,6 @@ function findOnPath(path, name) {
     .map((dir) => join(dir, name)).find(isExecutableFile) || null
 }
 
-// Whether resolveBin would find a binary to try: its variable is set (resolveBin
-// still validates it) or it is on an absolute PATH entry. Used by `auto`.
-export function binaryAvailable(binary) {
-  return Boolean(process.env[binary.envVar]) || Boolean(findOnPath(process.env.PATH, binary.name))
-}
-
 function resolveBin(env, binary) {
   const raw = process.env[binary.envVar]
   const hint = `hint: use the output of \`command -v ${binary.name}\` from an interactive shell.`
@@ -288,7 +282,7 @@ export function tailLog(log, prefix) {
 // with the provider's prefix, so an unprefixed stderr line is always the
 // wrapper's. Returns { status, spawnError, timedOut }; dies with 129/130/143
 // when this process is signalled.
-export async function runProcess(env, { args, stdin, timeoutSeconds, log, prefix, decoder }) {
+export async function runProcess(env, { args, timeoutSeconds, log, prefix, decoder }) {
   let logBroken = false
   const emitLine = (stream, line) => {
     const shown = decoder.push(stream, line)
@@ -339,9 +333,9 @@ export async function runProcess(env, { args, stdin, timeoutSeconds, log, prefix
       env: env.baseEnv,
       detached: true,
       shell: false,
-      // Without a prompt on stdin the child gets a closed stdin: a CLI that
-      // waits on it would otherwise look busy forever in a background shell.
-      stdio: [stdin == null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      // A closed stdin: a CLI that waits on it would otherwise look busy
+      // forever in a background shell.
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
   } catch (error) {
     cleanupHandlers()
@@ -352,10 +346,6 @@ export async function runProcess(env, { args, stdin, timeoutSeconds, log, prefix
   child.stderr.setEncoding('utf8')
   child.stdout.on('data', archive('stdout'))
   child.stderr.on('data', archive('stderr'))
-  if (stdin != null) {
-    child.stdin.on('error', () => {})
-    child.stdin.end(stdin)
-  }
 
   let killTimer = null
   const timeoutTimer = setTimeout(() => {

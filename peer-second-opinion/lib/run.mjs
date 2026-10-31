@@ -8,11 +8,11 @@ import { rmSync, writeFileSync } from 'node:fs'
 import { die, EXIT, flat, interruptibleWait, runProcess, tailLog, UUID } from './core.mjs'
 
 // ctx: { provider, env, mode, policy, artifacts, build, onTimeout, retryDelays }
-//   build(sessionId, continuing) -> { args, prompt, via: 'argv' | 'stdin' }
+//   build(sessionId, continuing) -> { args, prompt }; the prompt goes after `--`
 //     sessionId: the session to resume ('' for a fresh run); continuing: the
 //     run is a recovery after a transient failure and should send 'Continue'.
 //   onTimeout(state): called before the timeout exit with the decoder state
-//     ({ sessionId, model, workdir }), its sessionId cleared when the run was
+//     ({ sessionId, model }), its sessionId cleared when the run was
 //     meant to be in another session.
 // Returns the provider outcome; dies with 4 (failed), 5 (timed out) or
 // 129/130/143 (signalled), discarding the result file but keeping the log.
@@ -25,7 +25,7 @@ export async function runAgent(ctx) {
   const deadline = Date.now() + policy.timeout * 1000
   let expected = policy.sessionId || ''
   let continuing = false
-  let lastState = { sessionId: '', model: '', workdir: '' }
+  let lastState = { sessionId: '', model: '' }
 
   const timedOut = (message, state) => {
     process.stderr.write(`${message}\n`)
@@ -46,11 +46,9 @@ export async function runAgent(ctx) {
     if (prompt != null && !prompt.trim()) {
       die(EXIT.usage, 'error: refusing to run with an empty prompt (wrapper bug, not a verdict on the code)')
     }
-    const viaArgv = prompt != null && invocation.via !== 'stdin'
-    const args = viaArgv ? [...invocation.args, '--', prompt] : invocation.args
+    const args = prompt == null ? invocation.args : [...invocation.args, '--', prompt]
     let diagnostic = `running: ${env.bin} ${invocation.args.join(' ')}`
-    if (viaArgv) diagnostic += ` -- <prompt: ${prompt.length} chars>`
-    else if (prompt != null) diagnostic += ` <prompt on stdin: ${prompt.length} chars>`
+    if (prompt != null) diagnostic += ` -- <prompt: ${prompt.length} chars>`
     process.stderr.write(`${flat(diagnostic)}\n`)
 
     // Each attempt writes a fresh result; a failed attempt's partial file
@@ -61,7 +59,6 @@ export async function runAgent(ctx) {
     try {
       proc = await runProcess(env, {
         args,
-        stdin: viaArgv ? null : prompt,
         timeoutSeconds: remaining / 1000,
         log: artifacts.log,
         prefix: provider.prefix,

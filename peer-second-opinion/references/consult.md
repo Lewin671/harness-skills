@@ -1,6 +1,6 @@
 # Consult Mode
 
-`peer.mjs <provider> consult` asks the peer one free-form question, answered
+`peer.mjs codex consult` asks the peer one free-form question, answered
 with the repository as context. Plans, architecture choices, "X or Y" and how to
 fix a bug get a reasoned position here; changed code gets a defect list in
 review mode.

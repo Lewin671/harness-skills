@@ -3,8 +3,7 @@
 // shared investigation note instead.
 
 import { die, EXIT, flat, readText, shellQuote } from '../lib/core.mjs'
-import { investigationNote } from '../lib/review-prompt.mjs'
-import { contextFence } from '../lib/scope.mjs'
+import { contextFence, investigationNote } from '../lib/prompt.mjs'
 
 const DEFAULT_MODEL = 'gpt-6.1-sol'
 const DEFAULT_EFFORT = 'high'
@@ -86,9 +85,7 @@ export default {
   name: 'Codex',
   prefix: 'codex> ',
   binary: { name: 'codex', envVar: 'CODEX_BIN' },
-  reviewDiff: false,
   retryDelays: [15000, 30000, 60000],
-  options: {},
 
   // Review runs --ephemeral, so only consult and task leave a session.
   resumeMode(mode) {
@@ -119,7 +116,7 @@ export default {
       const parts = [review.scopeFlag === '--custom' ? review.scopeValue : scopeSentence(scope)]
       if (review.context) parts.push(contextFence(review.context))
       parts.push(investigationNote(artifacts.scratch))
-      return { args: ['exec', 'review', ...safety], prompt: `${parts.join('\n\n')}\n`, via: 'argv' }
+      return { args: ['exec', 'review', ...safety], prompt: `${parts.join('\n\n')}\n` }
     }
     const args = sessionId ? ['exec', 'resume', sessionId, ...safety] : ['exec', ...safety]
     // codex refuses to start outside a git work tree unless told to skip the
@@ -129,7 +126,7 @@ export default {
     let prompt = text
     if (continuing) prompt = 'Continue'
     else if (mode === 'consult') prompt = `${text}\n\n${investigationNote(artifacts.scratch)}\n`
-    return { args, prompt, via: 'argv' }
+    return { args, prompt }
   },
 
   resumeArgs(policy) {
@@ -139,7 +136,7 @@ export default {
   },
 
   decoder({ policy, artifacts }) {
-    const state = { sessionId: '', model: policy.model, workdir: '' }
+    const state = { sessionId: '', model: policy.model }
     let text = ''
     let capacity = false
     let workStarted = false
@@ -206,10 +203,8 @@ export default {
           usable,
           transient: capacity && !usable ? 'model at capacity' : '',
           workStarted: workStarted || Boolean(output.trim()),
-          warnings: [],
           errors: usable ? [] : failures,
           hints,
-          usageLine: '',
         }
       },
     }

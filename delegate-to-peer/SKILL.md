@@ -1,16 +1,17 @@
 ---
 name: delegate-to-peer
 description: >-
-  Requires peer-second-opinion and an authenticated peer CLI — Codex (`codex`)
-  or Command Code (`cmd`). Delegate a task to the peer as a general-purpose
-  subagent: it writes and changes code, researches a codebase, investigates a
-  bug, or runs commands (including over the network), while the host briefs
-  it, checks its work, sends feedback in the same session and reports back.
-  Trigger only when the user explicitly asks to hand work to the peer ("让 codex
-  去做", "交给 command code", "让 codex 去排查", "delegate this to codex"). Not for "和 codex 一起完成这个任务"
-  — that is with-peer, where the host implements and the peer reviews. For a
-  review, a second opinion, or advice on how to fix something ("让 codex 看看怎么修"),
-  use peer-second-opinion. Never delegate to the CLI you are running inside.
+  Requires peer-second-opinion and an authenticated Codex CLI (`codex`), the
+  peer. Delegate a task to the peer as a general-purpose subagent: it writes
+  and changes code, researches a codebase, investigates a bug, or runs
+  commands (including over the network), while the host briefs it, checks its
+  work, sends feedback in the same session and reports back. Trigger only when
+  the user explicitly asks to hand work to the peer ("让 codex 去做", "交给
+  codex", "让 codex 去排查", "delegate this to codex"). Not for "和 codex
+  一起完成这个任务" — that is with-peer, where the host implements and the peer
+  reviews. For a review, a second opinion, or advice on how to fix something
+  ("让 codex 看看怎么修"), use peer-second-opinion.
+harnesses: [claude-code, command-code]
 ---
 
 # Delegate to Peer
@@ -27,13 +28,13 @@ mode with a different model from the one that did the work.
 
 The command is the `task` mode of
 [peer-second-opinion](../peer-second-opinion/SKILL.md)'s `peer.mjs` (in that
-skill's directory, not this one). Read its SKILL.md first: provider choice,
-running, output and exit codes all apply here. **Never hand-roll the CLI;
+skill's directory, not this one). Read its SKILL.md first: running, output
+and exit codes all apply here. **Never hand-roll the CLI;
 use `peer.mjs`.**
 
 ```
-peer.mjs <provider> task [--repo DIR] [OPTIONS] [--] TASK
-peer.mjs <provider> task [--repo DIR] --resume ID [OPTIONS] [--] FEEDBACK
+peer.mjs codex task [--repo DIR] [OPTIONS] [--] TASK
+peer.mjs codex task [--repo DIR] --resume ID [OPTIONS] [--] FEEDBACK
 ```
 
 TASK is one argument; put it after `--`. The default timeout is 7200 s.
@@ -50,13 +51,12 @@ TASK is one argument; put it after `--`. The default timeout is 7200 s.
    working directory. When the work should be isolated — the user has other
    changes in progress, or several tasks run in parallel — give it a worktree:
    create one yourself (`git worktree add -b <branch> <path>`) and pass it as
-   `--repo`, or, with Command Code, pass `--worktree` and let the CLI create it.
-   Without a worktree, note `HEAD` and `git status` first. Follow the user's
-   preference when they state one.
+   `--repo`. Without a worktree, note `HEAD` and `git status` first. Follow
+   the user's preference when they state one.
 3. **Run** it as the parent's § Running it from your harness says —
    `peer.mjs` itself as the host's background task, never detached or
-   polled. For a task likely to need more than two hours (or, with Command
-   Code, 200 turns), raise `--timeout` or `--max-turns` up front. On exit
+   polled. For a task likely to need more than two hours, raise `--timeout`
+   up front. On exit
    `0`, read the file named by the last `result:` line; `workdir:` says
    where the work happened.
 4. **Check.** For code, read the diff against that starting point (or the
@@ -65,7 +65,7 @@ TASK is one argument; put it after `--`. The default timeout is 7200 s.
    the conclusion. A report that it ran something is not proof: the `log:`
    file holds what each command actually returned. Relay every unprefixed
    `warning:` line.
-5. **If the check fails or the run is cut short** (exit `4`/`5`, turn cap),
+5. **If the check fails or the run is cut short** (exit `4`/`5`),
    feed back in the same session — the last `resume:` line plus
    `-- "concrete feedback"`, naming what is wrong and what to do — then
    repeat steps 3–4.
@@ -74,9 +74,7 @@ TASK is one argument; put it after `--`. The default timeout is 7200 s.
      not prove the remote command stopped.
    - **No usable `resume:`:** nothing is rolled back. Inspect the working
      directory for partial edits, then start a fresh task whose brief says
-     what is done, where it failed and what to check. If the line says to
-     resume from inside a worktree, do that instead (see
-     [command-code.md § Worktree tasks](../peer-second-opinion/references/providers/command-code.md#worktree-tasks)).
+     what is done, where it failed and what to check.
    - **Not transient** (usage limit, content refusal): do not resume or
      rerun; report it to the user.
    - **Stop** when the check still fails after three follow-up runs
