@@ -16,7 +16,7 @@ description: >-
   answer itself, or on a disagreement the user has not asked the peer to
   settle. Never use it to apply fixes; to hand the peer the work itself —
   implementing, or investigating and reporting back — use delegate-to-peer.
-harnesses: [claude-code, command-code, codex]
+harnesses: [antigravity, claude-code, command-code, codex]
 ---
 
 # Peer Second Opinion

@@ -3,12 +3,16 @@ set -euo pipefail
 
 src_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-# Two directories cover every harness: Claude Code reads ~/.claude/skills;
+# Three directories cover every harness: Claude Code reads ~/.claude/skills;
 # Codex and Command Code both read ~/.agents/skills (verified 2026-10-16), so
 # linking ~/.codex/skills as well would show Codex every skill twice.
+# Antigravity (agy) reads ~/.agents/skills only per workspace, never from the
+# home directory; its global skills live in ~/.gemini/config/skills, where it
+# follows symlinks (verified 2026-11-03).
 default_dest_roots=(
   "${HOME}/.claude/skills"
   "${HOME}/.agents/skills"
+  "${HOME}/.gemini/config/skills"
 )
 
 # Former defaults. A default run removes this repo's links from them, so an
@@ -37,6 +41,7 @@ dest_root_harness() {
     *"/.agents/"*)      echo "codex command-code" ;;
     *"/.codex/"*)       echo "codex" ;;
     *"/.commandcode/"*) echo "command-code" ;;
+    *"/.gemini/"*)      echo "antigravity" ;;
     *)                  echo "" ;;
   esac
 }

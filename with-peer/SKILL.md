@@ -11,7 +11,7 @@ description: >-
   run once invoked; a task that changes no repository code cannot pass the
   second. For a standalone review or question, use peer-second-opinion
   directly; to hand the peer the work itself, use delegate-to-peer.
-harnesses: [claude-code, command-code, codex]
+harnesses: [antigravity, claude-code, command-code, codex]
 ---
 
 # With Peer

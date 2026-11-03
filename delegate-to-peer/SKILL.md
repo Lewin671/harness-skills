@@ -12,7 +12,7 @@ description: >-
   一起完成这个任务" — that is with-peer, where the host implements and the peer
   reviews. For a review, a second opinion, or advice on how to fix something
   ("让 codex 看看怎么修"), use peer-second-opinion.
-harnesses: [claude-code, command-code, codex]
+harnesses: [antigravity, claude-code, command-code, codex]
 ---
 
 # Delegate to Peer
