@@ -32,7 +32,7 @@ verdict.
 | Peer | Command | Default model | When |
 |------|---------|---------------|------|
 | Codex | `peer.mjs codex` | `gpt-6.1-sol`, effort `high` | The default: "the peer", "codex". |
-| agy (Antigravity) | `peer.mjs agy` | `gemini-3.8-flash`, effort `high` | The user names agy, Antigravity or Gemini; the host is Codex; or Codex hit its usage limit. |
+| agy (Antigravity) | `peer.mjs agy` | `gemini-3.8-flash`, effort `high` | The user names agy, Antigravity or Gemini; or the host is Codex. |
 
 Never pick the host's own CLI: inside Codex the peer is agy, inside agy it is
 Codex. Neither runs in a sandbox: review and consult get the user's own shell,
@@ -179,12 +179,7 @@ The exit code is the verdict on *the run*, never on the code.
 Never substitute a host-written answer for a missing result. Rerun a review or
 consult at most once, and only for a transient cause — network, capacity,
 timeout, a session that did not resume, a first model rejection. A hint saying
-*not transient* (usage limit, content refusal) rules a rerun out. When Codex
-hits its usage limit, switch to agy without asking (the user authorized this
-fallback): start the same review or consult fresh with `peer.mjs agy`,
-restating a consult's context — a Codex session does not carry over — and
-say in the report that agy answered instead. A content refusal is no reason
-to switch. After exit
+*not transient* (usage limit, content refusal) rules a rerun out. After exit
 `5`, append `-- "Continue; check the current state first."` to a usable
 `resume:` line (a retry: same label, no extra authorization); otherwise start
 fresh, restating a consult's context. A task follows delegate-to-peer's limits

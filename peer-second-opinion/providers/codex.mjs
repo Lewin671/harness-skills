@@ -149,7 +149,7 @@ export default {
         const hints = []
         const said = diagnostics.join('\n')
         if (!usable && USAGE_LIMIT.test(said)) {
-          hints.push('the codex account hit its usage limit; not transient — do not rerun codex before the reset time the CLI reported. Start the run fresh with `peer.mjs agy` instead, and report that agy answered.')
+          hints.push('the codex account hit its usage limit; not transient — do not rerun before the reset time the CLI reported. Report it, or use another provider if the user agrees.')
         } else if (!usable && CONTENT_FLAG.test(said)) {
           hints.push('codex refused the content; not transient — do not rerun or reword the request to get past it. Report the reason to the user.')
         }
