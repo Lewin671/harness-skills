@@ -112,7 +112,7 @@ test('failures get the matching hint, read from CLI output and never from model 
     [['consult', '--resume', SESSION, 'q'], { FAKE_EXIT: '1', FAKE_STDERR_TEXT: rejected }, /do not resume this session under a different model/],
     [['consult', 'q'], { FAKE_EXIT: '1', FAKE_STDERR_TEXT: 'HTTP 400: malformed request for model gpt-6.1-sol' }, /error: the consult failed/, /rejected the selected model/],
     [['consult', 'q'], { FAKE_EXIT: '1', FAKE_STDERR_TEXT: 'The file `x` does not exist or you do not have access to it.' }, /error: the consult failed/, /rejected the selected model/],
-    [['consult', 'q'], { FAKE_EXIT: '1', FAKE_EVENT: failedTurn(usage) }, /^error: You've hit your usage limit[^]*^hint: the codex account hit its usage limit; not transient/m],
+    [['consult', 'q'], { FAKE_EXIT: '1', FAKE_EVENT: failedTurn(usage) }, /^error: You've hit your usage limit[^]*^hint: the codex account hit its usage limit; not transient[^]*fresh with `peer.mjs agy`/m],
     [['consult', 'q'], { FAKE_EXIT: '1', FAKE_EVENT: failedTurn(flagged) }, /^hint: codex refused the content; not transient/m],
     [['consult', 'q'], { FAKE_EXIT: '1', FAKE_EVENT: JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: flagged } }) }, /error: the consult failed/, /hint: codex refused/],
   ]) {

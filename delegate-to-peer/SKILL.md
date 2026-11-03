@@ -77,8 +77,12 @@ after `--`. The default timeout is 7200 s.
    - **No usable `resume:`:** nothing is rolled back. Inspect the working
      directory for partial edits, then start a fresh task whose brief says
      what is done, where it failed and what to check.
-   - **Not transient** (usage limit, content refusal): do not resume or
-     rerun; report it to the user.
+   - **Codex usage limit:** switch to agy without asking. Inspect the
+     working directory for partial edits, then start a fresh
+     `peer.mjs agy task` whose brief says what is done and what to check;
+     report the switch.
+   - **Content refusal:** do not resume, rerun or switch; report it to the
+     user.
    - **Stop** when the check still fails after three follow-up runs
      (feedback, resume or restart), and tell the user what is left.
 6. **Report.** Say what was done, where (`workdir`), what you checked and
