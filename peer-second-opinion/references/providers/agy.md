@@ -1,7 +1,9 @@
 # Provider: agy
 
-Google's Antigravity CLI (`agy`), run headlessly in print mode. Not for use
-from inside agy itself.
+Google's Antigravity CLI (`agy`), run headlessly in print mode. It is the
+command-line client of Google Antigravity and shares its state under
+`~/.gemini`. Not the Gemini CLI (`gemini`), a separate tool. Not for use from
+inside any Antigravity host, CLI or app.
 
 ## Prerequisites and binary
 

@@ -2,10 +2,11 @@
 name: peer-second-opinion
 description: >-
   Get an independent second opinion from the peer — the Codex CLI (`codex`)
-  by default, or the Antigravity CLI (`agy`, Gemini) when the user names it —
+  by default, or the Antigravity CLI (`agy`, Gemini) when the user names agy or
+  Antigravity —
   a different harness and model that did not write the code. Requires an
-  explicit user request for Codex, agy or "the peer" ("让 peer 看看", "让 agy
-  看看"); every trigger below is conditional on that. Use review mode when
+  explicit user request for Codex, agy/Antigravity or "the peer" ("让 peer
+  看看", "让 agy 看看", "问问 antigravity"); every trigger below is conditional on that. Use review mode when
   the user asks the peer to review or cross-check a code change — a diff, the working tree, a branch, or
   a commit ("let codex review this", "让 codex 审一下") — or to adjudicate a
   contested finding from the host's own review. Use consult mode when they ask
@@ -34,8 +35,12 @@ verdict.
 | Codex | `peer.mjs codex` | `gpt-6.1-sol`, effort `high` | The default: "the peer", "codex". |
 | agy (Antigravity) | `peer.mjs agy` | `gemini-3.8-flash`, effort `high` | The user names agy, Antigravity or Gemini; or the host is Codex. |
 
-Never pick the host's own CLI: inside Codex the peer is agy, inside agy it is
-Codex. Neither runs in a sandbox: review and consult get the user's own shell,
+agy is the CLI of Google Antigravity, so "Antigravity" means this peer.
+"Gemini" means Gemini models through agy, never the separate Gemini CLI
+(`gemini`), which this skill does not drive.
+
+Never pick the host's own product: inside Codex the peer is agy; inside any
+Antigravity host (the agy CLI or the Antigravity app's agent) it is Codex. Neither runs in a sandbox: review and consult get the user's own shell,
 so the peer can build, run tests and write reproductions in the real
 environment. A prompt note asks it not to modify the repository or git state
 and to end with a `Verification:` paragraph; nothing enforces that note. The

@@ -2,13 +2,13 @@
 name: delegate-to-peer
 description: >-
   Requires peer-second-opinion and an authenticated peer CLI: Codex
-  (`codex`) by default, or Antigravity (`agy`) when the user names it.
+  (`codex`) by default, or the Antigravity CLI (`agy`) when the user names agy or Antigravity.
   Delegate a task to the peer as a general-purpose subagent: it writes and
   changes code, researches a codebase, investigates a bug, or runs
   commands (including over the network), while the host briefs it, checks its
   work, sends feedback in the same session and reports back. Trigger only when
   the user explicitly asks to hand work to the peer ("让 codex 去做", "交给
-  codex", "让 agy 去排查", "delegate this to codex"). Not for "和 codex
+  codex", "让 agy 去排查", "交给 antigravity", "delegate this to codex"). Not for "和 codex
   一起完成这个任务" — that is with-peer, where the host implements and the peer
   reviews. For a review, a second opinion, or advice on how to fix something
   ("让 codex 看看怎么修"), use peer-second-opinion.
