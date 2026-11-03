@@ -1,6 +1,6 @@
-// Shared fixtures for the peer.mjs tests: a git repository, a fake codex CLI,
-// and a runner. The fake records every invocation as one JSON line ({ argv })
-// in FAKE_LOG; FAKE_* variables steer what it prints:
+// Shared fixtures for the peer.mjs tests: a git repository, fake codex and
+// agy CLIs, and a runner. Each fake records every invocation as one JSON line
+// ({ argv }) in FAKE_LOG; FAKE_* variables steer what it prints:
 //
 //   FAKE_SESSION_ID  session they report (default SESSION); FAKE_NO_SESSION
 //   FAKE_RESULT_TEXT body text; FAKE_BIG_RESULT a 20000-line body; FAKE_NO_RESULT
@@ -9,6 +9,8 @@
 //   FAKE_SPAWN_CHILD file to write the pid of a `sleep 300` grandchild into
 //   FAKE_WRITE       file to create during the run (drift, build output)
 //   FAKE_EVENT       one extra raw stdout line
+//   FAKE_RESULT_STATUS, FAKE_RESULT_ERROR, FAKE_FINISHED_REASON  (agy only)
+//                    fields of the closing result event
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -54,6 +56,31 @@ if (!env.FAKE_NO_RESULT) fs.writeFileSync(argv[argv.indexOf('-o') + 1], body + '
 process.exitCode = Number(env.FAKE_EXIT || 0)
 `
 
+// agy reads the prompt from --print=TEXT and reports everything as
+// stream-json events, the answer in the closing result event.
+const FAKE_AGY = `#!/usr/bin/env node
+const fs = require('node:fs')
+const env = process.env
+const argv = process.argv.slice(2)
+if (env.FAKE_LOG) fs.appendFileSync(env.FAKE_LOG, JSON.stringify({ argv }) + '\\n')
+if (env.FAKE_STDERR_TEXT) process.stderr.write(env.FAKE_STDERR_TEXT + '\\n')
+const sleep = () => { if (env.FAKE_SLEEP) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(env.FAKE_SLEEP) * 1000) }
+const session = env.FAKE_NO_SESSION ? undefined : (env.FAKE_SESSION_ID || '${SESSION}')
+const body = env.FAKE_RESULT_TEXT || 'the fake result body'
+const frame = (value) => fs.writeSync(1, JSON.stringify(value) + '\\n')
+if (!argv.some((arg) => arg.startsWith('--print='))) process.exit(64)
+frame({ event: 'init', conversation_id: session, init: { model: argv[argv.indexOf('--model') + 1], tools: [] } })
+sleep()
+frame({ event: 'step_update', step_update: { conversation_id: session, step_index: 1, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'streamed answer text' } })
+if (env.FAKE_EVENT) fs.writeSync(1, env.FAKE_EVENT + '\\n')
+if (!env.FAKE_NO_RESULT) {
+  const result = { conversation_id: session, status: env.FAKE_RESULT_STATUS || 'SUCCESS', response: env.FAKE_RESULT_STATUS ? '' : body + '\\n' }
+  if (env.FAKE_RESULT_ERROR) result.error = env.FAKE_RESULT_ERROR
+  if (env.FAKE_FINISHED_REASON) result.finished_reason = env.FAKE_FINISHED_REASON
+  frame({ event: 'result', result })
+}
+process.exitCode = Number(env.FAKE_EXIT || 0)
+`
 
 export function sh(command, cwd) {
   const result = spawnSync('/bin/sh', ['-c', command], { cwd, encoding: 'utf8' })
@@ -70,10 +97,10 @@ export function makeRepo(dir) {
   return dir
 }
 
-export function installFake(dir) {
+export function installFake(dir, name = 'codex') {
   mkdirSync(dir, { recursive: true })
-  const path = join(dir, 'codex')
-  writeFileSync(path, FAKE_CODEX)
+  const path = join(dir, name)
+  writeFileSync(path, name === 'agy' ? FAKE_AGY : FAKE_CODEX)
   chmodSync(path, 0o755)
   return path
 }
@@ -83,6 +110,7 @@ export function createFixture() {
   const root = mkdtempSync(join(tmpdir(), 'peer-test-'))
   mkdirSync(join(root, 'home'))
   const bin = installFake(join(root, 'bin'))
+  const agyBin = installFake(join(root, 'bin'), 'agy')
   const fixture = {
     root,
     repo: makeRepo(join(root, 'repo')),
@@ -90,20 +118,22 @@ export function createFixture() {
     // The environment a run gets; `env` entries override it, and an
     // undefined value removes a variable.
     env(env = {}) {
-      const merged = { PATH: process.env.PATH, HOME: join(root, 'home'), TMPDIR: root, CODEX_BIN: bin, ...env }
+      const merged = { PATH: process.env.PATH, HOME: join(root, 'home'), TMPDIR: root, CODEX_BIN: bin, AGY_BIN: agyBin, ...env }
       for (const key of Object.keys(merged)) if (merged[key] === undefined) delete merged[key]
       return merged
     },
-    // Runs `peer.mjs codex` and attaches what the fake saw: calls[i] =
-    // { argv, prompt }, the prompt being the argument after `--`.
-    run(args, { env = {}, cwd = fixture.repo } = {}) {
+    // Runs `peer.mjs <provider>` (default codex) and attaches what the fake
+    // saw: calls[i] = { argv, prompt }, the prompt being the argument after
+    // `--` or the value of --print=.
+    run(args, { env = {}, cwd = fixture.repo, provider = 'codex' } = {}) {
       const log = join(mkdtempSync(join(root, 'log-')), 'calls.jsonl')
-      const result = spawnSync(process.execPath, [SCRIPT, 'codex', ...args], {
+      const result = spawnSync(process.execPath, [SCRIPT, provider, ...args], {
         cwd, encoding: 'utf8', timeout: 60000, env: fixture.env({ FAKE_LOG: log, ...env }),
       })
       result.calls = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map((line) => {
         const call = JSON.parse(line)
-        call.prompt = call.argv[call.argv.indexOf('--') + 1] ?? ''
+        const print = call.argv.find((arg) => arg.startsWith('--print='))
+        call.prompt = print ? print.slice('--print='.length) : call.argv[call.argv.indexOf('--') + 1] ?? ''
         return call
       }) : []
       return result

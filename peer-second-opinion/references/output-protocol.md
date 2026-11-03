@@ -7,7 +7,7 @@ output is enough for most runs.
 
 ## Streams and prefixes
 
-Progress streams to stderr: lines prefixed `codex> ` come from the CLI;
+Progress streams to stderr: lines prefixed `codex> ` or `agy> ` come from the CLI;
 unprefixed lines are the wrapper. Every frame is also in the file named by
 `log:`. A failed run prints the log's last lines, cut to a bounded width. The result body arrives on stdout and in the
 result file; with separate streams, a marker-shaped line on stdout is model

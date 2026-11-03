@@ -8,7 +8,8 @@ import { rmSync, writeFileSync } from 'node:fs'
 import { die, EXIT, flat, interruptibleWait, runProcess, tailLog, UUID } from './core.mjs'
 
 // ctx: { provider, env, mode, policy, artifacts, build, onTimeout, retryDelays }
-//   build(sessionId, continuing) -> { args, prompt }; the prompt goes after `--`
+//   build(sessionId, continuing) -> { args, prompt }; the prompt goes after
+//     `--`, or into provider.promptFlag when the provider sets one
 //     sessionId: the session to resume ('' for a fresh run); continuing: the
 //     run is a recovery after a transient failure and should send 'Continue'.
 //   onTimeout(state): called before the timeout exit with the decoder state
@@ -46,9 +47,14 @@ export async function runAgent(ctx) {
     if (prompt != null && !prompt.trim()) {
       die(EXIT.usage, 'error: refusing to run with an empty prompt (wrapper bug, not a verdict on the code)')
     }
-    const args = prompt == null ? invocation.args : [...invocation.args, '--', prompt]
+    // The prompt follows `--`, or rides in the provider's own prompt option
+    // as one `--option=TEXT` argument, so a prompt starting with a dash
+    // cannot pass for an option.
+    const flag = provider.promptFlag
+    const promptArgs = prompt == null ? [] : flag ? [`${flag}=${prompt}`] : ['--', prompt]
+    const args = [...invocation.args, ...promptArgs]
     let diagnostic = `running: ${env.bin} ${invocation.args.join(' ')}`
-    if (prompt != null) diagnostic += ` -- <prompt: ${prompt.length} chars>`
+    if (prompt != null) diagnostic += ` ${flag ? `${flag}=` : '-- '}<prompt: ${prompt.length} chars>`
     process.stderr.write(`${flat(diagnostic)}\n`)
 
     // Each attempt writes a fresh result; a failed attempt's partial file

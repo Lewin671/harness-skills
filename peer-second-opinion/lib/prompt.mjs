@@ -1,5 +1,9 @@
 // Prompt text the wrapper adds to what the caller wrote: the note every
-// review and consult carries, and the fence around review background.
+// review and consult carries, the review scope as prose, the report shape
+// for a CLI with no review prompt of its own, and the fence around review
+// background.
+
+import { shellQuote } from './core.mjs'
 
 const CONTEXT_FENCE = 'CALLER-BACKGROUND'
 
@@ -28,3 +32,31 @@ export function contextFence(context) {
 ${body}
 ${CONTEXT_FENCE}`
 }
+
+// The scope always travels as prose. codex exec review takes a scope flag or
+// a prompt, never both, and only a prompt can carry the investigation note
+// (a developer_instructions override was ignored by `exec review` on
+// codex-cli 0.165.0); agy has no review command at all.
+export function scopeSentence(scope) {
+  if (scope.scopeFlag === '--uncommitted') {
+    return 'Review the uncommitted changes in this repository: staged, unstaged, and untracked files. Use `git --no-optional-locks status --porcelain --untracked-files=normal` together with `git diff`, `git diff --cached`, and the contents of any untracked files.'
+  }
+  if (scope.scopeFlag === '--base') {
+    return `Review the changes on the current branch against base branch ${shellQuote(scope.scopeValue)}: the diff from merge base ${scope.resolvedBase} to the working tree, i.e. \`git diff ${scope.resolvedBase}\`. Do not review anything already contained in ${scope.resolvedBase}.`
+  }
+  if (scope.resolvedParent) {
+    return `Review only the changes introduced by commit ${scope.resolvedCommit} (given as ${shellQuote(scope.scopeValue)}): \`git diff ${scope.resolvedParent} ${scope.resolvedCommit}\`. Do not review unrelated code.`
+  }
+  return `Review only the changes introduced by root commit ${scope.resolvedCommit} (given as ${shellQuote(scope.scopeValue)}): \`git show ${scope.resolvedCommit}\`. Do not review unrelated code.`
+}
+
+// The report shape references/review.md reads. codex exec review brings its
+// own; for a CLI without a review prompt this contract is the review prompt.
+export const REPORT_CONTRACT = `Look for defects the change introduces: incorrect behaviour, broken edge cases, regressions, security and data-integrity problems, and missing or wrong tests. Report your findings as Markdown, in exactly this shape:
+
+<one paragraph: the overall verdict>
+
+- [P1] <title> — <path>:<line-range>
+  <body>
+
+One bullet per finding, priority ordered: [P0] most severe, then [P1], [P2], [P3]. Anchor each finding to a path and a line range. If there is nothing to report, say so explicitly in the verdict and return no bullets — never invent a finding to fill the list.`

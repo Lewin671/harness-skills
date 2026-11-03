@@ -1,6 +1,6 @@
 # Review Mode
 
-`peer.mjs codex review` asks the peer for a prioritised defect list over a
+`peer.mjs <codex|agy> review` asks the peer for a prioritised defect list over a
 code change.
 
 ## Scope
@@ -26,7 +26,7 @@ changes" as an answer that reads like a pass. `--custom` gets no such check.
 ## What the peer reads
 
 Every review reads the live tree, with its installed dependencies, and is
-fingerprinted as `identity:`. The prompt names the scope; Codex reads the diff
+fingerprinted as `identity:`. The prompt names the scope; the peer reads the diff
 itself.
 
 ## --custom and --context

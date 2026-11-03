@@ -1,16 +1,17 @@
 ---
 name: with-peer
 description: >-
-  Requires peer-second-opinion and an authenticated Codex CLI (`codex`), the
-  peer. Complete a code-changing task with the peer as advisor and reviewer: the host writes all the code, the peer gives a
-  blind design opinion first and then reviews the whole change, and every
+  Requires peer-second-opinion and an authenticated peer CLI: Codex
+  (`codex`) by default, or Antigravity (`agy`) when the user names it.
+  Complete a code-changing task with the peer as advisor and reviewer: the
+  host writes all the code, the peer gives a blind design opinion first and then reviews the whole change, and every
   disagreement is settled by evidence rather than by vote. Trigger only when
   the user explicitly asks to work with the peer ("和 codex 一起完成这个任务",
   "build this with codex", "run this task with-peer"). Both checkpoints always
   run once invoked; a task that changes no repository code cannot pass the
   second. For a standalone review or question, use peer-second-opinion
   directly; to hand the peer the work itself, use delegate-to-peer.
-harnesses: [claude-code, command-code]
+harnesses: [claude-code, command-code, codex]
 ---
 
 # With Peer

@@ -2,8 +2,8 @@
 // pinned model+effort pair, and capacity retries. Every mode runs without a sandbox; review and consult carry the
 // shared investigation note instead.
 
-import { die, EXIT, flat, readText, shellQuote } from '../lib/core.mjs'
-import { contextFence, investigationNote } from '../lib/prompt.mjs'
+import { configurePair, flat, readText } from '../lib/core.mjs'
+import { contextFence, investigationNote, scopeSentence } from '../lib/prompt.mjs'
 
 const DEFAULT_MODEL = 'gpt-6.1-sol'
 const DEFAULT_EFFORT = 'high'
@@ -63,23 +63,6 @@ function safetyArgs(mode, policy, out) {
   ]
 }
 
-// codex exec review takes a scope flag or a prompt, never both, and only a
-// prompt can carry the investigation note (a developer_instructions override
-// was ignored by `exec review` on codex-cli 0.165.0), so the scope always
-// travels as prose.
-function scopeSentence(scope) {
-  if (scope.scopeFlag === '--uncommitted') {
-    return 'Review the uncommitted changes in this repository: staged, unstaged, and untracked files. Use `git --no-optional-locks status --porcelain --untracked-files=normal` together with `git diff`, `git diff --cached`, and the contents of any untracked files.'
-  }
-  if (scope.scopeFlag === '--base') {
-    return `Review the changes on the current branch against base branch ${shellQuote(scope.scopeValue)}: the diff from merge base ${scope.resolvedBase} to the working tree, i.e. \`git diff ${scope.resolvedBase}\`. Do not review anything already contained in ${scope.resolvedBase}.`
-  }
-  if (scope.resolvedParent) {
-    return `Review only the changes introduced by commit ${scope.resolvedCommit} (given as ${shellQuote(scope.scopeValue)}): \`git diff ${scope.resolvedParent} ${scope.resolvedCommit}\`. Do not review unrelated code.`
-  }
-  return `Review only the changes introduced by root commit ${scope.resolvedCommit} (given as ${shellQuote(scope.scopeValue)}): \`git show ${scope.resolvedCommit}\`. Do not review unrelated code.`
-}
-
 export default {
   id: 'codex',
   name: 'Codex',
@@ -93,21 +76,7 @@ export default {
   },
 
   configure(policy) {
-    const envModel = process.env[MODEL_ENV] || ''
-    const envEffort = process.env[EFFORT_ENV] || ''
-    if (Boolean(envModel) !== Boolean(envEffort)) {
-      die(EXIT.usage,
-        `error: ${MODEL_ENV} and ${EFFORT_ENV} must be set together.`,
-        "hint: set both, or unset both and pass '--model M --effort L' for a single run.")
-    }
-    if (Boolean(policy.model) !== Boolean(policy.effort)) {
-      die(EXIT.usage, 'error: for codex, --model and --effort must be given together, as an explicit pair.')
-    }
-    policy.modelSource = policy.model ? 'flag' : envModel ? 'env' : 'default'
-    if (!policy.model) {
-      policy.model = envModel || DEFAULT_MODEL
-      policy.effort = envEffort || DEFAULT_EFFORT
-    }
+    configurePair(policy, { id: 'codex', model: DEFAULT_MODEL, effort: DEFAULT_EFFORT, modelEnv: MODEL_ENV, effortEnv: EFFORT_ENV })
   },
 
   invocation({ mode, policy, review, scope, text, sessionId, continuing, artifacts, env }) {
