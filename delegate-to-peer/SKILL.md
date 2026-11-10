@@ -1,17 +1,13 @@
 ---
 name: delegate-to-peer
 description: >-
-  Requires peer-second-opinion and an authenticated peer CLI: Codex
-  (`codex`) by default, or the Antigravity CLI (`agy`) when the user names agy or Antigravity.
-  Delegate a task to the peer as a general-purpose subagent: it writes and
-  changes code, researches a codebase, investigates a bug, or runs
-  commands (including over the network), while the host briefs it, checks its
-  work, sends feedback in the same session and reports back. Trigger only when
-  the user explicitly asks to hand work to the peer ("让 codex 去做", "交给
-  codex", "让 agy 去排查", "交给 antigravity", "delegate this to codex"). Not for "和 codex
-  一起完成这个任务" — that is with-peer, where the host implements and the peer
-  reviews. For a review, a second opinion, or advice on how to fix something
-  ("让 codex 看看怎么修"), use peer-second-opinion.
+  Hand a task to the peer (Codex by default, agy/Antigravity when named) as a
+  general-purpose subagent: it writes code, researches a codebase,
+  investigates a bug or runs commands, while the host briefs it, checks its
+  work and reports back. Only when the user explicitly asks to hand work over
+  ("让 codex 去做", "交给 codex", "让 agy 去排查", "delegate this to codex"). Not for
+  "和 codex 一起完成" (with-peer) or for a review or advice such as "让 codex 看看怎么修"
+  (peer-second-opinion). Requires peer-second-opinion.
 harnesses: [antigravity, claude-code, command-code, codex]
 ---
 
@@ -29,16 +25,18 @@ mode with a different model from the one that did the work.
 
 The command is the `task` mode of
 [peer-second-opinion](../peer-second-opinion/SKILL.md)'s `peer.mjs` (in that
-skill's directory, not this one). Read its SKILL.md first: running, output
-and exit codes all apply here. **Never hand-roll the CLI;
-use `peer.mjs`.**
+skill's directory, not this one). Read
+[running.md](../peer-second-opinion/references/running.md) first: picking the
+peer, launching, output and exit codes all apply here; the rest of that
+skill is about review and consult and is not needed for a task. **Never
+hand-roll the CLI; use `peer.mjs`.**
 
 ```
 peer.mjs <codex|agy> task [--repo DIR] [OPTIONS] [--] TASK
 peer.mjs <codex|agy> task [--repo DIR] --resume ID [OPTIONS] [--] FEEDBACK
 ```
 
-Pick the peer as the parent's § The peer says. TASK is one argument; put it
+Pick the peer as running.md § The peer says. TASK is one argument; put it
 after `--`. The default timeout is 7200 s.
 
 ## Workflow
@@ -55,7 +53,7 @@ after `--`. The default timeout is 7200 s.
    create one yourself (`git worktree add -b <branch> <path>`) and pass it as
    `--repo`. Without a worktree, note `HEAD` and `git status` first. Follow
    the user's preference when they state one.
-3. **Run** it as the parent's § Running it from your harness says —
+3. **Run** it as running.md § Running it from your harness says —
    `peer.mjs` itself as the host's background task, never detached or
    polled. For a task likely to need more than two hours, raise `--timeout`
    up front. On exit

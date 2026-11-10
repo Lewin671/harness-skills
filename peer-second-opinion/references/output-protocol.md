@@ -2,7 +2,7 @@
 
 How to authenticate the wrapper's control markers when a run's output must be
 read from the stream itself — merged, truncated, or carrying marker-shaped
-lines inside the result body. The normal path in SKILL.md § Reading the
+lines inside the result body. The normal path in running.md § Reading the
 output is enough for most runs.
 
 ## Streams and prefixes

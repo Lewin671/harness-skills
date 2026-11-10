@@ -10,7 +10,7 @@ unauthenticated one fails the run with exit `4` and its own message in the log
 tail. The wrapper finds `codex` on the absolute entries of `PATH`, or uses
 `CODEX_BIN` (an absolute path to an executable file), and prints
 `note: using codex binary: <path>` first. A binary inside the repository under
-review is refused. If it is not found, see SKILL.md § Exit Codes; never
+review is refused. If it is not found, see running.md § Exit Codes; never
 hand-roll `codex exec` instead.
 
 ## Permissions

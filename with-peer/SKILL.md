@@ -1,16 +1,13 @@
 ---
 name: with-peer
 description: >-
-  Requires peer-second-opinion and an authenticated peer CLI: Codex
-  (`codex`) by default, or the Antigravity CLI (`agy`) when the user names agy or Antigravity.
-  Complete a code-changing task with the peer as advisor and reviewer: the
-  host writes all the code, the peer gives a blind design opinion first and then reviews the whole change, and every
-  disagreement is settled by evidence rather than by vote. Trigger only when
-  the user explicitly asks to work with the peer ("和 codex 一起完成这个任务",
-  "和 agy 一起做", "build this with codex", "run this task with-peer"). Both checkpoints always
-  run once invoked; a task that changes no repository code cannot pass the
-  second. For a standalone review or question, use peer-second-opinion
-  directly; to hand the peer the work itself, use delegate-to-peer.
+  Complete a code-changing task with the peer (Codex by default,
+  agy/Antigravity when named) as advisor and reviewer: the host writes all the
+  code, the peer gives a blind design opinion first and reviews the whole
+  change after. Only when the user explicitly asks to work with the peer ("和
+  codex 一起完成这个任务", "和 agy 一起做", "build this with codex", "with-peer"). For a
+  standalone review or question use peer-second-opinion; to hand the peer the
+  work itself use delegate-to-peer. Requires peer-second-opinion.
 harnesses: [antigravity, claude-code, command-code, codex]
 ---
 
@@ -20,7 +17,7 @@ Complete one task through two checkpoints: a blind design consult, then a
 blind review of the whole task change. **The host writes all code; the peer
 only advises and reviews.** Commands, output handling and labels
 follow [peer-second-opinion](../peer-second-opinion/SKILL.md) — read its
-SKILL.md first, then [consult.md](../peer-second-opinion/references/consult.md)
+SKILL.md and its [running.md](../peer-second-opinion/references/running.md) first, then [consult.md](../peer-second-opinion/references/consult.md)
 before the design call and
 [review.md](../peer-second-opinion/references/review.md) before the first
 review. Where with-peer differs (follow-ups, fixes, reruns), with-peer wins.
@@ -167,7 +164,7 @@ peer checkpoint with the host's own answer.
 - **Review exit `2`:** empty scope, not a pass — fix the scope within
   budget or report the checkpoint incomplete.
 - **Failed or unparseable:** rerun once only for a transient
-  cause (the parent's § Exit Codes); if it fails again, the checkpoint is
+  cause (running.md § Exit Codes); if it fails again, the checkpoint is
   incomplete. A missing design checkpoint blocks implementation.
 - **Budgets:** rerunning the first blind consult uses no budget and stays
   **independent**; reruns of follow-ups count toward their two; every

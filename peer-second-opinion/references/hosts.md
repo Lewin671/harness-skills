@@ -1,6 +1,6 @@
 # Running From Other Hosts
 
-SKILL.md § Running it from your harness covers Claude Code and Command Code.
+running.md § Running it from your harness covers Claude Code and Command Code.
 Read the section for your host.
 
 ## A host without background tasks

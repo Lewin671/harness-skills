@@ -13,7 +13,7 @@ absolute entries of `PATH`, or uses `AGY_BIN` (an absolute path to an
 executable file), and prints `note: using agy binary: <path>` first. A
 wrapper script on `PATH` (for example one that sets a proxy) is used as is. A
 binary inside the repository under review is refused. If it is not found, see
-SKILL.md § Exit Codes; never hand-roll `agy -p` instead.
+running.md § Exit Codes; never hand-roll `agy -p` instead.
 
 ## Permissions
 
