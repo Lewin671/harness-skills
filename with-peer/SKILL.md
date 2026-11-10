@@ -8,7 +8,7 @@ description: >-
   codex 一起完成这个任务", "和 agy 一起做", "build this with codex", "with-peer"). For a
   standalone review or question use peer-second-opinion; to hand the peer the
   work itself use delegate-to-peer. Requires peer-second-opinion.
-harnesses: [antigravity, claude-code, command-code, codex]
+harnesses: [antigravity, claude-code, codex]
 ---
 
 # With Peer

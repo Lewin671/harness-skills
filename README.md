@@ -23,7 +23,7 @@ Link all skills into the default local skill directories:
 By default this syncs to:
 
 - `~/.claude/skills` — Claude Code
-- `~/.agents/skills` — Codex and Command Code, which both read it
+- `~/.agents/skills` — Codex
 - `~/.gemini/config/skills` — Antigravity (`agy`), which reads `.agents/skills` only inside a workspace
 
 Or choose one or more custom destinations:
@@ -36,6 +36,6 @@ Or choose one or more custom destinations:
 
 - One top-level directory = one skill.
 - A directory is treated as a skill only if it contains `SKILL.md`.
-- A skill restricted to one harness declares `harnesses: [claude-code]` (or `codex` / `command-code` / `antigravity`) in its frontmatter; the linker then links it only where that harness reads skills and cleans it out of the others. Codex and Command Code share `~/.agents/skills`, so a skill restricted to either is visible to both.
+- A skill restricted to one harness declares `harnesses: [claude-code]` (or `codex` / `antigravity`) in its frontmatter; the linker then links it only where that harness reads skills and cleans it out of the others.
 - Skill-specific usage belongs inside that skill directory, not in this root README.
 - Run `./validate-skills` after adding or editing skills.

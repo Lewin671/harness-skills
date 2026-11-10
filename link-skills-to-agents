@@ -4,7 +4,7 @@ set -euo pipefail
 src_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # Three directories cover every harness: Claude Code reads ~/.claude/skills;
-# Codex and Command Code both read ~/.agents/skills (verified 2026-10-16), so
+# Codex reads ~/.agents/skills (verified 2026-10-16), so
 # linking ~/.codex/skills as well would show Codex every skill twice.
 # Antigravity (agy) reads ~/.agents/skills only per workspace, never from the
 # home directory; its global skills live in ~/.gemini/config/skills, where it
@@ -32,15 +32,13 @@ else
 fi
 
 # Harness ids a destination root serves, inferred from its path (space-
-# separated). ~/.agents/skills is read by both Codex and Command Code, so a
-# skill restricted to either lands there and both see it. Unknown
+# separated). ~/.agents/skills is read by Codex. Unknown
 # destinations get no id and receive only unrestricted skills.
 dest_root_harness() {
   case "$(casefold_path "$1")" in
     *"/.claude/"*)      echo "claude-code" ;;
-    *"/.agents/"*)      echo "codex command-code" ;;
+    *"/.agents/"*)      echo "codex" ;;
     *"/.codex/"*)       echo "codex" ;;
-    *"/.commandcode/"*) echo "command-code" ;;
     *"/.gemini/"*)      echo "antigravity" ;;
     *)                  echo "" ;;
   esac

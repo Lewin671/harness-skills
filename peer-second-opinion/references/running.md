@@ -32,7 +32,7 @@ PEER=<directory of peer-second-opinion's SKILL.md>/peer.mjs
 A run takes minutes, needs network access, and writes the CLI's own state
 (`~/.codex`, `~/.gemini`) and TMPDIR.
 
-- **Claude Code, Command Code:** make `peer.mjs` itself the background shell
+- **Claude Code:** make `peer.mjs` itself the background shell
   task — one task per run, so parallel runs are separate tasks — then end
   the turn; the completion notice resumes you with its exit code. Never
   detach it (`nohup`, `&`, `disown`), never append a command that masks its

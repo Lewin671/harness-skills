@@ -8,7 +8,7 @@ description: >-
   this"), consult mode for a design, plan, decision or how to fix something
   ("问问 codex", "让 agy 看看"). Advice only, never fixes; to hand the peer the
   work itself, use delegate-to-peer.
-harnesses: [antigravity, claude-code, command-code, codex]
+harnesses: [antigravity, claude-code, codex]
 ---
 
 # Peer Second Opinion

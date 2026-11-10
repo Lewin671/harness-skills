@@ -8,7 +8,7 @@ description: >-
   ("让 codex 去做", "交给 codex", "让 agy 去排查", "delegate this to codex"). Not for
   "和 codex 一起完成" (with-peer) or for a review or advice such as "让 codex 看看怎么修"
   (peer-second-opinion). Requires peer-second-opinion.
-harnesses: [antigravity, claude-code, command-code, codex]
+harnesses: [antigravity, claude-code, codex]
 ---
 
 # Delegate to Peer
