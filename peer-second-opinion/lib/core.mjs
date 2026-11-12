@@ -70,7 +70,12 @@ export function configurePair(policy, { id, model, effort, modelEnv, effortEnv }
       "hint: set both, or unset both and pass '--model M --effort L' for a single run.")
   }
   if (Boolean(policy.model) !== Boolean(policy.effort)) {
-    die(EXIT.usage, `error: for ${id}, --model and --effort must be given together, as an explicit pair.`)
+    const fallback = envModel
+      ? `${flat(envModel)} at effort ${flat(envEffort)} (from ${modelEnv} and ${effortEnv})`
+      : `the pinned default, ${model} at effort ${effort}`
+    die(EXIT.usage,
+      `error: for ${id}, --model and --effort must be given together, as an explicit pair.`,
+      `hint: omit both to run ${fallback}, or pass both.`)
   }
   policy.modelSource = policy.model ? 'flag' : envModel ? 'env' : 'default'
   if (!policy.model) {

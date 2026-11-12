@@ -82,6 +82,13 @@ test('consult runs outside a work tree and before the first commit', () => {
   const plain = f.run(['consult', 'q'], { cwd: f.root })
   assert.equal(plain.status, 0, plain.stderr)
   assert.match(plain.stderr, /^identity: unavailable/m)
+  // A review given a consult-style question names the flags that carry one.
+  for (const args of [['review', '--base', 'main', '--', 'look for X'], ['review', 'look for X']]) {
+    const slip = f.run(args)
+    assert.equal(slip.status, 3, slip.stderr)
+    assert.equal(slip.calls.length, 0)
+    assert.match(slip.stderr, /^error: review takes no question[^]*^hint: name a specific concern with --custom/m)
+  }
   const unborn = mkdtempSync(join(f.root, 'unborn-'))
   sh('git init -q && echo new > first.txt && git add first.txt', unborn)
   const fresh = f.run(['consult', 'q'], { cwd: unborn })

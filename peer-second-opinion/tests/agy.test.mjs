@@ -67,7 +67,12 @@ test('a task gets the prompt verbatim', () => {
 })
 
 test('the model and effort travel as a pair, from flags or both env variables', () => {
-  assert.equal(agy(['consult', '--model', 'gemini-4-argon', 'q']).status, 3)
+  const lone = agy(['consult', '--model', 'gemini-4-argon', 'q'])
+  assert.equal(lone.status, 3)
+  assert.match(lone.stderr, /^hint: omit both to run the pinned default, gemini-3\.8-flash at effort high, or pass both\.$/m)
+  const loneEnv = agy(['consult', '--effort', 'low', 'q'], { env: { PEER_AGY_MODEL: 'm', PEER_AGY_EFFORT: 'low' } })
+  assert.equal(loneEnv.status, 3)
+  assert.match(loneEnv.stderr, /^hint: omit both to run m at effort low \(from PEER_AGY_MODEL and PEER_AGY_EFFORT\)/m)
   const pair = agy(['consult', '--model', 'gemini-4-argon', '--effort', 'medium', 'q'])
   assert.ok(joined(pair.calls[0].argv).includes('--model gemini-4-argon --effort medium'))
   const env = agy(['consult', 'q'], { env: { PEER_AGY_MODEL: 'm', PEER_AGY_EFFORT: 'low' } })

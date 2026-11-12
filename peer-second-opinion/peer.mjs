@@ -151,6 +151,12 @@ function parse(argv) {
       i += 1
       continue
     }
+    if (mode === 'review' && (option === '--' || !option.startsWith('-'))) {
+      // The consult habit of a trailing question is the usual slip here.
+      die(EXIT.usage,
+        `error: review takes no question or prompt, got ${option === '--' ? "'--'" : `'${flat(option).slice(0, 60)}'`}`,
+        'hint: name a specific concern with --custom TEXT (it replaces the scope, so say what to compare), pass neutral background with --context TEXT, or ask a question with consult.')
+    }
     fail(`error: unknown argument: ${flat(option)}`)
   }
 

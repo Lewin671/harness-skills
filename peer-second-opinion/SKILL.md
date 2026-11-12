@@ -103,8 +103,8 @@ peer.mjs <codex|agy> consult [--repo DIR] [OPTIONS] [--] QUESTION
 | Flags | Rule |
 |-------|------|
 | `--uncommitted` / `--base B` / `--commit S` / `--custom T` | Review scope: at most one; default `--uncommitted`. |
-| `--context TEXT` | Review only: neutral background; not with `--custom`. |
-| `--model M`, `--effort L` | Only when the user asked for a model; always both together. |
+| `--context TEXT` | Review only: neutral background (what the change is for); what to look for goes in `--custom`. Not with `--custom`. |
+| `--model M`, `--effort L` | Omit both for the pinned default (running.md); pass them only when the user asked for a model, and always together. |
 | `--timeout N`, `--resume ID` | Run deadline (default 3000 s); continuation — use the printed `resume:` line. |
 
 ```bash
