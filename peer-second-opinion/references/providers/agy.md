@@ -34,16 +34,16 @@ conversation it leaves in agy's history is not advertised for resuming.
 
 ## Model
 
-The wrapper pins `gemini-3.8-flash` at effort `high`. Override it for one
+The wrapper pins `gemini-4-hydrogen` at effort `high`. Override it for one
 run with an explicit `--model M --effort L` pair, or for every run with
 `PEER_AGY_MODEL` and `PEER_AGY_EFFORT` set together. Pass model flags only
 when the user asked for a model. `agy models` lists the ids this login can
-use; an id ending in `-low`, `-medium` or `-high` is the model plus an effort,
+use; an id ending in `-low`, `-medium`, `-high` or `-xhigh` is the model plus an effort,
 so pass the bare id with `--effort`. A `resume:` line carries the pair that
 answered; `model:` names the model agy reported, without the effort.
 
-An unknown model, or an effort the model lacks (Flash has only `low`,
-`medium` and `high`), fails before any work with exit `4` and a hint naming
+An unknown model, or an effort the model lacks (Hydrogen has `low` through
+`xhigh`, no `max`), fails before any work with exit `4` and a hint naming
 where the pair came from. No fallback is attempted.
 
 ## Sessions

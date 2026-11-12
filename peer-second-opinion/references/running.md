@@ -7,7 +7,7 @@ Applies to every mode of `peer.mjs`: review, consult and task.
 | Peer | Command | Default model | When |
 |------|---------|---------------|------|
 | Codex | `peer.mjs codex` | `gpt-6.1-sol`, effort `high` | The default: "the peer", "codex". |
-| agy (Antigravity) | `peer.mjs agy` | `gemini-3.8-flash`, effort `high` | The user names agy, Antigravity or Gemini; or the host is Codex. |
+| agy (Antigravity) | `peer.mjs agy` | `gemini-4-hydrogen`, effort `high` | The user names agy, Antigravity or Gemini; or the host is Codex. |
 
 agy is the CLI of Google Antigravity, so "Antigravity" means this peer.
 "Gemini" means Gemini models through agy, never the separate Gemini CLI
