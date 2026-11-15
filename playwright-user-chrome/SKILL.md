@@ -17,7 +17,7 @@ The `playwright-cli` skill lists the commands. This skill covers what changes wh
 browser is the user's own Chrome, attached through the Playwright extension: the user is
 working in the same browser, so every focus change, stray tab or hung command lands on them.
 
-Observations below were made with playwright-cli 0.1.21–0.1.24 and extension 0.4.0. When the
+Observations below were made with playwright-cli 0.1.21–0.1.24 and extension 0.4.0–0.5.0. When the
 CLI or extension changes, treat them as likely rather than certain, and re-check one before
 building a long run on it.
 
@@ -76,6 +76,12 @@ and no pointer movement before it, which a page can tell apart. So:
   the user and bring the tab forward once with `tab-select`; fall back only if it stays
   hidden, and say so in the report.
 - Reading content with `eval` is passive and fine in any tab.
+- A locked screen does not hide the tab. With the Mac locked and the display asleep, a tab
+  opened by `open` reported `visible`, kept rendering, and real wheel, hover and click all
+  worked (extension 0.5.0). Hidden comes from the user's own use: another tab active in that
+  window, or the window covered. On macOS,
+  `ioreg -n Root -d1 | grep -c '"IOConsoleLocked" = Yes'` prints 1 when locked; then nobody
+  is disturbed, so bring the tab forward freely and use real input throughout.
 
 ## Keep focus steals rare
 
