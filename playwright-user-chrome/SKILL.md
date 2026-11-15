@@ -62,7 +62,14 @@ and no pointer movement before it, which a page can tell apart. So:
   `Object.getOwnPropertyDescriptor(Document.prototype,'visibilityState').get.call(document)`
   (this also sees through an override made earlier). `document.hasFocus()` is no test: it
   returns true even for a hidden tab.
-- Visible: use real input. Vary the waits between actions instead of a fixed interval.
+- Visible: use real input. Vary the waits between actions instead of a fixed interval, and
+  type with a per-key delay (`page.keyboard.type(ch)` in a `run-code` loop with uneven
+  `waitForTimeout`s); `type` sends the whole text in one instant.
+- A selector for `click`/`hover` must match exactly one element. With several matches the
+  command waits and times out as if nothing matched; narrow it with `>> nth=0`.
+- After a real click times out, check the page before retrying or falling back: the click may
+  still land, and a second one would undo a toggle or submit twice.
+- `press Meta+a` does not select all on macOS; select with a DOM Range, then `press Backspace`.
 - Hidden: key presses still work and stay trusted, mouse input does not (see the
   pitfalls below), so the DOM-level substitutes are the fallback. On a site with bot
   detection, before an action that changes account state (post, like, follow, order), tell
