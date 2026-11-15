@@ -35,17 +35,18 @@ building a long run on it.
 
 ## Show a visible cursor
 
-Right after connecting, run `playwright-cli -s=<task> video-show-actions`. No recording is
-needed: the page gets an overlay cursor that glides to each action point, with a brief
-callout naming the action, so the user can follow what the agent does.
+Required: the first command after connecting is always
+`playwright-cli -s=<task> video-show-actions`, on every site and in every session, so the
+user can follow what the agent does. No recording is needed: the page gets an overlay cursor
+that glides to each action point, with a brief callout naming the action.
 
 - `mousemove x y` moves it too; between actions it stays at the last point, across navigations.
 - Add `--point-style="width:20px;height:20px;border-radius:50%;background:rgba(255,0,0,.7)"`
   to mark click points. Each action is paced by `--duration` (default 500 ms).
-- The overlay is `pointer-events: none`, so it does not block clicks, but it is an injected
-  `<x-pw-glass>` element in the page. **Leave it off on sites with bot detection** (shops,
-  travel booking, social networks, logged-in platforms), where extra DOM is a signal.
-- `video-hide-actions` turns it off. It draws inside the page only, not on browser chrome.
+- The overlay is `pointer-events: none`, so it does not block clicks. It is an injected
+  `<x-pw-glass>` element in the page; keep it on all the same, including on sites with bot
+  detection, and turn it off with `video-hide-actions` only when the user asks.
+- It draws inside the page only, not on browser chrome.
 
 ## Keep focus steals rare
 
@@ -81,6 +82,9 @@ When the tab is hidden or in the background:
   overriding `document.visibilityState`/`hidden` and dispatching `visibilitychange` and
   `pageshow`; redo it after every reload, and report that it was forced. Some infinite
   scrolls ignore this; prefer a search or list URL whose first screen holds what you need.
+- On sites with bot detection these DOM-level actions are still paced like a person's, and
+  the visibility override is for ordinary content pages only: never on a captcha, login or
+  verification page, which goes to the user.
 - The `run-code` sandbox has no `setTimeout`; wait with `page.waitForTimeout(ms)`.
 - Extension mode refuses `newCDPSession` (`Target.attachToBrowserTarget: Not allowed`).
 
