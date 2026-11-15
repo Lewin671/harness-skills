@@ -1,14 +1,14 @@
 ---
 name: playwright-user-chrome
 description: >-
-  Claude Code ONLY — read before driving the user's own Chrome with
+  Claude Code and Antigravity (Codex has its own Browser Use) — read before driving the user's own Chrome with
   playwright-cli through the Playwright browser extension (extension mode),
   i.e. any browsing, scraping, form filling or web checking in their real,
   signed-in browser. Covers connecting, one named session per task, keeping
   window-focus steals rare, background-tab pitfalls, a visible on-page cursor,
   and cleanup. Complements the playwright-cli skill, which documents the
   commands themselves.
-harnesses: [claude-code]
+harnesses: [claude-code, antigravity]
 ---
 
 # Driving the user's Chrome with playwright-cli
