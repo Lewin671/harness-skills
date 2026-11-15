@@ -26,7 +26,8 @@ mode with a different model from the one that did the work.
 The command is the `task` mode of
 [peer-second-opinion](../peer-second-opinion/SKILL.md)'s `peer.mjs` (in that
 skill's directory, not this one). Read
-[running.md](../peer-second-opinion/references/running.md) first: picking the
+[running.md](../peer-second-opinion/references/running.md) first — in each
+session, and again after the context was compacted: picking the
 peer, launching, output and exit codes all apply here; the rest of that
 skill is about review and consult and is not needed for a task. **Never
 hand-roll the CLI; use `peer.mjs`.**
@@ -54,8 +55,9 @@ after `--`. The default timeout is 7200 s.
    `--repo`. Without a worktree, note `HEAD` and `git status` first. Follow
    the user's preference when they state one.
 3. **Run** it as running.md § Running it from your harness says —
-   `peer.mjs` itself as the host's background task, never detached or
-   polled. For a task likely to need more than two hours, raise `--timeout`
+   `peer.mjs` itself as the host's background task, one task per run
+   (parallel runs are separate tasks), never detached with `&`, `nohup` or
+   `disown` and never polled. For a task likely to need more than two hours, raise `--timeout`
    up front. On exit
    `0`, read the file named by the last `result:` line; `workdir:` says
    where the work happened.

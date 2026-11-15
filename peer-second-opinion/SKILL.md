@@ -22,11 +22,14 @@ verdict.
 
 ## Running the wrapper
 
-Before the first run, read [references/running.md](./references/running.md):
+Before running it — in each session, and again after the context was
+compacted — read [references/running.md](./references/running.md):
 which peer to pick, where `peer.mjs` is, how to launch it from your harness,
 how to read its output and what each exit code means. In short: Codex is the
-default peer and agy the alternative, never the host's own product; run
-`peer.mjs` as the host's background task; trust the exit code and read the
+default peer and agy the alternative, never the host's own product; launch
+each run as its own host background task (Claude Code: one
+`run_in_background` call per run, parallel runs included), never detached
+with `&`, `nohup` or `disown` and never polled; trust the exit code and read the
 file named by the last `result:` line; relay every `warning:`; never
 substitute a host-written answer for a missing result.
 
