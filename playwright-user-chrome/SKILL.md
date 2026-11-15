@@ -40,13 +40,35 @@ Required: the first command after connecting is always
 user can follow what the agent does. No recording is needed: the page gets an overlay cursor
 that glides to each action point, with a brief callout naming the action.
 
-- `mousemove x y` moves it too; between actions it stays at the last point, across navigations.
+- The cursor follows real input only (`click`, `hover`, `type`, `mousemove`). `goto`, `eval`
+  and `run-code` never create or move it, so a task done purely through in-page scripts
+  shows no cursor at all. Before a DOM-level click or a read, glide it to the element: get
+  the centre from `getBoundingClientRect()` with `eval`, then `mousemove x y`.
+- Between actions it stays at the last point, across navigations.
 - Add `--point-style="width:20px;height:20px;border-radius:50%;background:rgba(255,0,0,.7)"`
   to mark click points. Each action is paced by `--duration` (default 500 ms).
 - The overlay is `pointer-events: none`, so it does not block clicks. It is an injected
   `<x-pw-glass>` element in the page; keep it on all the same, including on sites with bot
   detection, and turn it off with `video-hide-actions` only when the user asks.
 - It draws inside the page only, not on browser chrome.
+
+## Real input first
+
+Real input (`click`, `hover`, `type`, `press`, `mousewheel`) reaches the page as trusted
+events and moves the visible cursor. An in-page `el.click()` arrives with `isTrusted: false`
+and no pointer movement before it, which a page can tell apart. So:
+
+- Check the tab's real visibility first:
+  `Object.getOwnPropertyDescriptor(Document.prototype,'visibilityState').get.call(document)`
+  (this also sees through an override made earlier). `document.hasFocus()` is no test: it
+  returns true even for a hidden tab.
+- Visible: use real input. Vary the waits between actions instead of a fixed interval.
+- Hidden: key presses still work and stay trusted, mouse input does not (see the
+  pitfalls below), so the DOM-level substitutes are the fallback. On a site with bot
+  detection, before an action that changes account state (post, like, follow, order), tell
+  the user and bring the tab forward once with `tab-select`; fall back only if it stays
+  hidden, and say so in the report.
+- Reading content with `eval` is passive and fine in any tab.
 
 ## Keep focus steals rare
 
@@ -59,7 +81,7 @@ tab in the user's current window) steal focus; other commands do not.
 | `target=_blank` link | Read its `href` with `eval`, then `goto` it |
 | Several pages needed | Open them all at the start, in one burst |
 | Act on another tab | Not `tab-select`; use `run-code` on `page.context().pages()[i]` |
-| Tab in the background | DOM-level actions only (see below) |
+| Tab hidden and it cannot be shown | DOM-level fallbacks (see below) |
 | Screenshot or mouse input required | Tell the user first, bring the tab forward, finish quickly |
 
 ## Background-tab pitfalls
@@ -70,9 +92,10 @@ has stayed `visible` after losing focus, and stayed `hidden` after `goto`, `tab-
 
 When the tab is hidden or in the background:
 
-- Mouse input (`mousewheel`, likely `hover` and `screenshot` too) can hang: 5 s timeouts, once
-  close to 3 minutes. Scroll with `eval` (`scrollBy`), click with `eval "el => el.click()"`.
-- `click` may wait forever for the element to become stable; use the `eval` click above.
+- Mouse input hangs or fails: `mousewheel` ran past 30 s (once close to 3 minutes), `click`
+  failed after 5 s, `mousemove` returned after about 5 s but did draw the cursor. Scroll
+  with `eval` (`scrollBy`), click with `eval "el => el.click()"`.
+- `press` returns at once and delivers trusted key events; `type` is the next item.
 - `type` drops ASCII characters (key events) but keeps CJK text (insertText). Focus the field
   in the page, clear it with a DOM Range selection plus Backspace, then in `run-code` call
   `page.keyboard.insertText(text)`.
@@ -80,7 +103,8 @@ When the tab is hidden or in the background:
   the input's `files`, and dispatch `change`.
 - Pages that pause work when hidden (lazy loading, security prompts, rendering) can be nudged by
   overriding `document.visibilityState`/`hidden` and dispatching `visibilitychange` and
-  `pageshow`; redo it after every reload, and report that it was forced. Some infinite
+  `pageshow`; redo it after every reload, and report that it was forced. Skip it when the tab is
+  really visible: the override is an own property on `document` that a page can find. Some infinite
   scrolls ignore this; prefer a search or list URL whose first screen holds what you need.
 - On sites with bot detection these DOM-level actions are still paced like a person's, and
   the visibility override is for ordinary content pages only: never on a captcha, login or
