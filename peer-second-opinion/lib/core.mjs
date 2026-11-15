@@ -13,6 +13,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
 } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
@@ -266,6 +267,10 @@ export function createArtifacts(env, providerId, mode) {
     closeSync(openSync(out, 'wx', 0o600))
     closeSync(openSync(log, 'wx', 0o600))
     mkdirSync(scratch)
+    // Reproductions and builds in scratch can run to gigabytes; only the
+    // result and the log are referred to after the run, so drop the rest on
+    // every exit path.
+    process.once('exit', () => rmSync(scratch, { recursive: true, force: true }))
     process.stderr.write(`log: ${log}\n`)
     return { out, log, scratch }
   } catch {

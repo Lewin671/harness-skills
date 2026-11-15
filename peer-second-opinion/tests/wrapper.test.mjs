@@ -230,7 +230,11 @@ test('a task is not fingerprinted and reports where it worked', () => {
   assert.match(result.stderr, /^workdir: \/.*repo$/m)
 })
 
-test('the scratch directory named in the note exists and is outside the repository', () => {
-  const scratch = /under (\S+)\. To examine another revision/.exec(f.run(['consult', 'q']).calls[0].prompt)[1]
-  assert.ok(existsSync(scratch) && !scratch.startsWith(f.repo), scratch)
+test('the scratch directory named in the note is outside the repository and removed after the run', () => {
+  const result = f.run(['consult', 'q'])
+  const scratch = /under (\S+)\. To examine another revision/.exec(result.calls[0].prompt)[1]
+  assert.ok(!scratch.startsWith(f.repo), scratch)
+  assert.ok(!existsSync(scratch), `scratch left behind: ${scratch}`)
+  const resultFile = /^result: (\S+)$/m.exec(result.stderr)[1]
+  assert.ok(existsSync(resultFile), 'the result file must survive the cleanup')
 })
