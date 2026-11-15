@@ -1,5 +1,5 @@
 // Prompt text the wrapper adds to what the caller wrote: the note every
-// review and consult carries, the review scope as prose, the report shape
+// review and consult carries, the review scope as prose, the review duty
 // for a CLI with no review prompt of its own, and the fence around review
 // background.
 
@@ -50,13 +50,6 @@ export function scopeSentence(scope) {
   return `Review only the changes introduced by root commit ${scope.resolvedCommit} (given as ${shellQuote(scope.scopeValue)}): \`git show ${scope.resolvedCommit}\`. Do not review unrelated code.`
 }
 
-// The report shape references/review.md reads. codex exec review brings its
-// own; for a CLI without a review prompt this contract is the review prompt.
-export const REPORT_CONTRACT = `Look for defects the change introduces: incorrect behaviour, broken edge cases, regressions, security and data-integrity problems, and missing or wrong tests. Report your findings as Markdown, in exactly this shape:
-
-<one paragraph: the overall verdict>
-
-- [P1] <title> — <path>:<line-range>
-  <body>
-
-One bullet per finding, priority ordered: [P0] most severe, then [P1], [P2], [P3]. Anchor each finding to a path and a line range. If there is nothing to report, say so explicitly in the verdict and return no bullets — never invent a finding to fill the list.`
+// What every prompted review looks for. agy enforces the report shape with a
+// JSON schema (providers/agy.mjs); codex exec review brings its own prompt.
+export const REVIEW_DUTY = 'Look for defects the change introduces: incorrect behaviour, broken edge cases, regressions, security and data-integrity problems, and missing or wrong tests.'

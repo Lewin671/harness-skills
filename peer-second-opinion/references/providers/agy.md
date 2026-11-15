@@ -29,8 +29,13 @@ user's normal agy setup, the repository's `AGENTS.md` included. The prompt
 stays blind, but agy's own memories can carry context from earlier sessions.
 
 A review is a prompt: agy has no review command, so the wrapper sends the
-scope as prose plus the `[P<n>]` report shape that review.md reads. The
-conversation it leaves in agy's history is not advertised for resuming.
+scope as prose and enforces the report with `--json-schema` (verdict,
+findings with priority, path and line range, verification). The wrapper
+renders `structured_output` into the `[P<n>]` shape review.md reads; an empty
+findings list becomes an explicit "No findings" line. If agy returns no usable
+structured output, the body is its free text and a `warning:` says so — apply
+review.md's unparseable rule. The conversation a review leaves in agy's
+history is not advertised for resuming.
 
 ## Model
 
@@ -55,6 +60,9 @@ id and exits `4` rather than pass the answer off as a follow-up.
 ## Failures
 
 Only a result event with status `SUCCESS`, no `finished_reason` and a
-non-empty response counts as an answer. No failure is retried: agy's
-transient errors are not yet known. `agy` exits non-zero for any failure;
-read the `error:`/`hint:` lines and the log tail.
+non-empty response counts as an answer. `agy` exits non-zero for any failure
+(`3` for an agent or model API error, shown as `provider-exit: 3`), and then
+prints an `AGY_ERROR: {...}` line on stderr. The wrapper adds its status,
+reason, HTTP status and error id to the `error:` lines, and its `retryable`
+flag as a `hint:` saying whether the failure is transient. The wrapper never
+retries agy itself; the host's rerun-at-most-once rule applies.

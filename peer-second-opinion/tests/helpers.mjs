@@ -77,6 +77,7 @@ if (!env.FAKE_NO_RESULT) {
   const result = { conversation_id: session, status: env.FAKE_RESULT_STATUS || 'SUCCESS', response: env.FAKE_RESULT_STATUS ? '' : body + '\\n' }
   if (env.FAKE_RESULT_ERROR) result.error = env.FAKE_RESULT_ERROR
   if (env.FAKE_FINISHED_REASON) result.finished_reason = env.FAKE_FINISHED_REASON
+  if (env.FAKE_STRUCTURED) result.structured_output = JSON.parse(env.FAKE_STRUCTURED)
   frame({ event: 'result', result })
 }
 process.exitCode = Number(env.FAKE_EXIT || 0)

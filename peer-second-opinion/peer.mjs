@@ -249,6 +249,7 @@ async function main(argv) {
     process.stderr.write('warning: the stream reported a session id that is not a UUID; not advertising a resume command for it\n')
     outcome.sessionId = ''
   }
+  for (const warning of outcome.warnings ?? []) process.stderr.write(`warning: ${flat(warning)}\n`)
   if (outcome.model) process.stderr.write(`model: ${flat(outcome.model)}\n`)
 
   await emitBody(output)
