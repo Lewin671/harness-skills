@@ -70,7 +70,7 @@ The exit code is the verdict on *the run*, never on the code.
 | `0` | A result was produced | Read the result file and relay it. A `warning:` still qualifies it. |
 | `2` | (review) Nothing in scope | Say the scope was empty — **not** a clean review. |
 | `3` | Bad arguments or an unusable environment | Report the reason; fix it — never rerun unchanged. If the CLI cannot be found, relay the `hint:` lines and stop. |
-| `4` | No usable result | Report the `error:` and `hint:` lines. |
+| `4` | No usable result | Report the `error:` and `hint:` lines. A `partial:` file is the peer's text up to the failure — context for the next step, never the answer. |
 | `5` | Timed out | Report it with the log tail. |
 | `129`/`130`/`143` | The wrapper was signalled | Report it; rerun only if the user asks. |
 

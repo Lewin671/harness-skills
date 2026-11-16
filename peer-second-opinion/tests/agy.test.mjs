@@ -5,6 +5,7 @@
 // read.
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { after, before, test } from 'node:test'
 
 import { REVIEW_SCHEMA } from '../providers/agy.mjs'
@@ -172,4 +173,62 @@ test('an AGY_ERROR line adds its status and retryability to the failure', () => 
   const garbled = agy(['consult', 'q'], { env: { FAKE_EXIT: '3', FAKE_NO_RESULT: '1', FAKE_STDERR_TEXT: 'AGY_ERROR: {not json' } })
   assert.equal(garbled.status, 4)
   assert.doesNotMatch(garbled.stderr, /agy marked this failure/)
+})
+
+test('a malformed tool call after the final message keeps that message, with a warning', () => {
+  const segments = JSON.stringify(['Running the tests, waiting.\n', 'Done.\n\n## Report\nAll checks pass.\n'])
+  const error = 'Your previous response contained an improperly formatted function call: Malformed function call: Function call is empty - no input to parse.\nRetries remaining: 3'
+  const env = { FAKE_EXIT: '3', FAKE_RESULT_STATUS: 'ERROR', FAKE_RESULT_ERROR: error, FAKE_FINISHED_REASON: 'error', FAKE_SEGMENTS: segments }
+  const task = agy(['task', '--', 'work'], { env })
+  assert.equal(task.status, 0, task.stderr)
+  assert.equal(task.stdout, 'Done.\n\n## Report\nAll checks pass.\n')
+  const bodyAt = task.stderr.indexOf('body: begin')
+  assert.ok(task.stderr.indexOf('warning: agy ended with "Your previous response contained an improperly formatted function call') > -1)
+  assert.ok(task.stderr.indexOf('known agy glitch') < bodyAt)
+  assert.match(task.stderr, /^warning: kept agy's final message only; 2 earlier progress note/m)
+  assert.match(marker(task.stderr, 'resume')[0], new RegExp(` agy task --resume ${SESSION} `))
+  assert.equal(task.calls.length, 1)
+
+  // the same error after a tool step, or with no text, is still a failure
+  for (const extra of [{ FAKE_LAST_DONE: 'tool' }, { FAKE_SEGMENTS: undefined }]) {
+    const failed = agy(['task', '--', 'work'], { env: { ...env, ...extra } })
+    assert.equal(failed.status, 4, failed.stderr)
+    assert.doesNotMatch(failed.stderr, /known agy glitch/)
+  }
+  // a review needs the structured report, so it is never salvaged
+  const review = f.dirty(() => agy(['review'], { env }))
+  assert.equal(review.status, 4, review.stderr)
+})
+
+test('a successful turn keeps only its final message; one message is kept whole', () => {
+  const many = agy(['task', '--', 'work'], { env: { FAKE_SEGMENTS: JSON.stringify(['Building, waiting.\n', 'Still waiting.\n', 'Final report.\n']) } })
+  assert.equal(many.status, 0, many.stderr)
+  assert.equal(many.stdout, 'Final report.\n')
+  assert.match(many.stderr, /^warning: kept agy's final message only; 3 earlier/m)
+  const one = agy(['consult', 'q'])
+  assert.equal(one.stdout, 'the fake result body\n')
+  assert.doesNotMatch(one.stderr, /kept agy's final message/)
+})
+
+test('a failure keeps the text so far as partial.md and advertises the session once work began', () => {
+  const quota = 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 35m50s.'
+  const failed = agy(['task', '--', 'work'], { env: {
+    FAKE_EXIT: '3', FAKE_RESULT_STATUS: 'ERROR', FAKE_RESULT_ERROR: quota, FAKE_LAST_DONE: 'error_message',
+    FAKE_SEGMENTS: JSON.stringify(['Step one done.\n', 'Running step two, waiting.\n']),
+  } })
+  assert.equal(failed.status, 4, failed.stderr)
+  assert.match(failed.stderr, /^hint: agy's quota for this model is used up \(resets in 35m50s\): not transient/m)
+  const partial = marker(failed.stderr, 'partial')
+  assert.equal(partial.length, 1)
+  assert.equal(readFileSync(partial[0], 'utf8'), 'Step one done.\nRunning step two, waiting.\n', 'a partial keeps every note')
+  assert.match(failed.stderr, /^hint: partial\.md is agy's text up to the failure, not a result/m)
+  assert.match(failed.stderr, /^workdir: /m)
+  assert.match(marker(failed.stderr, 'resume')[0], new RegExp(` agy task --resume ${SESSION} `))
+  assert.equal(marker(failed.stderr, 'result').length, 0)
+
+  // a failure before any work leaves neither
+  const early = agy(['consult', 'q'], { env: { FAKE_EXIT: '1', FAKE_RESULT_STATUS: 'ERROR', FAKE_RESULT_ERROR: 'invalid model selection', FAKE_NO_STEPS: '1' } })
+  assert.equal(early.status, 4)
+  assert.equal(marker(early.stderr, 'partial').length, 0)
+  assert.equal(marker(early.stderr, 'resume').length, 0)
 })

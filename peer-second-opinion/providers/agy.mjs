@@ -26,6 +26,17 @@ const MODEL_REJECTED = /invalid model selection/i
 // http_status, status_code and error_id appear when the API supplied them.
 const AGY_ERROR = /^AGY_ERROR:\s*(\{.*\})\s*$/
 
+// agy 1.5.x sometimes ends a turn that has already written its final answer
+// with this error: after the last agent_response the model emits an empty
+// tool call, and agy reports ERROR instead of retrying. Seen four times in
+// 2026-11 on long tasks, every time right after a complete report.
+const MALFORMED_CALL = /malformed function call/i
+
+// The account's quota for the model is used up until a reset agy names, e.g.
+// "Individual quota reached. ... Resets in 35m50s."
+const QUOTA = /quota (?:reached|exceeded|exhausted)|usage limit/i
+const RESETS_IN = /resets? in ([0-9][0-9hms ]*[0-9hms])/i
+
 // The review report as a JSON schema. agy rejects a schema whose root is not
 // an object, and returns the parsed answer as result.structured_output.
 export const REVIEW_SCHEMA = {
@@ -153,6 +164,10 @@ export default {
     let result = null
     let agyError = null
     let workStarted = false
+    // Answer text per agent_response step, in order: result.response is
+    // these joined, progress notes first and the final message last.
+    const segments = new Map()
+    let lastDone = ''
     return {
       state,
       push(stream, line) {
@@ -168,6 +183,10 @@ export default {
         if (event?.event === 'result' && event.result && typeof event.result === 'object') result = event.result
         const step = event?.step_update
         if (step && step.step_type !== 'user_input') workStarted = true
+        if (step?.step_type === 'agent_response' && typeof step.text_delta === 'string') {
+          segments.set(step.step_index, (segments.get(step.step_index) ?? '') + step.text_delta)
+        }
+        if (step?.state === 'DONE' && typeof step.step_type === 'string') lastDone = step.step_type
         // Streamed answer text arrives a few words per event; the log keeps
         // it, the progress stream would only repeat the result body.
         if (step?.step_type === 'agent_response' && step.state === 'ACTIVE') return ''
@@ -181,14 +200,34 @@ export default {
           if (rendered) output = rendered
           else warnings.push('agy returned no usable structured_output for the review schema; the body is its free text, so check it for the [P<n>] shape before counting findings.')
         }
+        const message = typeof result?.error === 'string' ? result.error : ''
         // finished_reason is set only when a turn ended early: a partial
         // answer is not an answer.
-        const usable = status === 0 && result?.status === 'SUCCESS' && !result.finished_reason && Boolean(output.trim())
+        const complete = status === 0 && result?.status === 'SUCCESS' && !result.finished_reason && Boolean(output.trim())
+        // The one early end that still carries an answer: the empty tool call
+        // after a turn whose last finished step was the final message.
+        const salvaged = !complete && mode !== 'review' && result?.status === 'ERROR' &&
+          MALFORMED_CALL.test(message) && lastDone === 'agent_response' && Boolean(output.trim())
+        const usable = complete || salvaged
+        if (salvaged) {
+          warnings.push(`agy ended with "${flat(message.split('\n')[0])}" after its final message, a known agy glitch; that message is kept as the result. Check what it claims against the working tree before relying on it, and do not resume just to redo the work.`)
+        }
+        // result.response joins every agent_response of the turn: in a long
+        // task, a dozen "running X, waiting" notes before the report. Keep
+        // only the final message when the response provably ends with it;
+        // the notes stay in the log.
+        const texts = [...segments.values()].filter((text) => text.trim())
+        if (usable && mode !== 'review' && texts.length > 1) {
+          const last = texts.at(-1).trim()
+          if (output.trimEnd().endsWith(last)) {
+            output = `${last}\n`
+            warnings.push(`kept agy's final message only; ${texts.length - 1} earlier progress note(s) of the same turn are in the log.`)
+          }
+        }
         const errors = []
         const hints = []
         if (!usable) {
           const clip = (value) => (value.length > 300 ? `${value.slice(0, 300)}...` : value)
-          const message = typeof result?.error === 'string' ? result.error : ''
           if (message) errors.push(clip(message))
           const short = trimmed(agyError?.short_error)
           if (short && short !== message.trim()) errors.push(clip(short))
@@ -204,6 +243,11 @@ export default {
             if (facts) errors.push(`agy reported ${facts}`)
             if (agyError.retryable === true) hints.push('agy marked this failure retryable: transient — rerun once unchanged.')
             else if (agyError.retryable === false) hints.push('agy marked this failure not retryable: not transient — do not rerun unchanged; report it.')
+          }
+          const quotaText = [message, trimmed(agyError?.short_error)].find((text) => QUOTA.test(text))
+          if (quotaText || agyError?.status === 'RESOURCE_EXHAUSTED') {
+            const reset = RESETS_IN.exec(quotaText ?? '')?.[1]
+            hints.push(`agy's quota for this model is used up${reset ? ` (resets in ${reset})` : ''}: not transient — do not rerun now. Once it resets, resume the session to finish; otherwise hand the work on as the host's fallback policy says, passing on what partial.md and the working tree show is done.`)
           }
           if (MODEL_REJECTED.test(message)) {
             hints.push(`agy rejected the model selection '${flat(policy.model)}' with effort '${flat(policy.effort)}'; no fallback was attempted. \`agy models\` lists the models this login can use (an id ending in -low/-medium/-high names the model plus its effort).`)

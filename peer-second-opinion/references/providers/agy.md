@@ -60,7 +60,21 @@ id and exits `4` rather than pass the answer off as a follow-up.
 ## Failures
 
 Only a result event with status `SUCCESS`, no `finished_reason` and a
-non-empty response counts as an answer. `agy` exits non-zero for any failure
+non-empty response counts as an answer, with one exception: a consult or task
+whose last finished step was the final message but which then ended on
+`Malformed function call` (an empty tool call, a known agy glitch). That
+message is kept as the result, exit `0`, with a `warning:` to check its claims
+and not to resume just to redo the work.
+
+agy's response joins every message of the turn, so a long task's starts with
+a run of "running X, waiting" notes. When there are several, the result keeps
+only the final message, says so in a `warning:`, and leaves the notes in the
+log; a failed run's `partial:` file keeps them all.
+
+A used-up quota (`quota reached`, `RESOURCE_EXHAUSTED`) gets a not-transient
+`hint:` naming the reset time agy gave.
+
+`agy` exits non-zero for any failure
 (`3` for an agent or model API error, shown as `provider-exit: 3`), and then
 prints an `AGY_ERROR: {...}` line on stderr. The wrapper adds its status,
 reason, HTTP status and error id to the `error:` lines, and its `retryable`

@@ -71,14 +71,16 @@ after `--`. The default timeout is 7200 s.
    feed back in the same session — the last `resume:` line plus
    `-- "concrete feedback"`, naming what is wrong and what to do — then
    repeat steps 3–4.
-   - **Cut short:** the work so far is on disk. Have it check the current
-     state first — a step may be half done, and a killed local `ssh` does
-     not prove the remote command stopped.
+   - **Cut short:** the work so far is on disk, and a `partial:` file, when
+     printed, holds the peer's text up to the failure — read it before
+     deciding. Have it check the current state first — a step may be half
+     done, and a killed local `ssh` does not prove the remote command stopped.
    - **No usable `resume:`:** nothing is rolled back. Inspect the working
      directory for partial edits, then start a fresh task whose brief says
      what is done, where it failed and what to check.
    - **Not transient** (usage limit, content refusal): do not resume or
-     rerun; report it to the user.
+     rerun now; report it to the user with what `partial:` and the working
+     tree show is done.
    - **Stop** when the check still fails after three follow-up runs
      (feedback, resume or restart), and tell the user what is left.
 6. **Report.** Say what was done, where (`workdir`), what you checked and

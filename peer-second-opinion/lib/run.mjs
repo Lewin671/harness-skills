@@ -4,10 +4,11 @@
 // output; everything here is policy that must not differ between providers.
 
 import { rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 import { die, EXIT, flat, interruptibleWait, runProcess, tailLog, UUID } from './core.mjs'
 
-// ctx: { provider, env, mode, policy, artifacts, build, onTimeout, retryDelays }
+// ctx: { provider, env, mode, policy, artifacts, build, onTimeout, onFailure, retryDelays }
 //   build(sessionId, continuing) -> { args, prompt }; the prompt goes after
 //     `--`, or into provider.promptFlag when the provider sets one
 //     sessionId: the session to resume ('' for a fresh run); continuing: the
@@ -15,8 +16,13 @@ import { die, EXIT, flat, interruptibleWait, runProcess, tailLog, UUID } from '.
 //   onTimeout(state): called before the timeout exit with the decoder state
 //     ({ sessionId, model }), its sessionId cleared when the run was
 //     meant to be in another session.
+//   onFailure(outcome): called before a plain failure's exit (not a timeout,
+//     not a rejected continuation) once work began, so the caller can name
+//     the workdir and a resumable session.
 // Returns the provider outcome; dies with 4 (failed), 5 (timed out) or
 // 129/130/143 (signalled), discarding the result file but keeping the log.
+// A plain failure that still carried answer text keeps it as partial.md next
+// to the log, marked as such, instead of dropping it.
 export async function runAgent(ctx) {
   const { provider, env, mode, policy, artifacts } = ctx
   const delays = ctx.retryDelays ?? provider.retryDelays ?? []
@@ -137,6 +143,17 @@ export async function runAgent(ctx) {
       for (const line of outcome.hints) process.stderr.write(`hint: ${flat(line)}\n`)
       tail()
       discard()
+      if (outcome.output?.trim()) {
+        const partial = join(dirname(artifacts.out), 'partial.md')
+        try {
+          writeFileSync(partial, outcome.output.endsWith('\n') ? outcome.output : `${outcome.output}\n`, { mode: 0o600 })
+          process.stderr.write(`partial: ${partial}\n`)
+          process.stderr.write(`hint: partial.md is ${provider.name}'s text up to the failure, not a result: it may describe steps as done that never finished. Read it, then check the working tree before resuming or reporting.\n`)
+        } catch (error) {
+          process.stderr.write(`note: could not keep the partial text: ${flat(error.message)}\n`)
+        }
+      }
+      if (outcome.workStarted) ctx.onFailure?.(outcome)
       die(EXIT.failed)
     }
 

@@ -27,6 +27,7 @@ Marker kinds:
 | `result:`, `log:` | Done: the result file and the event log. |
 | `workdir:` | (task) Where the work happened. |
 | `session:`, `resume:` | Continuation, or `unavailable — ...` sentinels. |
+| `partial:` | A failed run that still produced text: the file holding it. Not a result. |
 | `provider-exit:` | The CLI's own exit code, whenever it was non-zero. |
 | `error:`, `hint:` | A failed run: the reason and the remedy. |
 | `exit-status: N` | The wrapper's own exit code, always the last line of a run that ended without `SIGKILL`. |
@@ -51,8 +52,10 @@ wrapper's lines:
 `session:`/`resume:` print on every successful run of a mode that leaves a
 session — a consult or a task — as real values or as
 sentinels, so a model-written line cannot pose as them. A timeout (exit `5`)
-prints them too, because a killed session can still be resumed. Any other failed
-run prints neither.
+prints them too, because a killed session can still be resumed, and so does a
+failed run (exit `4`) once the CLI had started working; the `hint:` lines
+decide whether resuming is advisable. A run that failed before any work prints
+neither.
 
 ## Invariants
 

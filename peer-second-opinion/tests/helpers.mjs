@@ -11,6 +11,11 @@
 //   FAKE_EVENT       one extra raw stdout line
 //   FAKE_RESULT_STATUS, FAKE_RESULT_ERROR, FAKE_FINISHED_REASON  (agy only)
 //                    fields of the closing result event
+//   FAKE_SEGMENTS    (agy only) JSON array of agent_response texts, each a
+//                    finished step with a tool step before the next; the
+//                    response is their join, kept even on an ERROR status
+//   FAKE_LAST_DONE   (agy only) step_type of one more finished step at the end
+//   FAKE_NO_STEPS    (agy only) no step events: the turn never started
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -71,10 +76,21 @@ const frame = (value) => fs.writeSync(1, JSON.stringify(value) + '\\n')
 if (!argv.some((arg) => arg.startsWith('--print='))) process.exit(64)
 frame({ event: 'init', conversation_id: session, init: { model: argv[argv.indexOf('--model') + 1], tools: [] } })
 sleep()
-frame({ event: 'step_update', step_update: { conversation_id: session, step_index: 1, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'streamed answer text' } })
+if (!env.FAKE_NO_STEPS) frame({ event: 'step_update', step_update: { conversation_id: session, step_index: 1, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'streamed answer text' } })
+const segments = env.FAKE_SEGMENTS ? JSON.parse(env.FAKE_SEGMENTS) : null
+let index = 10
+for (const text of segments ?? []) {
+  const step = (extra) => frame({ event: 'step_update', step_update: { conversation_id: session, step_index: index, ...extra } })
+  step({ state: 'ACTIVE', step_type: 'agent_response', text_delta: text.slice(0, -1) })
+  step({ state: 'DONE', step_type: 'agent_response', text_delta: text.slice(-1) })
+  index += 1
+  if (text !== segments.at(-1)) { step({ state: 'DONE', step_type: 'tool', tool_name: 'run_command' }); index += 1 }
+}
+if (env.FAKE_LAST_DONE) frame({ event: 'step_update', step_update: { conversation_id: session, step_index: index, state: 'DONE', step_type: env.FAKE_LAST_DONE } })
 if (env.FAKE_EVENT) fs.writeSync(1, env.FAKE_EVENT + '\\n')
 if (!env.FAKE_NO_RESULT) {
-  const result = { conversation_id: session, status: env.FAKE_RESULT_STATUS || 'SUCCESS', response: env.FAKE_RESULT_STATUS ? '' : body + '\\n' }
+  const response = segments ? segments.join('') : env.FAKE_RESULT_STATUS ? '' : body + '\\n'
+  const result = { conversation_id: session, status: env.FAKE_RESULT_STATUS || 'SUCCESS', response }
   if (env.FAKE_RESULT_ERROR) result.error = env.FAKE_RESULT_ERROR
   if (env.FAKE_FINISHED_REASON) result.finished_reason = env.FAKE_FINISHED_REASON
   if (env.FAKE_STRUCTURED) result.structured_output = JSON.parse(env.FAKE_STRUCTURED)

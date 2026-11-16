@@ -229,6 +229,14 @@ async function main(argv) {
         process.stderr.write('hint: the session survives the timeout; resume it, but have it check the current state first — it cannot tell how far the interrupted step got.\n')
       }
     },
+    // A failure after work began can still leave a session worth resuming
+    // once its cause is gone (a quota reset, say); whether to resume is the
+    // hint lines' call, not this marker's.
+    onFailure: (state) => {
+      if (mode === 'task') process.stderr.write(`workdir: ${flat(env.cwd)}\n`)
+      if (!provider.resumeMode(mode)) return
+      writeResume(run, { ...state, sessionId: UUID.test(state.sessionId || '') ? state.sessionId : '' }, env.cwd)
+    },
   })
 
   const { output } = outcome
