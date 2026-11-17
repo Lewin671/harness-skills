@@ -47,8 +47,13 @@ use; an id ending in `-low`, `-medium`, `-high` or `-xhigh` is the model plus an
 so pass the bare id with `--effort`. A `resume:` line carries the pair that
 answered; `model:` names the model agy reported, without the effort.
 
+When the user names `gemini-4-carbon` without an effort, pair it with
+`medium`: on Artificial Analysis (Nov 2026) it scores 2 points below `high`
+at lower cost, a third of the time to first token and fewer hallucinations,
+while `low` costs more than `medium`. Use `high` only when asked.
+
 An unknown model, or an effort the model lacks (Hydrogen has `low` through
-`xhigh`, no `max`), fails before any work with exit `4` and a hint naming
+`xhigh`; Carbon `low` through `high`; neither has `max`), fails before any work with exit `4` and a hint naming
 where the pair came from. No fallback is attempted.
 
 ## Sessions
