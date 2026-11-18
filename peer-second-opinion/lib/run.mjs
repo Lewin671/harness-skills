@@ -12,7 +12,8 @@ import { die, EXIT, flat, interruptibleWait, runProcess, tailLog, UUID } from '.
 //   build(sessionId, continuing) -> { args, prompt }; the prompt goes after
 //     `--`, or into provider.promptFlag when the provider sets one
 //     sessionId: the session to resume ('' for a fresh run); continuing: the
-//     run is a recovery after a transient failure and should send 'Continue'.
+//     run is a recovery after a transient failure and should send 'Continue',
+//     or the outcome's retryPrompt (a string) when the provider gave one.
 //   onTimeout(state): called before the timeout exit with the decoder state
 //     ({ sessionId, model }), its sessionId cleared when the run was
 //     meant to be in another session.
@@ -95,7 +96,7 @@ export async function runAgent(ctx) {
     // — failure, retry, rejected continuation, partial success — follows it.
     if (proc.status !== 0) process.stderr.write(`provider-exit: ${proc.status}\n`)
     const outcome = decoder.finish(proc)
-    const failed = !outcome.usable && !outcome.transient
+    let failed = !outcome.usable && !outcome.transient
     // A plain failure reports its own reason below; a session check on it
     // would bury that reason under a resume error.
     if (!failed && expected && outcome.sessionId && outcome.sessionId !== expected) {
@@ -107,15 +108,20 @@ export async function runAgent(ctx) {
         'hint: the session may have expired; start a fresh run and restate the context.')
     }
 
-    if (outcome.transient && !outcome.usable) {
+    // Retries used up: a plain failure from here, so the partial text, the
+    // workdir and the resumable session are still reported.
+    if (outcome.transient && !outcome.usable && attempt >= delays.length && delays.length > 0) {
+      outcome.errors = [`${outcome.transient} persisted after ${attempt + 1} attempts; no model change was attempted`, ...(outcome.errors ?? [])]
+      failed = true
+    } else if (outcome.transient && !outcome.usable) {
       tail()
       discard()
       const session = outcome.sessionId || expected
       let action = 'repeat the original invocation'
       if (provider.resumeMode(mode) && UUID.test(session)) {
         expected = session
-        continuing = true
-        action = `resume session ${session} with Continue`
+        continuing = outcome.retryPrompt || true
+        action = `resume session ${session} with ${outcome.retryPrompt ? "the provider's retry message" : "Continue"}`
       } else if (outcome.workStarted) {
         die(EXIT.failed, 'error: transient failure after work began, but no recoverable session is available; refusing to replay the run')
       }

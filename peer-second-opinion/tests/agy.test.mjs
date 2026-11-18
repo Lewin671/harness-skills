@@ -189,15 +189,50 @@ test('a malformed tool call after the final message keeps that message, with a w
   assert.match(marker(task.stderr, 'resume')[0], new RegExp(` agy task --resume ${SESSION} `))
   assert.equal(task.calls.length, 1)
 
-  // the same error after a tool step, or with no text, is still a failure
-  for (const extra of [{ FAKE_LAST_DONE: 'tool' }, { FAKE_SEGMENTS: undefined }]) {
+  // the same error after a tool step, with no text, or with an empty last
+  // message (the empty call itself, after progress notes) is mid-task: never
+  // salvaged, retried instead, a failure when it persists
+  const emptyLast = JSON.stringify(['Running the tests, waiting.\n', '\n'])
+  for (const extra of [{ FAKE_LAST_DONE: 'tool' }, { FAKE_SEGMENTS: undefined }, { FAKE_SEGMENTS: emptyLast }]) {
     const failed = agy(['task', '--', 'work'], { env: { ...env, ...extra } })
     assert.equal(failed.status, 4, failed.stderr)
     assert.doesNotMatch(failed.stderr, /known agy glitch/)
+    assert.equal(failed.calls.length, 4, 'one run plus three retries')
   }
-  // a review needs the structured report, so it is never salvaged
+  // a review needs the structured report, so it is never salvaged or retried
   const review = f.dirty(() => agy(['review'], { env }))
   assert.equal(review.status, 4, review.stderr)
+  assert.equal(review.calls.length, 1)
+})
+
+test('a malformed tool call mid-task is sent back in the same conversation, as agy means to', () => {
+  const error = 'Your previous response contained an improperly formatted function call: Malformed function call: Function call is empty - no input to parse.\nPlease retry with a properly formatted function call\nRetries remaining: 3'
+  const env = {
+    FAKE_EXIT: '3', FAKE_RESULT_STATUS: 'ERROR', FAKE_RESULT_ERROR: error, FAKE_FINISHED_REASON: 'error',
+    FAKE_SEGMENTS: JSON.stringify(['Running the build, waiting.\n', '\n']),
+  }
+  const recovered = agy(['task', '--model', 'gemini-4-carbon', '--effort', 'medium', '--', 'work'], { env: { ...env, FAKE_FAIL_CALLS: '2' } })
+  assert.equal(recovered.status, 0, recovered.stderr)
+  assert.equal(recovered.stdout, 'the fake result body\n')
+  assert.equal(recovered.calls.length, 3)
+  for (const call of recovered.calls.slice(1)) {
+    assert.ok(joined(call.argv).includes(`--conversation ${SESSION}`))
+    assert.match(joined(call.argv), /--model gemini-4-carbon --effort medium/)
+    assert.equal(call.prompt, 'Your previous response contained an improperly formatted function call: Malformed function call: Function call is empty - no input to parse.\nPlease retry with a properly formatted function call')
+  }
+  assert.match(recovered.stderr, /^note: agy sent a malformed tool call mid-turn; retry 1\/3 in 0\.5s with the same model; resume session \S+ with the provider's retry message$/m)
+  assert.doesNotMatch(recovered.stderr, /known agy glitch/)
+
+  const consult = agy(['consult', 'q'], { env: { ...env, FAKE_FAIL_CALLS: '1' } })
+  assert.equal(consult.status, 0, consult.stderr)
+  assert.equal(consult.calls.length, 2)
+
+  // persisting: a plain failure, still with the partial text and the session
+  const stuck = agy(['task', '--', 'work'], { env })
+  assert.equal(stuck.status, 4, stuck.stderr)
+  assert.match(stuck.stderr, /^error: agy sent a malformed tool call mid-turn persisted after 4 attempts/m)
+  assert.equal(marker(stuck.stderr, 'partial').length, 1)
+  assert.match(marker(stuck.stderr, 'resume')[0], new RegExp(` agy task --resume ${SESSION} `))
 })
 
 test('a successful turn keeps only its final message; one message is kept whole', () => {

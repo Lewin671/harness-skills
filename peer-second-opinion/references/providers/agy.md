@@ -66,10 +66,19 @@ id and exits `4` rather than pass the answer off as a follow-up.
 
 Only a result event with status `SUCCESS`, no `finished_reason` and a
 non-empty response counts as an answer, with one exception: a consult or task
-whose last finished step was the final message but which then ended on
-`Malformed function call` (an empty tool call, a known agy glitch). That
-message is kept as the result, exit `0`, with a `warning:` to check its claims
-and not to resume just to redo the work.
+whose last finished step was the final message (with text of its own) but
+which then ended on `Malformed function call` (an empty tool call, a known agy
+glitch). That message is kept as the result, exit `0`, with a `warning:` to
+check its claims and not to resume just to redo the work.
+
+The same error mid-turn is retried by the wrapper. The error text is the retry
+message agy means to send back to the model ("Please retry with a properly
+formatted function call / Retries remaining: 3"), but headless agy reports it
+instead of sending it. So a consult or task resends that message in the same
+conversation with the same model pair, up to three times, half a second
+apart so the prompt cache holds; each retry prints a `note:`. If it persists,
+the run fails (exit `4`) with the usual `partial:`, `workdir:` and `resume:`
+lines. Reviews are not retried.
 
 agy's response joins every message of the turn, so a long task's starts with
 a run of "running X, waiting" notes. When there are several, the result keeps
@@ -83,5 +92,6 @@ A used-up quota (`quota reached`, `RESOURCE_EXHAUSTED`) gets a not-transient
 (`3` for an agent or model API error, shown as `provider-exit: 3`), and then
 prints an `AGY_ERROR: {...}` line on stderr. The wrapper adds its status,
 reason, HTTP status and error id to the `error:` lines, and its `retryable`
-flag as a `hint:` saying whether the failure is transient. The wrapper never
-retries agy itself; the host's rerun-at-most-once rule applies.
+flag as a `hint:` saying whether the failure is transient. Apart from the
+mid-turn malformed call above, the wrapper never retries agy itself; the
+host's rerun-at-most-once rule applies.

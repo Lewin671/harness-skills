@@ -26,11 +26,17 @@ const MODEL_REJECTED = /invalid model selection/i
 // http_status, status_code and error_id appear when the API supplied them.
 const AGY_ERROR = /^AGY_ERROR:\s*(\{.*\})\s*$/
 
-// agy 1.5.x sometimes ends a turn that has already written its final answer
-// with this error: after the last agent_response the model emits an empty
-// tool call, and agy reports ERROR instead of retrying. Seen four times in
-// 2026-11 on long tasks, every time right after a complete report.
+// agy 1.5.x ends a turn with this error when the model emits an empty tool
+// call. The error is the retry message agy means to send back to the model
+// ("... Please retry with a properly formatted function call / Retries
+// remaining: 3"), but headless mode reports it instead of sending it: in 36
+// runs (2026-11) the count never went below 3. Mostly it comes right after
+// the final report (kept as the answer); a few times mid-task, where the
+// wrapper does what agy meant to: sends that message back in the same
+// conversation, up to three times, with no wait so the prompt cache holds.
 const MALFORMED_CALL = /malformed function call/i
+const RETRIES_LINE = /\n?Retries remaining: \d+\.?\s*$/i
+const MALFORMED_RETRY = 'Your previous response contained an improperly formatted function call. Please retry with a properly formatted function call.'
 
 // The account's quota for the model is used up until a reset agy names, e.g.
 // "Individual quota reached. ... Resets in 35m50s."
@@ -125,8 +131,9 @@ export default {
   binary: { name: 'agy', envVar: 'AGY_BIN' },
   // agy reads the prompt only from -p/--print or stdin, never after `--`.
   promptFlag: '--print',
-  // No failure is known to be transient yet, so nothing is retried.
-  retryDelays: [],
+  // Only a mid-turn malformed tool call is transient (see MALFORMED_CALL):
+  // three retries, as agy's own message promises.
+  retryDelays: [500, 500, 500],
 
   // A review leaves a conversation in agy's history, but review mode has no
   // follow-up: discuss a finding in a consult.
@@ -148,7 +155,7 @@ export default {
     }
     // A task gets no note: it is meant to change things.
     let prompt = text
-    if (continuing) prompt = 'Continue'
+    if (continuing) prompt = typeof continuing === 'string' ? continuing : 'Continue'
     else if (mode === 'consult') prompt = `${text}\n\n${investigationNote(artifacts.scratch)}\n`
     return { args, prompt }
   },
@@ -168,6 +175,7 @@ export default {
     // these joined, progress notes first and the final message last.
     const segments = new Map()
     let lastDone = ''
+    let lastDoneIndex = -1
     return {
       state,
       push(stream, line) {
@@ -186,7 +194,10 @@ export default {
         if (step?.step_type === 'agent_response' && typeof step.text_delta === 'string') {
           segments.set(step.step_index, (segments.get(step.step_index) ?? '') + step.text_delta)
         }
-        if (step?.state === 'DONE' && typeof step.step_type === 'string') lastDone = step.step_type
+        if (step?.state === 'DONE' && typeof step.step_type === 'string') {
+          lastDone = step.step_type
+          lastDoneIndex = step.step_index
+        }
         // Streamed answer text arrives a few words per event; the log keeps
         // it, the progress stream would only repeat the result body.
         if (step?.step_type === 'agent_response' && step.state === 'ACTIVE') return ''
@@ -205,10 +216,15 @@ export default {
         // answer is not an answer.
         const complete = status === 0 && result?.status === 'SUCCESS' && !result.finished_reason && Boolean(output.trim())
         // The one early end that still carries an answer: the empty tool call
-        // after a turn whose last finished step was the final message.
-        const salvaged = !complete && mode !== 'review' && result?.status === 'ERROR' &&
-          MALFORMED_CALL.test(message) && lastDone === 'agent_response' && Boolean(output.trim())
+        // after a turn whose last finished step was the final message. A last
+        // agent_response with no text of its own is the empty call itself,
+        // mid-task: the response is only progress notes then.
+        const malformed = !complete && result?.status === 'ERROR' && MALFORMED_CALL.test(message)
+        const finalText = lastDone === 'agent_response' ? (segments.get(lastDoneIndex) ?? '') : ''
+        const salvaged = malformed && mode !== 'review' && Boolean(finalText.trim()) && Boolean(output.trim())
         const usable = complete || salvaged
+        // Mid-task, retry in the same conversation with agy's own message.
+        const retry = malformed && !salvaged && mode !== 'review' && Boolean(state.sessionId)
         if (salvaged) {
           warnings.push(`agy ended with "${flat(message.split('\n')[0])}" after its final message, a known agy glitch; that message is kept as the result. Check what it claims against the working tree before relying on it, and do not resume just to redo the work.`)
         }
@@ -262,7 +278,8 @@ export default {
           ...state,
           output,
           usable,
-          transient: '',
+          transient: retry ? 'agy sent a malformed tool call mid-turn' : '',
+          retryPrompt: retry ? (message.replace(RETRIES_LINE, '').trim() || MALFORMED_RETRY) : '',
           workStarted: workStarted || Boolean(output.trim()),
           errors,
           hints,

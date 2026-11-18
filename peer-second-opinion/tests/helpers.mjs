@@ -16,6 +16,9 @@
 //                    response is their join, kept even on an ERROR status
 //   FAKE_LAST_DONE   (agy only) step_type of one more finished step at the end
 //   FAKE_NO_STEPS    (agy only) no step events: the turn never started
+//   FAKE_FAIL_CALLS  (agy only) the FAKE_EXIT/RESULT/FINISHED/LAST_DONE/
+//                    SEGMENTS failure applies to the first N calls; later
+//                    calls succeed with the plain body
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -69,6 +72,9 @@ const env = process.env
 const argv = process.argv.slice(2)
 if (env.FAKE_LOG) fs.appendFileSync(env.FAKE_LOG, JSON.stringify({ argv }) + '\\n')
 if (env.FAKE_STDERR_TEXT) process.stderr.write(env.FAKE_STDERR_TEXT + '\\n')
+if (env.FAKE_FAIL_CALLS && env.FAKE_LOG && fs.readFileSync(env.FAKE_LOG, 'utf8').split('\\n').filter(Boolean).length > Number(env.FAKE_FAIL_CALLS)) {
+  for (const key of ['FAKE_EXIT', 'FAKE_RESULT_STATUS', 'FAKE_RESULT_ERROR', 'FAKE_FINISHED_REASON', 'FAKE_LAST_DONE', 'FAKE_SEGMENTS']) delete env[key]
+}
 const sleep = () => { if (env.FAKE_SLEEP) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(env.FAKE_SLEEP) * 1000) }
 const session = env.FAKE_NO_SESSION ? undefined : (env.FAKE_SESSION_ID || '${SESSION}')
 const body = env.FAKE_RESULT_TEXT || 'the fake result body'
