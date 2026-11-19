@@ -39,7 +39,7 @@ history is not advertised for resuming.
 
 ## Model
 
-The wrapper pins `gemini-4-hydrogen` at effort `high`. Override it for one
+The wrapper pins `gemini-4-neon` at effort `high`. Override it for one
 run with an explicit `--model M --effort L` pair, or for every run with
 `PEER_AGY_MODEL` and `PEER_AGY_EFFORT` set together. Pass model flags only
 when the user asked for a model. `agy models` lists the ids this login can
@@ -52,8 +52,8 @@ When the user names `gemini-4-carbon` without an effort, pair it with
 at lower cost, a third of the time to first token and fewer hallucinations,
 while `low` costs more than `medium`. Use `high` only when asked.
 
-An unknown model, or an effort the model lacks (Hydrogen has `low` through
-`xhigh`; Carbon `low` through `high`; neither has `max`), fails before any work with exit `4` and a hint naming
+An unknown model, or an effort the model lacks (Neon and Hydrogen have `low` through
+`xhigh`; Carbon `low` through `high`; none has `max`), fails before any work with exit `4` and a hint naming
 where the pair came from. No fallback is attempted.
 
 ## Sessions

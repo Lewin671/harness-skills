@@ -11,7 +11,7 @@
 import { configurePair, flat } from '../lib/core.mjs'
 import { contextFence, investigationNote, REVIEW_DUTY, scopeSentence } from '../lib/prompt.mjs'
 
-const DEFAULT_MODEL = 'gemini-4-hydrogen'
+const DEFAULT_MODEL = 'gemini-4-neon'
 const DEFAULT_EFFORT = 'high'
 const MODEL_ENV = 'PEER_AGY_MODEL'
 const EFFORT_ENV = 'PEER_AGY_EFFORT'
