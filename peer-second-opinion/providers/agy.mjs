@@ -109,6 +109,12 @@ function readAgyError(stderrLine) {
 // cross-session memories, so a review or consult runs in the user's normal
 // agy setup. Only the prompt is kept blind; say so when labelling a result
 // independent matters.
+// Some agy models (the orchestrators) take no effort and reject the flag;
+// `--effort none` names such a model's pair and omits the flag.
+function modelArgs(policy) {
+  return policy.effort === 'none' ? ['--model', policy.model] : ['--model', policy.model, '--effort', policy.effort]
+}
+
 function baseArgs(mode, policy, sessionId) {
   const args = [
     '--output-format', 'stream-json',
@@ -116,8 +122,7 @@ function baseArgs(mode, policy, sessionId) {
     '--dangerously-skip-permissions',
     // The prompt is data; a leading `/word` must not run a command or skill.
     '--disable-slash-commands',
-    '--model', policy.model,
-    '--effort', policy.effort,
+    ...modelArgs(policy),
   ]
   if (mode === 'review') args.push('--json-schema', JSON.stringify(REVIEW_SCHEMA))
   if (sessionId) args.push('--conversation', sessionId)
@@ -163,7 +168,7 @@ export default {
   resumeArgs(policy) {
     // The model flags do not travel with the conversation; pin the pair that
     // answered.
-    return ['--model', policy.model, '--effort', policy.effort]
+    return modelArgs(policy)
   },
 
   decoder({ mode, policy }) {

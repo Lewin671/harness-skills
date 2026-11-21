@@ -9,6 +9,9 @@ Applies to every mode of `peer.mjs`: review, consult and task.
 | Codex | `peer.mjs codex` | `gpt-6.1-sol`, effort `high` | The default: "the peer", "codex". |
 | agy (Antigravity) | `peer.mjs agy` | `gemini-4-neon`, effort `high` | The user names agy, Antigravity or Gemini; or the host is Codex. |
 
+agy models without effort levels (the `*-orchestrator*` ids in `agy models`)
+reject `--effort`; run them with `--model ID --effort none`.
+
 agy is the CLI of Google Antigravity, so "Antigravity" means this peer.
 "Gemini" means Gemini models through agy, never the separate Gemini CLI
 (`gemini`), which this skill does not drive.
