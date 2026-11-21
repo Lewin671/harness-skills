@@ -86,6 +86,8 @@ test('the model and effort travel as a pair, from flags or both env variables', 
   const orchestrator = agy(['consult', '--model', 'gemini-pro-orchestrator-neon', '--effort', 'none', 'q'])
   assert.ok(joined(orchestrator.calls[0].argv).includes('--model gemini-pro-orchestrator-neon --print='))
   assert.ok(!joined(orchestrator.calls[0].argv).includes('--effort'))
+  // The resume line is for the wrapper, which still needs the pair.
+  assert.match(marker(orchestrator.stderr, 'resume')[0], / --model gemini-pro-orchestrator-neon --effort none /)
   const env = agy(['consult', 'q'], { env: { PEER_AGY_MODEL: 'm', PEER_AGY_EFFORT: 'low' } })
   assert.ok(joined(env.calls[0].argv).includes('--model m --effort low'))
   const half = agy(['consult', 'q'], { env: { PEER_AGY_EFFORT: 'low' } })

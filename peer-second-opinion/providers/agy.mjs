@@ -168,7 +168,7 @@ export default {
   resumeArgs(policy) {
     // The model flags do not travel with the conversation; pin the pair that
     // answered.
-    return modelArgs(policy)
+    return ['--model', policy.model, '--effort', policy.effort]
   },
 
   decoder({ mode, policy }) {
